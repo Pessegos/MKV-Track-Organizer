@@ -120,6 +120,10 @@ class MainWindow(QMainWindow):
         "language-format": "Adds the language before the format. Example: English - DTS-HD MA 5.1.",
         "keep": "Keeps the existing audio track names from the input file.",
     }
+    LANGUAGE_ORDER_STYLE_HELP = {
+        "default": "Uses the existing organizer order rules.",
+        "regional": "Groups languages by broad regions, with Europe before Americas and Asia.",
+    }
     METADATA_MODE_HELP = {
         "off": "Always writes a new remuxed output file when changes are needed.",
         "auto": (
@@ -167,6 +171,9 @@ class MainWindow(QMainWindow):
         self.audio_name_style_combo.addItem("Format only", "format")
         self.audio_name_style_combo.addItem("Language + format", "language-format")
         self.audio_name_style_combo.addItem("Keep existing", "keep")
+        self.language_order_style_combo = QComboBox()
+        self.language_order_style_combo.addItem("Default", "default")
+        self.language_order_style_combo.addItem("Regional", "regional")
         self.report_format_combo = QComboBox()
         self.report_format_combo.addItems(["both", "json", "txt"])
 
@@ -247,6 +254,7 @@ class MainWindow(QMainWindow):
         self.suffix_edit.setToolTip("Optional suffix before .mkv, for example movie.fixed.mkv")
         self._apply_combo_help(self.metadata_combo, self.METADATA_MODE_HELP)
         self._apply_combo_help(self.audio_name_style_combo, self.AUDIO_NAME_STYLE_HELP)
+        self._apply_combo_help(self.language_order_style_combo, self.LANGUAGE_ORDER_STYLE_HELP)
         self.subtitle_language_edit.setToolTip("Manual language override, for example spa:7,8; fr-CA:9")
         self.forced_ids_edit.setToolTip("Manual forced-subtitle override, for example 5,8,12")
         self.smart_subs_check.setToolTip("Automatically classify forced, empty, commentary, and SDH subtitles")
@@ -262,6 +270,8 @@ class MainWindow(QMainWindow):
         )
         audio_names_label = QLabel("Audio names")
         audio_names_label.setToolTip("Controls how audio track names are written.")
+        language_order_label = QLabel("Language order")
+        language_order_label.setToolTip("Controls how languages are sorted in the output.")
 
         advanced_layout.addWidget(QLabel("Output suffix"), 0, 0)
         advanced_layout.addWidget(self.suffix_edit, 0, 1)
@@ -271,10 +281,12 @@ class MainWindow(QMainWindow):
         advanced_layout.addWidget(self.audio_name_style_combo, 1, 1)
         advanced_layout.addWidget(QLabel("Report format"), 1, 2)
         advanced_layout.addWidget(self.report_format_combo, 1, 3)
-        advanced_layout.addWidget(QLabel("Language overrides"), 2, 0)
-        advanced_layout.addWidget(self.subtitle_language_edit, 2, 1)
-        advanced_layout.addWidget(QLabel("Forced IDs"), 2, 2)
-        advanced_layout.addWidget(self.forced_ids_edit, 2, 3)
+        advanced_layout.addWidget(language_order_label, 2, 0)
+        advanced_layout.addWidget(self.language_order_style_combo, 2, 1)
+        advanced_layout.addWidget(QLabel("Language overrides"), 3, 0)
+        advanced_layout.addWidget(self.subtitle_language_edit, 3, 1)
+        advanced_layout.addWidget(QLabel("Forced IDs"), 3, 2)
+        advanced_layout.addWidget(self.forced_ids_edit, 3, 3)
 
         advanced_toggles = QHBoxLayout()
         for checkbox in [
@@ -287,7 +299,7 @@ class MainWindow(QMainWindow):
         ]:
             advanced_toggles.addWidget(checkbox)
         advanced_toggles.addStretch(1)
-        advanced_layout.addLayout(advanced_toggles, 3, 0, 1, 4)
+        advanced_layout.addLayout(advanced_toggles, 4, 0, 1, 4)
         self.advanced_panel.setVisible(False)
         root.addWidget(self.advanced_panel)
 
@@ -365,6 +377,9 @@ class MainWindow(QMainWindow):
         self.audio_name_style_combo.currentIndexChanged.connect(
             lambda _index: self._sync_combo_tooltip(self.audio_name_style_combo, self.AUDIO_NAME_STYLE_HELP)
         )
+        self.language_order_style_combo.currentIndexChanged.connect(
+            lambda _index: self._sync_combo_tooltip(self.language_order_style_combo, self.LANGUAGE_ORDER_STYLE_HELP)
+        )
 
     def _tool_button(self, icon_id: QStyle.StandardPixmap, tooltip: str) -> QToolButton:
         button = QToolButton()
@@ -415,8 +430,12 @@ class MainWindow(QMainWindow):
         audio_style_index = self.audio_name_style_combo.findData(getattr(args, "audio_name_style", "auto"))
         if audio_style_index >= 0:
             self.audio_name_style_combo.setCurrentIndex(audio_style_index)
+        language_order_index = self.language_order_style_combo.findData(getattr(args, "language_order_style", "default"))
+        if language_order_index >= 0:
+            self.language_order_style_combo.setCurrentIndex(language_order_index)
         self._sync_combo_tooltip(self.metadata_combo, self.METADATA_MODE_HELP)
         self._sync_combo_tooltip(self.audio_name_style_combo, self.AUDIO_NAME_STYLE_HELP)
+        self._sync_combo_tooltip(self.language_order_style_combo, self.LANGUAGE_ORDER_STYLE_HELP)
         self.report_format_combo.setCurrentText(args.report_format)
 
     def _set_input_text(self, text: str) -> None:
@@ -573,6 +592,7 @@ class MainWindow(QMainWindow):
         args.report = self.report_check.isChecked()
         args.metadata_edit_mode = self.metadata_combo.currentText()
         args.audio_name_style = self.audio_name_style_combo.currentData() or "auto"
+        args.language_order_style = self.language_order_style_combo.currentData() or "default"
         args.report_format = self.report_format_combo.currentText()
         return args, config_path
 

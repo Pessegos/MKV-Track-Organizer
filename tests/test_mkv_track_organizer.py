@@ -796,12 +796,42 @@ def test_ordered_tracks_puts_default_audio_first() -> None:
     assert [track.id for track in m.ordered_tracks([video], audio_tracks, [])] == [0, 6, 1, 2]
 
 
+def test_ordered_tracks_can_group_audio_by_region() -> None:
+    video = video_track(0)
+    cantonese = audio_track(1, "yue")
+    catalan = audio_track(2, "cat")
+    arabic = audio_track(3, "ara")
+    taiwan = audio_track(4, "zh-TW")
+    spanish = audio_track(5, "spa")
+    english = audio_track(6, "eng")
+    audio_tracks = [cantonese, catalan, arabic, taiwan, spanish, english]
+
+    m.apply_default_flags([video], audio_tracks, [], "regional")
+
+    assert english.default is True
+    assert [track.id for track in m.ordered_tracks([video], audio_tracks, [], "regional")] == [0, 6, 5, 2, 1, 4, 3]
+
+
+def test_subtitle_regional_sort_keeps_related_languages_together() -> None:
+    cantonese = subtitle_track(1, "yue")
+    catalan = subtitle_track(2, "cat")
+    arabic = subtitle_track(3, "ara")
+    taiwan = subtitle_track(4, "zh-TW")
+    spanish = subtitle_track(5, "spa")
+    subtitles = [cantonese, catalan, arabic, taiwan, spanish]
+
+    ordered = sorted(subtitles, key=lambda track: m.subtitle_sort_key(track, "regional"))
+
+    assert [track.id for track in ordered] == [5, 2, 1, 4, 3]
+
+
 def test_config_defaults(tmp_path: Path) -> None:
     config = tmp_path / "config.json"
     config.write_text(
         (
             '{"recursive": true, "output_suffix": "fixed", "detect_language_variants": false, '
-            '"metadata_edit_mode": true, "audio_name_style": "language-format"}'
+            '"metadata_edit_mode": true, "audio_name_style": "language-format", '
+            '"language_order_style": "regional"}'
         ),
         encoding="utf-8",
     )
@@ -811,6 +841,7 @@ def test_config_defaults(tmp_path: Path) -> None:
     assert defaults["detect_language_variants"] is False
     assert defaults["metadata_edit_mode"] == "auto"
     assert defaults["audio_name_style"] == "language-format"
+    assert defaults["language_order_style"] == "regional"
 
 
 def test_config_metadata_edit_mode_accepts_off_and_only(tmp_path: Path) -> None:

@@ -10,6 +10,7 @@ The project currently includes both a command-line interface and an early deskto
 - Keep originals safe by writing remuxed files to `_sorted` by default.
 - Preview changes before writing output files.
 - Rename audio tracks by format, language plus format, or keep existing names.
+- Choose default or regional language ordering for audio/subtitle tracks.
 - Detect forced, empty, commentary, and SDH subtitle tracks.
 - Detect regional language variants such as Portuguese, Spanish, French, and Chinese variants.
 - Use OCR for PGS subtitles when text is needed for language or role detection.
@@ -70,6 +71,12 @@ Use metadata-only edits when possible:
 
 ```powershell
 python .\mkv_track_organizer.py ".\movie.mkv" --metadata-edit-mode auto
+```
+
+Group languages by broad regions in the output order:
+
+```powershell
+python .\mkv_track_organizer.py ".\movie.mkv" --language-order-style regional
 ```
 
 ## Configuration

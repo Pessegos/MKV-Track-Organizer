@@ -71,6 +71,7 @@ VARIANT_METADATA_OVERRIDE_MIN_CONFIDENCE = 0.70
 OCR_VALIDATED_VARIANT_LANGUAGES = {"spa"}
 METADATA_EDIT_MODES = {"off", "auto", "only"}
 AUDIO_NAME_STYLES = {"auto", "format", "language-format", "keep"}
+LANGUAGE_ORDER_STYLES = {"default", "regional"}
 CHINESE_TRADITIONAL_REGIONAL_VARIANTS = {"zh-TW", "zh-HK"}
 
 
@@ -286,6 +287,7 @@ CONFIG_STRING_KEYS = {
     "explain_track",
     "metadata_edit_mode",
     "audio_name_style",
+    "language_order_style",
 }
 
 
@@ -646,6 +648,50 @@ LANGUAGE_VARIANT_BASES = {
     "zh-Hans": "chi",
     "zh-TW": "chi",
     "zh-HK": "chi",
+}
+
+
+REGIONAL_LANGUAGE_GROUPS = (
+    (
+        "europe",
+        (
+            "eng", "en-GB", "por", "pt-PT", "spa", "es-ES", "cat", "fre", "fr-FR", "fr-BE", "fr-CH",
+            "ger", "de-DE", "de-AT", "de-CH", "ita", "it-IT", "dut", "swe", "dan", "nor", "nob",
+            "nno", "fin", "ice", "pol", "cze", "sk", "hun", "rum", "gre", "rus", "ukr", "bul",
+            "hrv", "mk", "slv", "srp", "lav", "lit", "est", "tur",
+        ),
+    ),
+    (
+        "americas",
+        (
+            "en-US", "en-CA", "pt-BR", "es-419", "fr-CA",
+        ),
+    ),
+    (
+        "asia",
+        (
+            "chi", "cmn", "yue", "zh-Hant", "zh-Hans", "zh-TW", "zh-HK", "jpn", "kor",
+            "hin", "ori", "tha", "vie", "ind",
+        ),
+    ),
+    (
+        "oceania",
+        (
+            "en-AU",
+        ),
+    ),
+    (
+        "middle-east-africa",
+        (
+            "ara", "heb",
+        ),
+    ),
+)
+
+REGIONAL_LANGUAGE_ORDER = {
+    language_code: (region_index, language_index)
+    for region_index, (_region_name, language_codes) in enumerate(REGIONAL_LANGUAGE_GROUPS)
+    for language_index, language_code in enumerate(language_codes)
 }
 
 
@@ -1827,9 +1873,33 @@ def select_default_audio(audio_tracks: list[TrackInfo]) -> TrackInfo | None:
     return max(english_tracks, key=audio_quality_score)
 
 
-def audio_sort_key(track: TrackInfo) -> tuple[int, int, int]:
+def track_language_code(track: TrackInfo) -> str:
+    return normalize_language_code(track.output_language or track.language)
+
+
+def regional_language_sort_key(code: str | None) -> tuple[int, int, str]:
+    language_code = normalize_language_code(code)
+    language_name = remove_accents(language_display_name(language_code)).casefold()
+    rank = REGIONAL_LANGUAGE_ORDER.get(language_code)
+    if rank is None:
+        rank = REGIONAL_LANGUAGE_ORDER.get(base_language_code(language_code))
+    if rank is None:
+        return (len(REGIONAL_LANGUAGE_GROUPS), 999, language_name)
+    return (*rank, language_name)
+
+
+def language_sort_key(track: TrackInfo, language_order_style: str = "default") -> tuple[Any, ...]:
+    language_name = remove_accents(track.language_name or language_display_name(track_language_code(track))).casefold()
+    if language_order_style == "regional":
+        return (*regional_language_sort_key(track_language_code(track)), language_name)
+    return (language_name,)
+
+
+def audio_sort_key(track: TrackInfo, language_order_style: str = "default") -> tuple[Any, ...]:
     role = detect_audio_role(track)
     special_role_group = 1 if role in {"Audio Description", "Commentary", "Isolated Score"} else 0
+    if language_order_style == "regional":
+        return (0 if track.default else 1, special_role_group, *language_sort_key(track, language_order_style), track.order)
     return (0 if track.default else 1, special_role_group, track.order)
 
 
@@ -4073,7 +4143,12 @@ def infer_audio_commentary_from_subtitles(audio_tracks: list[TrackInfo], subtitl
     candidate.role_reason = "inferred from full-length commentary subtitles"
 
 
-def apply_default_flags(videos: list[TrackInfo], audio_tracks: list[TrackInfo], subtitles: list[TrackInfo]) -> None:
+def apply_default_flags(
+    videos: list[TrackInfo],
+    audio_tracks: list[TrackInfo],
+    subtitles: list[TrackInfo],
+    language_order_style: str = "default",
+) -> None:
     for index, track in enumerate(videos):
         track.default = index == 0
 
@@ -4084,7 +4159,7 @@ def apply_default_flags(videos: list[TrackInfo], audio_tracks: list[TrackInfo], 
     included_subtitles = [track for track in subtitles if not track.drop]
     english_forced = [
         track
-        for track in sorted(included_subtitles, key=subtitle_sort_key)
+        for track in sorted(included_subtitles, key=lambda item: subtitle_sort_key(item, language_order_style))
         if is_english_forced_subtitle(track)
     ]
     default_subtitle = english_forced[0] if english_forced else None
@@ -4136,14 +4211,17 @@ def english_normal_subtitle_rank(track: TrackInfo) -> int:
     return 5
 
 
-def subtitle_language_sort_key(track: TrackInfo) -> tuple[int, str]:
+def subtitle_language_sort_key(track: TrackInfo, language_order_style: str = "default") -> tuple[Any, ...]:
     if is_english(track):
         return (0, "")
+
+    if language_order_style == "regional":
+        return (1, *language_sort_key(track, language_order_style))
 
     return (1, normalized_subtitle_language_name(track))
 
 
-def subtitle_sort_key(track: TrackInfo) -> tuple[Any, ...]:
+def subtitle_sort_key(track: TrackInfo, language_order_style: str = "default") -> tuple[Any, ...]:
     primary_group = 0 if is_english_forced_subtitle(track) else 1
 
     if is_forced_subtitle(track):
@@ -4156,19 +4234,24 @@ def subtitle_sort_key(track: TrackInfo) -> tuple[Any, ...]:
     if role_group == 0 and is_english(track):
         return (primary_group, role_group, 0, english_normal_subtitle_rank(track), track.order)
 
-    language_group, language_name = subtitle_language_sort_key(track)
+    language_key = subtitle_language_sort_key(track, language_order_style)
     if role_group == 0:
-        return (primary_group, role_group, 1, language_name, track.role == "sdh", subtitle_format_rank(track), track.order)
+        return (primary_group, role_group, 1, *language_key, track.role == "sdh", subtitle_format_rank(track), track.order)
 
-    return (primary_group, role_group, language_group, language_name, track.order)
+    return (primary_group, role_group, *language_key, track.order)
 
 
-def ordered_tracks(videos: list[TrackInfo], audio_tracks: list[TrackInfo], subtitles: list[TrackInfo]) -> list[TrackInfo]:
+def ordered_tracks(
+    videos: list[TrackInfo],
+    audio_tracks: list[TrackInfo],
+    subtitles: list[TrackInfo],
+    language_order_style: str = "default",
+) -> list[TrackInfo]:
     included_subtitles = [track for track in subtitles if not track.drop]
     return (
         sorted(videos, key=lambda item: item.order)
-        + sorted(audio_tracks, key=audio_sort_key)
-        + sorted(included_subtitles, key=subtitle_sort_key)
+        + sorted(audio_tracks, key=lambda item: audio_sort_key(item, language_order_style))
+        + sorted(included_subtitles, key=lambda item: subtitle_sort_key(item, language_order_style))
     )
 
 
@@ -4255,9 +4338,10 @@ def metadata_edit_plan(
     videos: list[TrackInfo],
     audio_tracks: list[TrackInfo],
     subtitles: list[TrackInfo],
+    language_order_style: str = "default",
 ) -> MetadataEditPlan:
     all_tracks = sorted(videos + audio_tracks + subtitles, key=lambda item: item.order)
-    desired_tracks = ordered_tracks(videos, audio_tracks, subtitles)
+    desired_tracks = ordered_tracks(videos, audio_tracks, subtitles, language_order_style)
 
     dropped_subtitles = [track for track in subtitles if track.drop]
     if dropped_subtitles:
@@ -4309,6 +4393,7 @@ def build_mkvmerge_command(
     videos: list[TrackInfo],
     audio_tracks: list[TrackInfo],
     subtitles: list[TrackInfo],
+    language_order_style: str = "default",
 ) -> list[str]:
     command = [str(mkvmerge), "--output", str(output_path)]
 
@@ -4340,27 +4425,32 @@ def build_mkvmerge_command(
 
     command.append(str(input_path))
 
-    ordered = ordered_tracks(videos, audio_tracks, subtitles)
+    ordered = ordered_tracks(videos, audio_tracks, subtitles, language_order_style)
     if ordered:
         command.extend(["--track-order", ",".join(f"0:{track.id}" for track in ordered)])
 
     return command
 
 
-def print_track_plan(videos: list[TrackInfo], audio_tracks: list[TrackInfo], subtitles: list[TrackInfo]) -> None:
+def print_track_plan(
+    videos: list[TrackInfo],
+    audio_tracks: list[TrackInfo],
+    subtitles: list[TrackInfo],
+    language_order_style: str = "default",
+) -> None:
     print("\nTrack plan:")
 
     for track in sorted(videos, key=lambda item: item.order):
         print(f"  video    {track.id:>3}: default={'yes' if track.default else 'no'}")
 
-    for track in sorted(audio_tracks, key=audio_sort_key):
+    for track in sorted(audio_tracks, key=lambda item: audio_sort_key(item, language_order_style)):
         reason_text = f" | {track.role_reason}" if track.role_reason else ""
         print(
             f"  audio    {track.id:>3}: {track.language_name} | "
             f"{track.suggested_name} | default={'yes' if track.default else 'no'}{reason_text}"
         )
 
-    for track in sorted(subtitles, key=lambda item: (item.drop, subtitle_sort_key(item))):
+    for track in sorted(subtitles, key=lambda item: (item.drop, subtitle_sort_key(item, language_order_style))):
         drop_text = " | DROP" if track.drop else ""
         forced_text = " | forced=yes" if track.forced else ""
         default_text = " | default=yes" if track.default else " | default=no"
@@ -5114,6 +5204,7 @@ def process_file(
     if args.detect_language_variants:
         apply_default_language_variants(subtitles)
     audio_name_style = getattr(args, "audio_name_style", "auto")
+    language_order_style = getattr(args, "language_order_style", "default")
     apply_audio_names(audio_tracks, audio_name_style)
 
     progress("Analyzing subtitle sizes", 15)
@@ -5176,7 +5267,7 @@ def process_file(
     )
     infer_audio_commentary_from_subtitles(audio_tracks, subtitles)
     apply_audio_names(audio_tracks, audio_name_style)
-    apply_default_flags(videos, audio_tracks, subtitles)
+    apply_default_flags(videos, audio_tracks, subtitles, language_order_style)
 
     progress("Building track plan", 70)
     if args.analyze_sub_sizes:
@@ -5184,10 +5275,10 @@ def process_file(
     if args.smart_sub_detection:
         print_subtitle_role_score_report(subtitles)
 
-    print_track_plan(videos, audio_tracks, subtitles)
+    print_track_plan(videos, audio_tracks, subtitles, language_order_style)
     print_track_explanations(subtitles, args.explain_track_ids)
 
-    metadata_plan = metadata_edit_plan(videos, audio_tracks, subtitles)
+    metadata_plan = metadata_edit_plan(videos, audio_tracks, subtitles, language_order_style)
     metadata_mode = getattr(args, "metadata_edit_mode", "off")
     if metadata_mode in {"auto", "only"}:
         print(f"\nMetadata-only plan: {'yes' if metadata_plan.can_edit else 'no'} ({metadata_plan.reason})")
@@ -5272,6 +5363,7 @@ def process_file(
         videos=videos,
         audio_tracks=audio_tracks,
         subtitles=subtitles,
+        language_order_style=language_order_style,
     )
 
     print("\nmkvmerge command:")
@@ -5398,6 +5490,15 @@ def build_parser(config_defaults: dict[str, Any] | None = None) -> argparse.Argu
             "Audio track naming style: auto=use format unless multiple audio languages are present, "
             "format=codec/channels only, language-format=language + codec/channels, keep=preserve existing names. "
             "Default: auto."
+        ),
+    )
+    parser.add_argument(
+        "--language-order-style",
+        choices=sorted(LANGUAGE_ORDER_STYLES),
+        default=default("language_order_style", "default"),
+        help=(
+            "Track language ordering style: default=existing order rules, "
+            "regional=group languages by broad regions with Europe before Americas and Asia. Default: default."
         ),
     )
     parser.add_argument(
@@ -5739,6 +5840,12 @@ def prepare_batch_run(args: argparse.Namespace, config_path: Path | None = None)
     if args.audio_name_style not in AUDIO_NAME_STYLES:
         allowed = ", ".join(sorted(AUDIO_NAME_STYLES))
         raise OrganizerError(f"--audio-name-style must be one of these values: {allowed}.")
+    args.language_order_style = (
+        str(getattr(args, "language_order_style", "default") or "default").strip().lower().replace("_", "-")
+    )
+    if args.language_order_style not in LANGUAGE_ORDER_STYLES:
+        allowed = ", ".join(sorted(LANGUAGE_ORDER_STYLES))
+        raise OrganizerError(f"--language-order-style must be one of these values: {allowed}.")
 
     require_tool(args.mkvmerge, "mkvmerge")
     if args.metadata_edit_mode == "only":
