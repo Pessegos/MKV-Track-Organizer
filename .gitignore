@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.history/
+
+_ocr_cache/
+_sorted/
+_tools/
+_fresh_es_samples/
+
+mkv_track_organizer.config.json
+*.mkv
+*.sup
+*.srt.history/
+.history/
