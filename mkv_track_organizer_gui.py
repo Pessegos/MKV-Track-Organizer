@@ -97,6 +97,7 @@ class OrganizerWorker(QObject):
 
 class MainWindow(QMainWindow):
     FILE_COLUMNS = ["Status", "Input", "Output", "Message"]
+    FINALIZATION_PROGRESS_UNITS = 10
     TRACK_COLUMNS = [
         "ID",
         "Type",
@@ -585,7 +586,8 @@ class MainWindow(QMainWindow):
     def handle_event(self, kind: str, message: str, file_path: str, index: int, total: int, step: int, steps: int) -> None:
         if total:
             steps = steps or 100
-            self.progress.setRange(0, max(1, total * steps))
+            total_units = self._progress_total_units(total, steps)
+            self.progress.setRange(0, total_units)
             if kind == "file-started":
                 value = max(0, index - 1) * steps
             elif kind == "file-progress":
@@ -594,7 +596,7 @@ class MainWindow(QMainWindow):
                 value = index * steps
             else:
                 value = self.progress.value()
-            self.progress.setValue(value)
+            self.progress.setValue(min(value, total_units - self.FINALIZATION_PROGRESS_UNITS))
         if file_path:
             status = {
                 "file-started": "Running",
@@ -606,9 +608,12 @@ class MainWindow(QMainWindow):
                 self._set_file_status(Path(file_path), status, message)
         self.statusBar().showMessage(message)
 
+    def _progress_total_units(self, total: int, steps: int = 100) -> int:
+        return max(1, total * steps + self.FINALIZATION_PROGRESS_UNITS)
+
     @Slot(object)
     def handle_completed(self, result: organizer.BatchRunResult) -> None:
-        total_units = max(1, len(result.input_files) * 100)
+        total_units = self._progress_total_units(len(result.input_files), 100)
         self.progress.setRange(0, total_units)
         self.progress.setValue(total_units)
         self._populate_results(result.reports)

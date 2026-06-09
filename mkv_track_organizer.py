@@ -353,6 +353,14 @@ LANGUAGE_ALIASES = {
     "dan": "dan",
     "no": "nor",
     "nor": "nor",
+    "nb": "nob",
+    "nb-no": "nob",
+    "nob": "nob",
+    "no-bok": "nob",
+    "nn": "nno",
+    "nn-no": "nno",
+    "nno": "nno",
+    "no-nyn": "nno",
     "fi": "fin",
     "fin": "fin",
     "is": "ice",
@@ -433,6 +441,8 @@ IETF_PRIMARY_BY_MKV_LANGUAGE = {
     "swe": "sv",
     "dan": "da",
     "nor": "no",
+    "nob": "nb",
+    "nno": "nn",
     "fin": "fi",
     "ice": "is",
     "rus": "ru",
@@ -498,6 +508,8 @@ LANGUAGE_NAMES = {
     "swe": "Swedish",
     "dan": "Danish",
     "nor": "Norwegian",
+    "nob": "Norwegian Bokmål",
+    "nno": "Norwegian Nynorsk",
     "fin": "Finnish",
     "ice": "Icelandic",
     "rus": "Russian",
@@ -575,6 +587,8 @@ TESSERACT_LANGUAGE_ALIASES = {
     "swe": "swe",
     "dan": "dan",
     "nor": "nor",
+    "nob": "nor",
+    "nno": "nor",
     "fin": "fin",
     "ita": "ita",
     "jpn": "jpn",
@@ -1554,7 +1568,11 @@ def language_display_name(code: str) -> str:
     if code in LANGUAGE_NAMES:
         return LANGUAGE_NAMES[code]
 
-    parts = canonicalize_ietf_code(code).split("-")
+    normalized = normalize_language_code(code)
+    if normalized in LANGUAGE_NAMES:
+        return LANGUAGE_NAMES[normalized]
+
+    parts = canonicalize_ietf_code(normalized).split("-")
     if len(parts) > 1:
         base_name = LANGUAGE_NAMES.get(base_language_code(code), parts[0])
         for subtag in reversed(parts[1:]):
@@ -1568,11 +1586,18 @@ def language_display_name(code: str) -> str:
 def language_for_mkvmerge(code: str) -> str:
     if code == "pt":
         return "por"
+    if code == "nob":
+        return "nb"
+    if code == "nno":
+        return "nn"
     return code or "und"
 
 
 def legacy_language_for_mkvpropedit(code: str) -> str:
-    return language_for_mkvmerge(base_language_code(code))
+    base_code = base_language_code(code)
+    if base_code == "pt":
+        return "por"
+    return base_code or "und"
 
 
 def ietf_language_for_mkvpropedit(code: str) -> str:

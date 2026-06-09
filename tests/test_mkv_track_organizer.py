@@ -104,6 +104,15 @@ def test_language_names_and_aliases() -> None:
     assert m.language_display_name("mk") == "Macedonian"
     assert m.normalize_language_code("sk") == "sk"
     assert m.language_display_name("sk") == "Slovak"
+    assert m.normalize_language_code("nb") == "nob"
+    assert m.normalize_language_code("nob") == "nob"
+    assert m.language_display_name("nb") == "Norwegian Bokmål"
+    assert m.language_display_name("nob") == "Norwegian Bokmål"
+    assert m.normalize_language_code("nn") == "nno"
+    assert m.language_display_name("nno") == "Norwegian Nynorsk"
+    assert m.language_for_mkvmerge("nob") == "nb"
+    assert m.legacy_language_for_mkvpropedit("nob") == "nob"
+    assert m.ietf_language_for_mkvpropedit("nob") == "nb"
 
 
 def test_language_hints_fix_wrong_metadata_language() -> None:
