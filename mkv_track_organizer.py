@@ -3,11 +3,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import queue
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import unicodedata
 import urllib.error
 import urllib.request
@@ -77,6 +79,10 @@ CHINESE_TRADITIONAL_REGIONAL_VARIANTS = {"zh-TW", "zh-HK"}
 
 class OrganizerError(Exception):
     """Friendly error for expected organizer failures."""
+
+
+class OrganizerCancelled(Exception):
+    """Raised when a batch run is cancelled by the caller."""
 
 
 @dataclass
@@ -217,9 +223,12 @@ class BatchRunResult:
     failures: int
     input_files: list[Path]
     source_root: Path | None
+    cancelled: bool = False
 
     @property
     def return_code(self) -> int:
+        if self.cancelled:
+            return 130
         return 1 if self.failures else 0
 
 
@@ -2247,8 +2256,36 @@ def require_tool(path: Path | None, description: str) -> None:
         )
 
 
+def ensure_not_cancelled(cancel_callback: Callable[[], bool] | None = None) -> None:
+    if cancel_callback and cancel_callback():
+        raise OrganizerCancelled("Operation cancelled.")
+
+
+def command_with_mkvtoolnix_ui_language(command: list[str]) -> list[str]:
+    if "--ui-language" in command:
+        return command
+
+    executable = Path(command[0]).stem.lower()
+    if executable not in {"mkvmerge", "mkvextract", "mkvpropedit"}:
+        return command
+
+    return [command[0], "--ui-language", "en", *command[1:]]
+
+
+def terminate_process(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
+
+    process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+
+
 def load_metadata(mkvmerge: Path, input_path: Path) -> dict[str, Any]:
-    command = [str(mkvmerge), "-J", str(input_path)]
+    command = command_with_mkvtoolnix_ui_language([str(mkvmerge), "-J", str(input_path)])
     result = subprocess.run(
         command,
         capture_output=True,
@@ -2300,7 +2337,7 @@ def analyze_subtitle_sizes(input_path: Path, subtitles: list[TrackInfo], mkvextr
     with tempfile.TemporaryDirectory(prefix="mkv_subs_") as temp_name:
         temp_dir = Path(temp_name)
         extracted_paths: dict[int, Path] = {}
-        command = [str(mkvextract), "tracks", str(input_path)]
+        command = command_with_mkvtoolnix_ui_language([str(mkvextract), "tracks", str(input_path)])
 
         for track in subtitles:
             extension = subtitle_extension(track)
@@ -2980,7 +3017,9 @@ def ensure_pgs_ocr_cache(
             continue
 
         if force_pgs_ocr or not sup_path.exists():
-            command = [str(mkvextract), "tracks", str(input_path), f"{track.id}:{sup_path}"]
+            command = command_with_mkvtoolnix_ui_language(
+                [str(mkvextract), "tracks", str(input_path), f"{track.id}:{sup_path}"]
+            )
             result = subprocess.run(
                 command,
                 capture_output=True,
@@ -3042,7 +3081,9 @@ def extract_pgs_for_manual_ocr(
         expected_srt_path = cache_dir / f"{subtitle_cache_stem(input_path, track)}.srt"
 
         if not sup_path.exists():
-            command = [str(mkvextract), "tracks", str(input_path), f"{track.id}:{sup_path}"]
+            command = command_with_mkvtoolnix_ui_language(
+                [str(mkvextract), "tracks", str(input_path), f"{track.id}:{sup_path}"]
+            )
             result = subprocess.run(
                 command,
                 capture_output=True,
@@ -4372,7 +4413,7 @@ def build_mkvpropedit_command(
     input_path: Path,
     edits: list[MetadataTrackEdit],
 ) -> list[str]:
-    command = [str(mkvpropedit), str(input_path)]
+    command = command_with_mkvtoolnix_ui_language([str(mkvpropedit), str(input_path)])
 
     for edit in edits:
         number = track_number(edit.track)
@@ -4395,7 +4436,7 @@ def build_mkvmerge_command(
     subtitles: list[TrackInfo],
     language_order_style: str = "default",
 ) -> list[str]:
-    command = [str(mkvmerge), "--output", str(output_path)]
+    command = command_with_mkvtoolnix_ui_language([str(mkvmerge), "--output", str(output_path)])
 
     for track in videos:
         command.extend(["--default-track-flag", f"{track.id}:{'yes' if track.default else 'no'}"])
@@ -5146,30 +5187,64 @@ def run_command_with_progress(
     message: str,
     start_step: int,
     end_step: int,
+    cancel_callback: Callable[[], bool] | None = None,
 ) -> subprocess.CompletedProcess:
-    if progress_callback is None:
-        return subprocess.run(command)
+    ensure_not_cancelled(cancel_callback)
 
+    command_to_run = command_with_gui_mode(command) if progress_callback else command
     process = subprocess.Popen(
-        command_with_gui_mode(command),
+        command_to_run,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
         encoding="utf-8",
         errors="replace",
     )
-
     assert process.stdout is not None
-    for line in process.stdout:
+
+    output_queue: queue.Queue[str | None] = queue.Queue()
+
+    def read_output() -> None:
+        try:
+            for output_line in process.stdout:
+                output_queue.put(output_line)
+        finally:
+            output_queue.put(None)
+
+    reader_thread = threading.Thread(target=read_output, daemon=True)
+    reader_thread.start()
+
+    output_closed = False
+    while True:
+        if cancel_callback and cancel_callback():
+            terminate_process(process)
+            reader_thread.join(timeout=1)
+            raise OrganizerCancelled("Operation cancelled.")
+
+        try:
+            line = output_queue.get(timeout=0.1)
+        except queue.Empty:
+            if process.poll() is not None and output_closed:
+                break
+            continue
+
+        if line is None:
+            output_closed = True
+            if process.poll() is not None:
+                break
+            continue
+
         match = re.search(r"#GUI#progress\s+(\d+)", line)
         if match:
             percent = max(0, min(100, int(match.group(1))))
             step = start_step + round((end_step - start_step) * percent / 100)
-            progress_callback(f"{message} ({percent}%)", step, 100)
+            if progress_callback:
+                progress_callback(f"{message} ({percent}%)", step, 100)
             continue
         print(line, end="")
 
-    return subprocess.CompletedProcess(command, process.wait())
+    reader_thread.join(timeout=1)
+    return subprocess.CompletedProcess(command_to_run, process.wait())
 
 
 def process_file(
@@ -5179,8 +5254,10 @@ def process_file(
     forced_subtitle_ids: set[int],
     batch_variant_consensus: dict[str, str] | None = None,
     progress_callback: Callable[[str, int, int], None] | None = None,
+    cancel_callback: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     def progress(message: str, step: int, steps: int = 100) -> None:
+        ensure_not_cancelled(cancel_callback)
         if progress_callback:
             progress_callback(message, step, steps)
 
@@ -5329,6 +5406,7 @@ def process_file(
                 "Writing metadata",
                 85,
                 100,
+                cancel_callback,
             )
             if result.returncode != 0:
                 raise OrganizerError(f"mkvpropedit failed with exit code {result.returncode}: {input_path}")
@@ -5392,6 +5470,7 @@ def process_file(
         "Remuxing output",
         85,
         100,
+        cancel_callback,
     )
 
     if result.returncode != 0:
@@ -5880,22 +5959,43 @@ def prepare_batch_run(args: argparse.Namespace, config_path: Path | None = None)
 def run_batch(
     context: BatchRunContext,
     event_callback: Callable[[BatchRunEvent], None] | None = None,
+    cancel_callback: Callable[[], bool] | None = None,
 ) -> BatchRunResult:
     args = context.args
     input_files = context.input_files
     source_root = context.source_root
     failures = 0
+    cancelled = False
     reports: list[dict[str, Any]] = []
     total_files = len(input_files)
 
+    ensure_not_cancelled(cancel_callback)
     print(f"MKVs found: {total_files}")
     emit_batch_event(event_callback, "batch-started", f"MKVs found: {total_files}", total=total_files)
 
-    batch_variant_consensus = collect_batch_language_variant_consensus(input_files, args)
-    sibling_variant_consensus = collect_sibling_metadata_variant_consensus(input_files, args)
-    batch_variant_consensus = merge_variant_consensus(batch_variant_consensus, sibling_variant_consensus)
+    try:
+        batch_variant_consensus = collect_batch_language_variant_consensus(input_files, args)
+        ensure_not_cancelled(cancel_callback)
+        sibling_variant_consensus = collect_sibling_metadata_variant_consensus(input_files, args)
+        batch_variant_consensus = merge_variant_consensus(batch_variant_consensus, sibling_variant_consensus)
+        ensure_not_cancelled(cancel_callback)
+    except OrganizerCancelled:
+        print("\nBatch cancelled.")
+        emit_batch_event(event_callback, "batch-cancelled", "Batch cancelled.")
+        return BatchRunResult(
+            reports=reports,
+            failures=failures,
+            input_files=input_files,
+            source_root=source_root,
+            cancelled=True,
+        )
 
     for index, input_path in enumerate(input_files, start=1):
+        try:
+            ensure_not_cancelled(cancel_callback)
+        except OrganizerCancelled:
+            cancelled = True
+            break
         output_path = output_path_for(
             input_path,
             source_root,
@@ -5930,6 +6030,7 @@ def run_batch(
                 context.forced_subtitle_ids,
                 batch_variant_consensus,
                 progress_callback=emit_file_progress if event_callback else None,
+                cancel_callback=cancel_callback,
             )
             reports.append(report)
             emit_batch_event(
@@ -5940,6 +6041,26 @@ def run_batch(
                 index=index,
                 total=total_files,
             )
+        except OrganizerCancelled:
+            cancelled = True
+            print(f"\nCancelled while processing {input_path.name}.")
+            reports.append(
+                file_report_data(
+                    input_path,
+                    output_path,
+                    "cancelled",
+                    message="operation cancelled",
+                )
+            )
+            emit_batch_event(
+                event_callback,
+                "file-cancelled",
+                f"Cancelled {input_path.name}",
+                file=input_path,
+                index=index,
+                total=total_files,
+            )
+            break
         except OrganizerError as error:
             failures += 1
             print(f"\nError in {input_path.name}:")
@@ -5967,8 +6088,12 @@ def run_batch(
         failures=failures,
         input_files=input_files,
         source_root=source_root,
+        cancelled=cancelled,
     )
-    if failures:
+    if cancelled:
+        print("\nBatch cancelled.")
+        emit_batch_event(event_callback, "batch-cancelled", "Batch cancelled.")
+    elif failures:
         print(f"\nBatch completed with {failures} error(s).")
         emit_batch_event(event_callback, "batch-finished", f"Batch completed with {failures} error(s).")
     else:
@@ -5982,8 +6107,9 @@ def run_from_args(
     args: argparse.Namespace,
     config_path: Path | None = None,
     event_callback: Callable[[BatchRunEvent], None] | None = None,
+    cancel_callback: Callable[[], bool] | None = None,
 ) -> BatchRunResult:
-    return run_batch(prepare_batch_run(args, config_path), event_callback)
+    return run_batch(prepare_batch_run(args, config_path), event_callback, cancel_callback)
 
 
 def main(argv: list[str] | None = None) -> int:

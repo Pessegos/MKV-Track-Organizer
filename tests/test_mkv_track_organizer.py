@@ -674,6 +674,7 @@ def test_mkvmerge_command_excludes_dropped_subtitles(tmp_path: Path) -> None:
         audio_tracks=[],
         subtitles=[kept, dropped],
     )
+    assert command[:3] == ["mkvmerge", "--ui-language", "en"]
     assert "--subtitle-tracks" in command
     assert command[command.index("--subtitle-tracks") + 1] == "1"
     assert "2:English" not in command
@@ -735,6 +736,7 @@ def test_metadata_edit_plan_allows_metadata_only_language_and_name_change(tmp_pa
     assert len(plan.edits) == 1
     assert plan.edits[0].properties["language-ietf"] == "es-419"
     assert plan.edits[0].properties["name"] == "Spanish (Latin American)"
+    assert command[:3] == ["mkvpropedit", "--ui-language", "en"]
     assert "--edit" in command
     assert "track:@3" in command
     assert "language-ietf=es-419" in command
@@ -913,7 +915,15 @@ def test_run_batch_returns_reports_and_events(tmp_path: Path, monkeypatch) -> No
         forced_subtitle_ids=set(),
     )
 
-    def fake_process_file(input_file, output_file, _args, _forced_ids, _consensus, progress_callback=None):
+    def fake_process_file(
+        input_file,
+        output_file,
+        _args,
+        _forced_ids,
+        _consensus,
+        progress_callback=None,
+        cancel_callback=None,
+    ):
         if progress_callback:
             progress_callback("Reading metadata", 5, 100)
             progress_callback("Preview complete", 100, 100)
@@ -937,6 +947,41 @@ def test_run_batch_returns_reports_and_events(tmp_path: Path, monkeypatch) -> No
     ]
     progress_events = [event for event in events if event.kind == "file-progress"]
     assert [(event.step, event.steps) for event in progress_events] == [(5, 100), (100, 100)]
+
+
+def test_run_batch_can_be_cancelled(tmp_path: Path, monkeypatch) -> None:
+    input_path = tmp_path / "movie.mkv"
+    input_path.write_bytes(b"")
+    args = argparse.Namespace(
+        path=input_path,
+        output_dir=None,
+        output_suffix="",
+        report=False,
+        report_dir=None,
+        report_format="both",
+        dry_run=False,
+        detect_language_variants=False,
+        batch_language_variant_consensus=True,
+    )
+    context = m.BatchRunContext(
+        args=args,
+        input_files=[input_path],
+        source_root=None,
+        forced_subtitle_ids=set(),
+    )
+
+    def fake_process_file(*_args, **_kwargs):
+        raise m.OrganizerCancelled("stop")
+
+    monkeypatch.setattr(m, "process_file", fake_process_file)
+    events: list[m.BatchRunEvent] = []
+
+    result = m.run_batch(context, events.append)
+
+    assert result.cancelled is True
+    assert result.return_code == 130
+    assert result.reports[0]["status"] == "cancelled"
+    assert [event.kind for event in events][-2:] == ["file-cancelled", "batch-cancelled"]
 
 
 def test_normalize_ocr_output_moves_from_work_dir(tmp_path: Path) -> None:

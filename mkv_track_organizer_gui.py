@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import io
 import sys
+import threading
 import traceback
 from pathlib import Path
 
@@ -72,16 +73,31 @@ class OrganizerWorker(QObject):
         super().__init__()
         self.args = args
         self.config_path = config_path
+        self._cancel_requested = threading.Event()
 
     @Slot()
     def run(self) -> None:
         try:
             stream = SignalTextStream(self.log.emit)
             with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream):
-                result = organizer.run_from_args(self.args, self.config_path, self._emit_event)
+                result = organizer.run_from_args(
+                    self.args,
+                    self.config_path,
+                    self._emit_event,
+                    self.cancel_requested,
+                )
             self.completed.emit(result)
+        except organizer.OrganizerCancelled:
+            self.completed.emit(organizer.BatchRunResult([], 0, [], None, cancelled=True))
         except Exception:
             self.failed.emit(traceback.format_exc())
+
+    @Slot()
+    def cancel(self) -> None:
+        self._cancel_requested.set()
+
+    def cancel_requested(self) -> bool:
+        return self._cancel_requested.is_set()
 
     def _emit_event(self, event: organizer.BatchRunEvent) -> None:
         self.event.emit(
@@ -181,6 +197,7 @@ class MainWindow(QMainWindow):
         self.advanced_panel = QWidget()
         self.preview_button = QPushButton("Preview")
         self.run_button = QPushButton("Run")
+        self.cancel_button = QPushButton("Cancel")
         self.files_table = QTableWidget(0, len(self.FILE_COLUMNS))
         self.results_table = self.files_table
         self.tracks_table = QTableWidget(0, len(self.TRACK_COLUMNS))
@@ -240,10 +257,14 @@ class MainWindow(QMainWindow):
         self.preview_button.setToolTip("Analyze with dry-run enabled")
         self.run_button.setIcon(style.standardIcon(QStyle.SP_MediaPlay))
         self.run_button.setToolTip("Run with the selected settings")
+        self.cancel_button.setIcon(style.standardIcon(QStyle.SP_BrowserStop))
+        self.cancel_button.setToolTip("Cancel the current run")
+        self.cancel_button.setEnabled(False)
         top_bar.addWidget(self.advanced_button)
         top_bar.addStretch(1)
         top_bar.addWidget(self.preview_button)
         top_bar.addWidget(self.run_button)
+        top_bar.addWidget(self.cancel_button)
         root.addLayout(top_bar)
 
         advanced_layout = QGridLayout(self.advanced_panel)
@@ -369,6 +390,7 @@ class MainWindow(QMainWindow):
     def _connect_signals(self) -> None:
         self.preview_button.clicked.connect(self.start_preview)
         self.run_button.clicked.connect(self.start_run)
+        self.cancel_button.clicked.connect(self.cancel_run)
         self.input_edit.textEdited.connect(self._manual_input_changed)
         self.files_table.itemSelectionChanged.connect(self._populate_tracks_for_selection)
         self.metadata_combo.currentIndexChanged.connect(
@@ -532,6 +554,14 @@ class MainWindow(QMainWindow):
             return
         self._start_run(dry_run=False)
 
+    @Slot()
+    def cancel_run(self) -> None:
+        if not self.worker:
+            return
+        self.worker.cancel()
+        self.cancel_button.setEnabled(False)
+        self.statusBar().showMessage("Cancelling...")
+
     def _start_run(self, dry_run: bool) -> None:
         if self.worker_thread and self.worker_thread.isRunning():
             return
@@ -623,6 +653,7 @@ class MainWindow(QMainWindow):
                 "file-progress": "Running",
                 "file-finished": "Done",
                 "file-error": "Error",
+                "file-cancelled": "Cancelled",
             }.get(kind)
             if status:
                 self._set_file_status(Path(file_path), status, message)
@@ -637,9 +668,12 @@ class MainWindow(QMainWindow):
         self.progress.setRange(0, total_units)
         self.progress.setValue(total_units)
         self._populate_results(result.reports)
-        self.statusBar().showMessage(
-            f"Completed with {result.failures} error(s)" if result.failures else "Completed without errors"
-        )
+        if result.cancelled:
+            self.statusBar().showMessage("Cancelled")
+        else:
+            self.statusBar().showMessage(
+                f"Completed with {result.failures} error(s)" if result.failures else "Completed without errors"
+            )
         self._set_running(False)
 
     @Slot(str)
@@ -781,6 +815,7 @@ class MainWindow(QMainWindow):
     def _set_running(self, running: bool) -> None:
         self.preview_button.setEnabled(not running)
         self.run_button.setEnabled(not running)
+        self.cancel_button.setEnabled(running)
 
     def _paths_from_mime(self, mime_data) -> list[Path]:
         if not mime_data.hasUrls():
