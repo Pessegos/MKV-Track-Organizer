@@ -209,21 +209,39 @@ class MainWindow(QMainWindow):
         "Delay",
         "Reason",
     ]
-    STATUS_COLORS = {
-        "Ready": ("#edf7ed", "#1f6f3f"),
-        "Queued": ("#fff7df", "#8a5a00"),
-        "Running": ("#eaf2ff", "#1d4ed8"),
-        "Done": ("#e7f7ee", "#166534"),
-        "Error": ("#fdecec", "#b42318"),
-        "Cancelled": ("#f1f5f9", "#475569"),
-        "dry-run": ("#eef6ff", "#0369a1"),
-        "processed": ("#e7f7ee", "#166534"),
-        "metadata-edited": ("#e7f7ee", "#166534"),
-        "unchanged": ("#f1f5f9", "#475569"),
-        "skipped": ("#fff7df", "#8a5a00"),
-        "error": ("#fdecec", "#b42318"),
-        "cancelled": ("#f1f5f9", "#475569"),
-        "ready": ("#edf7ed", "#1f6f3f"),
+    STATUS_COLORS_BY_THEME = {
+        "light": {
+            "Ready": ("#edf7ed", "#1f6f3f"),
+            "Queued": ("#fff7df", "#8a5a00"),
+            "Running": ("#eaf2ff", "#1d4ed8"),
+            "Done": ("#e7f7ee", "#166534"),
+            "Error": ("#fdecec", "#b42318"),
+            "Cancelled": ("#f1f5f9", "#475569"),
+            "dry-run": ("#eef6ff", "#0369a1"),
+            "processed": ("#e7f7ee", "#166534"),
+            "metadata-edited": ("#e7f7ee", "#166534"),
+            "unchanged": ("#f1f5f9", "#475569"),
+            "skipped": ("#fff7df", "#8a5a00"),
+            "error": ("#fdecec", "#b42318"),
+            "cancelled": ("#f1f5f9", "#475569"),
+            "ready": ("#edf7ed", "#1f6f3f"),
+        },
+        "dark": {
+            "Ready": ("#153223", "#9ae6b4"),
+            "Queued": ("#3a2d13", "#f6d365"),
+            "Running": ("#173153", "#93c5fd"),
+            "Done": ("#123524", "#86efac"),
+            "Error": ("#4a1d21", "#fca5a5"),
+            "Cancelled": ("#293241", "#cbd5e1"),
+            "dry-run": ("#15354a", "#7dd3fc"),
+            "processed": ("#123524", "#86efac"),
+            "metadata-edited": ("#123524", "#86efac"),
+            "unchanged": ("#293241", "#cbd5e1"),
+            "skipped": ("#3a2d13", "#f6d365"),
+            "error": ("#4a1d21", "#fca5a5"),
+            "cancelled": ("#293241", "#cbd5e1"),
+            "ready": ("#153223", "#9ae6b4"),
+        },
     }
     AUDIO_NAME_STYLE_HELP = {
         "auto": (
@@ -267,6 +285,7 @@ class MainWindow(QMainWindow):
         self.input_paths: list[Path] = []
         self.current_reports: list[dict] = []
         self.makemkv_reports: list[dict] = []
+        self.current_theme = "dark"
         self._syncing_input_edit = False
 
         self.input_edit = QLineEdit()
@@ -320,6 +339,10 @@ class MainWindow(QMainWindow):
         self.summary_edit = QPlainTextEdit()
         self.log_edit = QPlainTextEdit()
         self.output_tabs = QTabWidget()
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItem("Dark", "dark")
+        self.theme_combo.addItem("Light", "light")
+        self.theme_combo.setToolTip("Choose UI theme")
         self.progress_label = QLabel("Idle")
         self.progress = QProgressBar()
 
@@ -547,6 +570,8 @@ class MainWindow(QMainWindow):
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
         self.progress_label.setMinimumWidth(220)
+        self.theme_combo.setFixedWidth(92)
+        self.statusBar().addPermanentWidget(self.theme_combo)
         self.statusBar().addPermanentWidget(self.progress_label)
         self.statusBar().addPermanentWidget(self.progress, 1)
         tabs.addTab(organizer_tab, style.standardIcon(QStyle.SP_FileIcon), "Organizer")
@@ -683,6 +708,7 @@ class MainWindow(QMainWindow):
         self.language_order_style_combo.currentIndexChanged.connect(
             lambda _index: self._sync_combo_tooltip(self.language_order_style_combo, self.LANGUAGE_ORDER_STYLE_HELP)
         )
+        self.theme_combo.currentIndexChanged.connect(self.change_theme)
 
     def _tool_button(self, icon_id: QStyle.StandardPixmap, tooltip: str) -> QToolButton:
         button = QToolButton()
@@ -691,119 +717,202 @@ class MainWindow(QMainWindow):
         button.setAutoRaise(True)
         return button
 
-    def _apply_theme(self) -> None:
+    @Slot()
+    def change_theme(self) -> None:
+        self._apply_theme(str(self.theme_combo.currentData() or "dark"))
+
+    def _apply_theme(self, theme: str | None = None) -> None:
+        theme = theme or self.current_theme
+        self.current_theme = "light" if theme == "light" else "dark"
+        palette = self._theme_palette(self.current_theme)
         self.setStyleSheet(
-            """
-            QMainWindow, QWidget {
-                background: #f5f7fa;
-                color: #1f2933;
+            f"""
+            QMainWindow, QWidget {{
+                background: {palette['window']};
+                color: {palette['text']};
                 font-size: 9.5pt;
-            }
-            QGroupBox {
-                background: #ffffff;
-                border: 1px solid #d7dde5;
+            }}
+            QGroupBox {{
+                background: {palette['panel']};
+                border: 1px solid {palette['border']};
                 border-radius: 6px;
                 margin-top: 12px;
                 padding-top: 10px;
                 font-weight: 600;
-            }
-            QGroupBox::title {
+            }}
+            QGroupBox::title {{
                 subcontrol-origin: margin;
                 left: 10px;
                 padding: 0 4px;
-                color: #334155;
-            }
-            QLineEdit, QPlainTextEdit, QComboBox, QSpinBox {
-                background: #ffffff;
-                border: 1px solid #cbd5e1;
+                color: {palette['title']};
+                background: {palette['panel']};
+            }}
+            QLineEdit, QPlainTextEdit, QComboBox, QSpinBox {{
+                background: {palette['field']};
+                color: {palette['text']};
+                border: 1px solid {palette['border']};
                 border-radius: 5px;
                 padding: 5px 7px;
-                selection-background-color: #2563eb;
-            }
-            QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QSpinBox:focus {
-                border-color: #2563eb;
-            }
-            QPushButton, QToolButton {
-                background: #ffffff;
-                border: 1px solid #cbd5e1;
+                selection-background-color: {palette['primary']};
+            }}
+            QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QSpinBox:focus {{
+                border-color: {palette['primary']};
+            }}
+            QComboBox QAbstractItemView {{
+                background: {palette['panel']};
+                color: {palette['text']};
+                border: 1px solid {palette['border']};
+                selection-background-color: {palette['primary']};
+            }}
+            QPushButton, QToolButton {{
+                background: {palette['button']};
+                color: {palette['text']};
+                border: 1px solid {palette['border']};
                 border-radius: 5px;
                 padding: 6px 10px;
-            }
-            QPushButton:hover, QToolButton:hover {
-                background: #f1f5f9;
-                border-color: #94a3b8;
-            }
-            QPushButton#primaryButton {
-                background: #2563eb;
-                border-color: #1d4ed8;
+            }}
+            QPushButton:hover, QToolButton:hover {{
+                background: {palette['button_hover']};
+                border-color: {palette['border_strong']};
+            }}
+            QPushButton#primaryButton {{
+                background: {palette['primary']};
+                border-color: {palette['primary_strong']};
                 color: #ffffff;
                 font-weight: 600;
-            }
-            QPushButton#primaryButton:hover {
-                background: #1d4ed8;
-            }
-            QPushButton#dangerButton {
-                background: #fff5f5;
-                border-color: #f1a5a5;
-                color: #9f1239;
+            }}
+            QPushButton#primaryButton:hover {{
+                background: {palette['primary_strong']};
+            }}
+            QPushButton#dangerButton {{
+                background: {palette['danger_bg']};
+                border-color: {palette['danger_border']};
+                color: {palette['danger_text']};
                 font-weight: 600;
-            }
-            QPushButton#dangerButton:hover {
-                background: #ffe4e6;
-            }
-            QPushButton#secondaryButton {
-                background: #eef6ff;
-                border-color: #bfdbfe;
-                color: #1e3a8a;
-            }
-            QTabWidget::pane {
-                border: 1px solid #d7dde5;
+            }}
+            QPushButton#dangerButton:hover {{
+                background: {palette['danger_hover']};
+            }}
+            QPushButton#secondaryButton {{
+                background: {palette['secondary_bg']};
+                border-color: {palette['secondary_border']};
+                color: {palette['secondary_text']};
+            }}
+            QTabWidget::pane {{
+                border: 1px solid {palette['border']};
                 border-radius: 6px;
                 top: -1px;
-            }
-            QTabBar::tab {
-                background: #e8edf3;
-                color: #475569;
-                border: 1px solid #d7dde5;
+            }}
+            QTabBar::tab {{
+                background: {palette['tab']};
+                color: {palette['muted']};
+                border: 1px solid {palette['border']};
                 border-bottom: none;
                 padding: 7px 14px;
                 margin-right: 3px;
                 border-top-left-radius: 5px;
                 border-top-right-radius: 5px;
-            }
-            QTabBar::tab:selected {
-                background: #ffffff;
-                color: #0f172a;
-                border-top: 3px solid #2563eb;
-            }
-            QHeaderView::section {
-                background: #e8edf3;
-                color: #334155;
+            }}
+            QTabBar::tab:selected {{
+                background: {palette['panel']};
+                color: {palette['text']};
+                border-top: 3px solid {palette['primary']};
+            }}
+            QHeaderView::section {{
+                background: {palette['header']};
+                color: {palette['title']};
                 border: none;
-                border-right: 1px solid #d7dde5;
+                border-right: 1px solid {palette['border']};
                 padding: 5px 7px;
                 font-weight: 600;
-            }
-            QTableWidget {
-                background: #ffffff;
-                alternate-background-color: #f8fafc;
-                gridline-color: #e2e8f0;
-                border: 1px solid #d7dde5;
+            }}
+            QTableWidget {{
+                background: {palette['panel']};
+                color: {palette['text']};
+                alternate-background-color: {palette['alternate']};
+                gridline-color: {palette['grid']};
+                border: 1px solid {palette['border']};
                 border-radius: 4px;
-            }
-            QProgressBar {
-                background: #e8edf3;
-                border: 1px solid #cbd5e1;
+            }}
+            QProgressBar {{
+                background: {palette['progress_bg']};
+                color: {palette['text']};
+                border: 1px solid {palette['border']};
                 border-radius: 4px;
                 height: 12px;
                 text-align: center;
-            }
-            QProgressBar::chunk {
-                background: #16a34a;
+            }}
+            QProgressBar::chunk {{
+                background: {palette['progress']};
                 border-radius: 3px;
-            }
+            }}
+            QStatusBar {{
+                background: {palette['status']};
+                color: {palette['muted']};
+                border-top: 1px solid {palette['border']};
+            }}
             """
         )
+        self._refresh_status_styles()
+
+    def _theme_palette(self, theme: str) -> dict[str, str]:
+        if theme == "light":
+            return {
+                "window": "#f5f7fa",
+                "panel": "#ffffff",
+                "field": "#ffffff",
+                "alternate": "#f8fafc",
+                "tab": "#e8edf3",
+                "header": "#e8edf3",
+                "status": "#eef2f7",
+                "text": "#1f2933",
+                "title": "#334155",
+                "muted": "#475569",
+                "border": "#d7dde5",
+                "border_strong": "#94a3b8",
+                "grid": "#e2e8f0",
+                "button": "#ffffff",
+                "button_hover": "#f1f5f9",
+                "primary": "#2563eb",
+                "primary_strong": "#1d4ed8",
+                "secondary_bg": "#eef6ff",
+                "secondary_border": "#bfdbfe",
+                "secondary_text": "#1e3a8a",
+                "danger_bg": "#fff5f5",
+                "danger_border": "#f1a5a5",
+                "danger_text": "#9f1239",
+                "danger_hover": "#ffe4e6",
+                "progress_bg": "#e8edf3",
+                "progress": "#16a34a",
+            }
+        return {
+            "window": "#101418",
+            "panel": "#171d24",
+            "field": "#0d1117",
+            "alternate": "#141a21",
+            "tab": "#111820",
+            "header": "#202833",
+            "status": "#0d1117",
+            "text": "#e5e7eb",
+            "title": "#f3f4f6",
+            "muted": "#a7b0bd",
+            "border": "#303946",
+            "border_strong": "#596579",
+            "grid": "#2a3340",
+            "button": "#1d2430",
+            "button_hover": "#273142",
+            "primary": "#2f81f7",
+            "primary_strong": "#1f6feb",
+            "secondary_bg": "#172536",
+            "secondary_border": "#315170",
+            "secondary_text": "#9bd1ff",
+            "danger_bg": "#331c22",
+            "danger_border": "#7f2d3a",
+            "danger_text": "#ffb4bd",
+            "danger_hover": "#44232b",
+            "progress_bg": "#222b36",
+            "progress": "#2fb170",
+        }
 
     def _apply_combo_help(self, combo: QComboBox, help_by_key: dict[str, str]) -> None:
         for index in range(combo.count()):
@@ -1597,12 +1706,19 @@ class MainWindow(QMainWindow):
         self.makemkv_table.resizeColumnsToContents()
 
     def _apply_status_style(self, item: QTableWidgetItem, status: str) -> None:
-        colors = self.STATUS_COLORS.get(status)
+        colors = self.STATUS_COLORS_BY_THEME[self.current_theme].get(status)
         if not colors:
             return
         background, foreground = colors
         item.setBackground(QColor(background))
         item.setForeground(QColor(foreground))
+
+    def _refresh_status_styles(self) -> None:
+        for table in [self.files_table, self.makemkv_table]:
+            for row in range(table.rowCount()):
+                item = table.item(row, 0)
+                if item:
+                    self._apply_status_style(item, item.text())
 
     def _file_row_for_key(self, key: str) -> int | None:
         for row in range(self.files_table.rowCount()):
