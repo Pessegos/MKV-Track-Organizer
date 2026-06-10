@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import audio_sync as sync
@@ -84,3 +85,15 @@ def test_build_subtitle_export_plan(monkeypatch, tmp_path: Path) -> None:
     assert plan.output_path.name == "source.s0.por.delay-250ms.mks"
     assert "0:57" in plan.command
     assert plan.command[-2:] == ["copy", str(plan.output_path)]
+
+
+def test_run_capture_drains_large_stdout() -> None:
+    result = sync.run_capture(
+        [
+            sys.executable,
+            "-c",
+            "import sys; sys.stdout.buffer.write(b'x' * 1048576)",
+        ]
+    )
+
+    assert len(result.stdout) == 1_048_576

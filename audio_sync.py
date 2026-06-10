@@ -4,7 +4,6 @@ import json
 import math
 import shutil
 import subprocess
-import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -375,18 +374,14 @@ def decode_audio(
 
 def run_capture(command: list[str], cancel_callback: Callable[[], bool] | None = None) -> subprocess.CompletedProcess:
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    done = threading.Event()
-
-    def wait_process() -> None:
-        process.wait()
-        done.set()
-
-    waiter = threading.Thread(target=wait_process, daemon=True)
-    waiter.start()
-    while not done.wait(0.1):
+    while True:
         ensure_not_cancelled(cancel_callback, process)
+        try:
+            stdout, stderr = process.communicate(timeout=0.1)
+            break
+        except subprocess.TimeoutExpired:
+            continue
 
-    stdout, stderr = process.communicate()
     result = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
     if result.returncode != 0:
         details = stderr.decode("utf-8", errors="replace").strip()
