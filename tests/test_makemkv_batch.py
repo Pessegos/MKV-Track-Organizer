@@ -1,0 +1,123 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+import makemkv_batch as makemkv
+
+
+def test_selection_rule_for_known_modes() -> None:
+    assert "+sel:(audio*eng)" in makemkv.selection_rule_for_mode("english")
+    assert "+sel:audio" in makemkv.selection_rule_for_mode("all-audio")
+    assert makemkv.selection_rule_for_mode("all-tracks").startswith("+sel:all")
+
+
+def test_custom_selection_rule_must_not_be_empty() -> None:
+    with pytest.raises(makemkv.MakeMkvError, match="empty"):
+        makemkv.selection_rule_for_mode("custom", "")
+
+
+def test_discover_disc_folders_accepts_source_root_as_disc(tmp_path: Path) -> None:
+    source = tmp_path / "Movie Disc"
+    (source / "BDMV").mkdir(parents=True)
+
+    assert makemkv.discover_disc_folders(source) == [source.resolve()]
+
+
+def test_discover_disc_folders_prefers_disc_like_children(tmp_path: Path) -> None:
+    source = tmp_path / "season"
+    (source / "disc2" / "BDMV").mkdir(parents=True)
+    (source / "disc1" / "VIDEO_TS").mkdir(parents=True)
+    (source / "notes").mkdir()
+
+    assert [folder.name for folder in makemkv.discover_disc_folders(source)] == ["disc1", "disc2"]
+
+
+def test_build_makemkv_command() -> None:
+    command = makemkv.build_makemkv_command(
+        Path(r"C:\MakeMKV\makemkvcon64.exe"),
+        Path(r"D:\disc1"),
+        Path(r"E:\out\disc1"),
+        900,
+    )
+
+    assert command == [
+        r"C:\MakeMKV\makemkvcon64.exe",
+        "--minlength=900",
+        "mkv",
+        r"file:D:\disc1",
+        "all",
+        r"E:\out\disc1",
+    ]
+
+
+def test_dry_run_batch_builds_reports_without_writing_output(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    output = tmp_path / "output"
+    makemkv_exe = tmp_path / "makemkvcon64.exe"
+    (source / "disc1" / "BDMV").mkdir(parents=True)
+    makemkv_exe.write_text("", encoding="utf-8")
+
+    events = []
+    result = makemkv.run_batch(
+        makemkv.MakeMkvBatchJob(
+            source_root=source,
+            output_root=output,
+            makemkv_path=makemkv_exe,
+            dry_run=True,
+        ),
+        events.append,
+    )
+
+    assert result.return_code == 0
+    assert result.reports[0]["status"] == "dry-run"
+    assert not output.exists()
+    assert [event.kind for event in events] == ["batch-started", "disc-started", "disc-finished", "batch-finished"]
+
+
+def test_dry_run_batch_can_be_cancelled(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    output = tmp_path / "output"
+    makemkv_exe = tmp_path / "makemkvcon64.exe"
+    (source / "disc1" / "BDMV").mkdir(parents=True)
+    makemkv_exe.write_text("", encoding="utf-8")
+
+    result = makemkv.run_batch(
+        makemkv.MakeMkvBatchJob(
+            source_root=source,
+            output_root=output,
+            makemkv_path=makemkv_exe,
+            dry_run=True,
+        ),
+        cancel_callback=lambda: True,
+    )
+
+    assert result.cancelled is True
+    assert result.return_code == 130
+
+
+def test_temporary_selection_rule_restores_existing_value(monkeypatch) -> None:
+    writes = []
+    monkeypatch.setattr(makemkv, "read_selection_rule", lambda: ("old-rule", True))
+    monkeypatch.setattr(makemkv, "write_selection_rule", writes.append)
+    monkeypatch.setattr(makemkv, "delete_selection_rule", lambda: pytest.fail("should not delete"))
+
+    with makemkv.temporary_selection_rule("new-rule"):
+        assert writes == ["new-rule"]
+
+    assert writes == ["new-rule", "old-rule"]
+
+
+def test_temporary_selection_rule_deletes_value_when_it_was_absent(monkeypatch) -> None:
+    writes = []
+    deletes = []
+    monkeypatch.setattr(makemkv, "read_selection_rule", lambda: (None, False))
+    monkeypatch.setattr(makemkv, "write_selection_rule", writes.append)
+    monkeypatch.setattr(makemkv, "delete_selection_rule", lambda: deletes.append(True))
+
+    with makemkv.temporary_selection_rule("new-rule"):
+        assert writes == ["new-rule"]
+
+    assert writes == ["new-rule"]
+    assert deletes == [True]

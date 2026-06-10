@@ -28,7 +28,9 @@ try:
         QPushButton,
         QSizePolicy,
         QSplitter,
+        QSpinBox,
         QStyle,
+        QTabWidget,
         QTableWidget,
         QTableWidgetItem,
         QToolButton,
@@ -44,6 +46,7 @@ except ModuleNotFoundError as error:
     raise SystemExit(1) from error
 
 import mkv_track_organizer as organizer
+import makemkv_batch as makemkv
 
 
 class SignalTextStream(io.TextIOBase):
@@ -111,8 +114,86 @@ class OrganizerWorker(QObject):
         )
 
 
+class MakeMkvWorker(QObject):
+    log = Signal(str)
+    event = Signal(str, str, str, int, int, int, int)
+    completed = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, job: makemkv.MakeMkvBatchJob, organizer_args=None, organizer_config_path: Path | None = None) -> None:
+        super().__init__()
+        self.job = job
+        self.organizer_args = organizer_args
+        self.organizer_config_path = organizer_config_path
+        self._cancel_requested = threading.Event()
+
+    @Slot()
+    def run(self) -> None:
+        result: makemkv.MakeMkvBatchResult | None = None
+        try:
+            stream = SignalTextStream(self.log.emit)
+            with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream):
+                result = makemkv.run_batch(self.job, self._emit_event, self.cancel_requested)
+                if self._should_run_organizer(result):
+                    print()
+                    print("Running MKV Track Organizer after MakeMKV...")
+                    result.organizer_result = organizer.run_from_args(
+                        self.organizer_args,
+                        self.organizer_config_path,
+                        self._emit_organizer_event,
+                        self.cancel_requested,
+                    )
+            self.completed.emit(result)
+        except organizer.OrganizerCancelled:
+            if result is None:
+                result = makemkv.MakeMkvBatchResult(cancelled=True)
+            result.cancelled = True
+            self.completed.emit(result)
+        except Exception:
+            self.failed.emit(traceback.format_exc())
+
+    @Slot()
+    def cancel(self) -> None:
+        self._cancel_requested.set()
+
+    def cancel_requested(self) -> bool:
+        return self._cancel_requested.is_set()
+
+    def _should_run_organizer(self, result: makemkv.MakeMkvBatchResult) -> bool:
+        return (
+            self.job.run_organizer_after
+            and not self.job.dry_run
+            and not result.cancelled
+            and not result.failures
+            and self.organizer_args is not None
+        )
+
+    def _emit_event(self, event: makemkv.MakeMkvBatchEvent) -> None:
+        self.event.emit(
+            event.kind,
+            event.message,
+            str(event.disc or ""),
+            event.index or 0,
+            event.total or 0,
+            event.step or 0,
+            event.steps or 0,
+        )
+
+    def _emit_organizer_event(self, event: organizer.BatchRunEvent) -> None:
+        self.event.emit(
+            f"organizer-{event.kind}",
+            event.message,
+            str(event.file or ""),
+            event.index or 0,
+            event.total or 0,
+            event.step or 0,
+            event.steps or 0,
+        )
+
+
 class MainWindow(QMainWindow):
     FILE_COLUMNS = ["Status", "Input", "Output", "Message"]
+    MAKEMKV_COLUMNS = ["Status", "Source", "Output", "Message"]
     FINALIZATION_PROGRESS_UNITS = 10
     TRACK_COLUMNS = [
         "ID",
@@ -140,6 +221,12 @@ class MainWindow(QMainWindow):
         "default": "Uses the existing organizer order rules.",
         "regional": "Groups languages by broad regions, with Europe before Americas and Asia.",
     }
+    MAKEMKV_SELECTION_HELP = {
+        "english": "Keeps video, English audio, subtitles, and attachments.",
+        "all-audio": "Keeps video, every audio language, subtitles, and attachments.",
+        "all-tracks": "Keeps all tracks selected by MakeMKV, except HD audio core tracks.",
+        "custom": "Uses the exact MakeMKV selection rule written in the custom rule field.",
+    }
     METADATA_MODE_HELP = {
         "off": "Always writes a new remuxed output file when changes are needed.",
         "auto": (
@@ -157,9 +244,12 @@ class MainWindow(QMainWindow):
 
         self.worker_thread: QThread | None = None
         self.worker: OrganizerWorker | None = None
+        self.makemkv_worker_thread: QThread | None = None
+        self.makemkv_worker: MakeMkvWorker | None = None
         self.default_args, self.default_config_path = self._load_default_args()
         self.input_paths: list[Path] = []
         self.current_reports: list[dict] = []
+        self.makemkv_reports: list[dict] = []
         self._syncing_input_edit = False
 
         self.input_edit = QLineEdit()
@@ -204,6 +294,34 @@ class MainWindow(QMainWindow):
         self.log_edit = QPlainTextEdit()
         self.progress = QProgressBar()
 
+        self.makemkv_path_edit = QLineEdit()
+        self.makemkv_path_edit.setPlaceholderText(r"C:\Program Files (x86)\MakeMKV\makemkvcon64.exe")
+        try:
+            self.makemkv_path_edit.setText(str(makemkv.find_makemkv()))
+        except makemkv.MakeMkvError:
+            pass
+        self.makemkv_source_edit = QLineEdit()
+        self.makemkv_source_edit.setPlaceholderText("Folder with MakeMKV disc backups")
+        self.makemkv_output_edit = QLineEdit()
+        self.makemkv_output_edit.setPlaceholderText("Folder for MakeMKV MKV outputs")
+        self.makemkv_min_length_spin = QSpinBox()
+        self.makemkv_min_length_spin.setRange(0, 24 * 60 * 60)
+        self.makemkv_min_length_spin.setValue(makemkv.DEFAULT_MIN_LENGTH_SECONDS)
+        self.makemkv_min_length_spin.setSuffix(" s")
+        self.makemkv_selection_combo = QComboBox()
+        self.makemkv_selection_combo.addItem("English audio", "english")
+        self.makemkv_selection_combo.addItem("All audio", "all-audio")
+        self.makemkv_selection_combo.addItem("All tracks", "all-tracks")
+        self.makemkv_selection_combo.addItem("Custom", "custom")
+        self.makemkv_custom_rule_edit = QLineEdit()
+        self.makemkv_custom_rule_edit.setPlaceholderText("-sel:all,+sel:video,+sel:audio,+sel:subtitle,+sel:attachment")
+        self.makemkv_pipeline_check = QCheckBox("Run Organizer after MakeMKV")
+        self.makemkv_preview_button = QPushButton("Preview")
+        self.makemkv_run_button = QPushButton("Run")
+        self.makemkv_cancel_button = QPushButton("Cancel")
+        self.makemkv_table = QTableWidget(0, len(self.MAKEMKV_COLUMNS))
+        self.makemkv_log_edit = QPlainTextEdit()
+
         self._build_ui()
         self._apply_default_args(self.default_args)
         self._connect_signals()
@@ -211,10 +329,11 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self) -> None:
         style = self.style()
-        central = QWidget()
-        central.setAcceptDrops(True)
-        central.installEventFilter(self)
-        root = QVBoxLayout(central)
+        tabs = QTabWidget()
+        organizer_tab = QWidget()
+        organizer_tab.setAcceptDrops(True)
+        organizer_tab.installEventFilter(self)
+        root = QVBoxLayout(organizer_tab)
         root.setContentsMargins(12, 12, 12, 10)
         root.setSpacing(10)
 
@@ -379,7 +498,9 @@ class MainWindow(QMainWindow):
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
         self.statusBar().addPermanentWidget(self.progress, 1)
-        self.setCentralWidget(central)
+        tabs.addTab(organizer_tab, "Organizer")
+        tabs.addTab(self._build_makemkv_tab(), "MakeMKV Batch")
+        self.setCentralWidget(tabs)
 
         file_button.clicked.connect(self.choose_file)
         folder_button.clicked.connect(self.choose_folder)
@@ -387,10 +508,111 @@ class MainWindow(QMainWindow):
         browse_output.clicked.connect(self.choose_output_folder)
         self.advanced_button.toggled.connect(self.toggle_advanced)
 
+    def _build_makemkv_tab(self) -> QWidget:
+        style = self.style()
+        tab = QWidget()
+        root = QVBoxLayout(tab)
+        root.setContentsMargins(12, 12, 12, 10)
+        root.setSpacing(10)
+
+        source_group = QGroupBox("MakeMKV source and output")
+        source_grid = QGridLayout(source_group)
+        source_grid.setColumnStretch(1, 1)
+
+        makemkv_button = self._tool_button(QStyle.SP_FileIcon, "Choose makemkvcon64.exe")
+        source_button = self._tool_button(QStyle.SP_DirOpenIcon, "Choose source folder")
+        output_button = self._tool_button(QStyle.SP_DirOpenIcon, "Choose output folder")
+
+        makemkv_row = QHBoxLayout()
+        makemkv_row.addWidget(self.makemkv_path_edit, 1)
+        makemkv_row.addWidget(makemkv_button)
+        source_row = QHBoxLayout()
+        source_row.addWidget(self.makemkv_source_edit, 1)
+        source_row.addWidget(source_button)
+        output_row = QHBoxLayout()
+        output_row.addWidget(self.makemkv_output_edit, 1)
+        output_row.addWidget(output_button)
+
+        source_grid.addWidget(QLabel("MakeMKV"), 0, 0)
+        source_grid.addLayout(makemkv_row, 0, 1)
+        source_grid.addWidget(QLabel("Input"), 1, 0)
+        source_grid.addLayout(source_row, 1, 1)
+        source_grid.addWidget(QLabel("Output"), 2, 0)
+        source_grid.addLayout(output_row, 2, 1)
+        root.addWidget(source_group)
+
+        options_group = QGroupBox("Batch options")
+        options_grid = QGridLayout(options_group)
+        options_grid.setColumnStretch(1, 1)
+        options_grid.setColumnStretch(3, 1)
+
+        self._apply_combo_help(self.makemkv_selection_combo, self.MAKEMKV_SELECTION_HELP)
+        self.makemkv_min_length_spin.setToolTip("Skip titles shorter than this duration.")
+        self.makemkv_custom_rule_edit.setToolTip("Advanced MakeMKV default selection string.")
+        self.makemkv_pipeline_check.setToolTip(
+            "After MakeMKV finishes, run the Organizer on the MakeMKV output folder using the Organizer tab settings."
+        )
+
+        options_grid.addWidget(QLabel("Min length"), 0, 0)
+        options_grid.addWidget(self.makemkv_min_length_spin, 0, 1)
+        options_grid.addWidget(QLabel("Selection"), 0, 2)
+        options_grid.addWidget(self.makemkv_selection_combo, 0, 3)
+        options_grid.addWidget(QLabel("Custom rule"), 1, 0)
+        options_grid.addWidget(self.makemkv_custom_rule_edit, 1, 1, 1, 3)
+        options_grid.addWidget(self.makemkv_pipeline_check, 2, 1, 1, 3)
+        root.addWidget(options_group)
+
+        top_bar = QHBoxLayout()
+        self.makemkv_preview_button.setIcon(style.standardIcon(QStyle.SP_FileDialogContentsView))
+        self.makemkv_preview_button.setToolTip("Show planned MakeMKV commands without writing outputs")
+        self.makemkv_run_button.setIcon(style.standardIcon(QStyle.SP_MediaPlay))
+        self.makemkv_run_button.setToolTip("Run MakeMKV with the selected settings")
+        self.makemkv_cancel_button.setIcon(style.standardIcon(QStyle.SP_BrowserStop))
+        self.makemkv_cancel_button.setToolTip("Cancel the current MakeMKV batch")
+        self.makemkv_cancel_button.setEnabled(False)
+        top_bar.addStretch(1)
+        top_bar.addWidget(self.makemkv_preview_button)
+        top_bar.addWidget(self.makemkv_run_button)
+        top_bar.addWidget(self.makemkv_cancel_button)
+        root.addLayout(top_bar)
+
+        files_group = QGroupBox("Disc folders")
+        files_layout = QVBoxLayout(files_group)
+        files_layout.setContentsMargins(8, 8, 8, 8)
+        self.makemkv_table.setHorizontalHeaderLabels(self.MAKEMKV_COLUMNS)
+        self.makemkv_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.makemkv_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.makemkv_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.makemkv_table.horizontalHeader().setStretchLastSection(True)
+        self.makemkv_table.setAlternatingRowColors(True)
+        self.makemkv_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.makemkv_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.makemkv_table.verticalHeader().setVisible(False)
+        files_layout.addWidget(self.makemkv_table)
+
+        self.makemkv_log_edit.setReadOnly(True)
+        self.makemkv_log_edit.setLineWrapMode(QPlainTextEdit.NoWrap)
+
+        splitter = QSplitter(Qt.Vertical)
+        splitter.addWidget(files_group)
+        splitter.addWidget(self.makemkv_log_edit)
+        splitter.setSizes([500, 220])
+        root.addWidget(splitter, 1)
+
+        makemkv_button.clicked.connect(self.choose_makemkv_executable)
+        source_button.clicked.connect(self.choose_makemkv_source_folder)
+        output_button.clicked.connect(self.choose_makemkv_output_folder)
+        self.makemkv_selection_combo.currentIndexChanged.connect(self._makemkv_selection_changed)
+        self._makemkv_selection_changed()
+        return tab
+
     def _connect_signals(self) -> None:
         self.preview_button.clicked.connect(self.start_preview)
         self.run_button.clicked.connect(self.start_run)
         self.cancel_button.clicked.connect(self.cancel_run)
+        self.makemkv_preview_button.clicked.connect(self.start_makemkv_preview)
+        self.makemkv_run_button.clicked.connect(self.start_makemkv_run)
+        self.makemkv_cancel_button.clicked.connect(self.cancel_makemkv_run)
         self.input_edit.textEdited.connect(self._manual_input_changed)
         self.files_table.itemSelectionChanged.connect(self._populate_tracks_for_selection)
         self.metadata_combo.currentIndexChanged.connect(
@@ -493,6 +715,35 @@ class MainWindow(QMainWindow):
             self.output_edit.setText(path)
 
     @Slot()
+    def choose_makemkv_executable(self) -> None:
+        path, _filter = QFileDialog.getOpenFileName(
+            self,
+            "Choose makemkvcon",
+            "",
+            "MakeMKV console (makemkvcon64.exe makemkvcon.exe);;Executables (*.exe);;All files (*)",
+        )
+        if path:
+            self.makemkv_path_edit.setText(path)
+
+    @Slot()
+    def choose_makemkv_source_folder(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "Choose MakeMKV source folder")
+        if path:
+            self.makemkv_source_edit.setText(path)
+
+    @Slot()
+    def choose_makemkv_output_folder(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "Choose MakeMKV output folder")
+        if path:
+            self.makemkv_output_edit.setText(path)
+
+    @Slot()
+    def _makemkv_selection_changed(self) -> None:
+        self._sync_combo_tooltip(self.makemkv_selection_combo, self.MAKEMKV_SELECTION_HELP)
+        custom = self.makemkv_selection_combo.currentData() == "custom"
+        self.makemkv_custom_rule_edit.setEnabled(custom)
+
+    @Slot()
     def clear_inputs(self) -> None:
         self.input_paths = []
         self.current_reports = []
@@ -562,8 +813,36 @@ class MainWindow(QMainWindow):
         self.cancel_button.setEnabled(False)
         self.statusBar().showMessage("Cancelling...")
 
+    @Slot()
+    def start_makemkv_preview(self) -> None:
+        self._start_makemkv(dry_run=True)
+
+    @Slot()
+    def start_makemkv_run(self) -> None:
+        answer = QMessageBox.question(
+            self,
+            "Run MakeMKV batch",
+            "This will write MKV outputs. Continue?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        self._start_makemkv(dry_run=False)
+
+    @Slot()
+    def cancel_makemkv_run(self) -> None:
+        if not self.makemkv_worker:
+            return
+        self.makemkv_worker.cancel()
+        self.makemkv_cancel_button.setEnabled(False)
+        self.statusBar().showMessage("Cancelling MakeMKV batch...")
+
     def _start_run(self, dry_run: bool) -> None:
         if self.worker_thread and self.worker_thread.isRunning():
+            return
+        if self.makemkv_worker_thread and self.makemkv_worker_thread.isRunning():
+            QMessageBox.information(self, "MakeMKV is running", "Wait for the MakeMKV batch to finish first.")
             return
 
         try:
@@ -592,6 +871,43 @@ class MainWindow(QMainWindow):
         self.worker.failed.connect(self.worker_thread.quit)
         self.worker_thread.finished.connect(self._thread_finished)
         self.worker_thread.start()
+
+    def _start_makemkv(self, dry_run: bool) -> None:
+        if self.makemkv_worker_thread and self.makemkv_worker_thread.isRunning():
+            return
+        if self.worker_thread and self.worker_thread.isRunning():
+            QMessageBox.information(self, "Organizer is running", "Wait for the Organizer run to finish first.")
+            return
+
+        try:
+            job = self._build_makemkv_job(dry_run)
+            organizer_args = None
+            organizer_config_path = None
+            if job.run_organizer_after and not dry_run:
+                organizer_args, organizer_config_path = self._build_pipeline_organizer_args(job.output_root)
+        except Exception as error:
+            QMessageBox.critical(self, "Invalid MakeMKV settings", str(error))
+            return
+
+        self.makemkv_log_edit.clear()
+        self.makemkv_reports = []
+        self.makemkv_table.setRowCount(0)
+        self.progress.setRange(0, 0)
+        self.statusBar().showMessage("Starting MakeMKV batch...")
+        self._set_makemkv_running(True)
+
+        self.makemkv_worker_thread = QThread(self)
+        self.makemkv_worker = MakeMkvWorker(job, organizer_args, organizer_config_path)
+        self.makemkv_worker.moveToThread(self.makemkv_worker_thread)
+        self.makemkv_worker_thread.started.connect(self.makemkv_worker.run)
+        self.makemkv_worker.log.connect(self.append_makemkv_log)
+        self.makemkv_worker.event.connect(self.handle_makemkv_event)
+        self.makemkv_worker.completed.connect(self.handle_makemkv_completed)
+        self.makemkv_worker.failed.connect(self.handle_makemkv_failed)
+        self.makemkv_worker.completed.connect(self.makemkv_worker_thread.quit)
+        self.makemkv_worker.failed.connect(self.makemkv_worker_thread.quit)
+        self.makemkv_worker_thread.finished.connect(self._makemkv_thread_finished)
+        self.makemkv_worker_thread.start()
 
     def _build_args(self, dry_run: bool):
         args, config_path = self._load_default_args()
@@ -626,11 +942,46 @@ class MainWindow(QMainWindow):
         args.report_format = self.report_format_combo.currentText()
         return args, config_path
 
+    def _build_makemkv_job(self, dry_run: bool) -> makemkv.MakeMkvBatchJob:
+        source_text = self.makemkv_source_edit.text().strip()
+        output_text = self.makemkv_output_edit.text().strip()
+        if not source_text:
+            raise ValueError("Choose a MakeMKV input folder.")
+        if not output_text:
+            raise ValueError("Choose a MakeMKV output folder.")
+
+        makemkv_text = self.makemkv_path_edit.text().strip()
+        return makemkv.MakeMkvBatchJob(
+            source_root=Path(source_text),
+            output_root=Path(output_text),
+            makemkv_path=Path(makemkv_text) if makemkv_text else None,
+            min_length_seconds=self.makemkv_min_length_spin.value(),
+            selection_mode=self.makemkv_selection_combo.currentData() or "english",
+            custom_selection_rule=self.makemkv_custom_rule_edit.text(),
+            dry_run=dry_run,
+            run_organizer_after=self.makemkv_pipeline_check.isChecked(),
+        )
+
+    def _build_pipeline_organizer_args(self, makemkv_output_root: Path):
+        args, config_path = self._build_args(dry_run=False)
+        args.path = Path(makemkv_output_root)
+        args.input_paths = [Path(makemkv_output_root)]
+        args.output_dir = None
+        args.recursive = True
+        args.dry_run = False
+        return args, config_path
+
     @Slot(str)
     def append_log(self, text: str) -> None:
         self.log_edit.moveCursor(QTextCursor.End)
         self.log_edit.insertPlainText(text)
         self.log_edit.moveCursor(QTextCursor.End)
+
+    @Slot(str)
+    def append_makemkv_log(self, text: str) -> None:
+        self.makemkv_log_edit.moveCursor(QTextCursor.End)
+        self.makemkv_log_edit.insertPlainText(text)
+        self.makemkv_log_edit.moveCursor(QTextCursor.End)
 
     @Slot(str, str, str, int, int, int, int)
     def handle_event(self, kind: str, message: str, file_path: str, index: int, total: int, step: int, steps: int) -> None:
@@ -659,6 +1010,47 @@ class MainWindow(QMainWindow):
                 self._set_file_status(Path(file_path), status, message)
         self.statusBar().showMessage(message)
 
+    @Slot(str, str, str, int, int, int, int)
+    def handle_makemkv_event(
+        self,
+        kind: str,
+        message: str,
+        disc_path: str,
+        index: int,
+        total: int,
+        step: int,
+        steps: int,
+    ) -> None:
+        if kind.startswith("organizer-"):
+            self.handle_event(kind.removeprefix("organizer-"), message, disc_path, index, total, step, steps)
+            return
+
+        if total:
+            steps = steps or 100
+            total_units = self._progress_total_units(total, steps)
+            self.progress.setRange(0, total_units)
+            if kind == "disc-started":
+                value = max(0, index - 1) * steps
+            elif kind == "disc-progress":
+                value = max(0, index - 1) * steps + max(0, min(step, steps))
+            elif kind in {"disc-finished", "disc-error", "disc-cancelled"}:
+                value = index * steps
+            else:
+                value = self.progress.value()
+            self.progress.setValue(min(value, total_units - self.FINALIZATION_PROGRESS_UNITS))
+
+        if disc_path:
+            status = {
+                "disc-started": "Running",
+                "disc-progress": "Running",
+                "disc-finished": "Done",
+                "disc-error": "Error",
+                "disc-cancelled": "Cancelled",
+            }.get(kind)
+            if status:
+                self._set_makemkv_status(Path(disc_path), status, message)
+        self.statusBar().showMessage(message)
+
     def _progress_total_units(self, total: int, steps: int = 100) -> int:
         return max(1, total * steps + self.FINALIZATION_PROGRESS_UNITS)
 
@@ -683,6 +1075,35 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, "Run failed", details)
         self._set_running(False)
 
+    @Slot(object)
+    def handle_makemkv_completed(self, result: makemkv.MakeMkvBatchResult) -> None:
+        total = len(result.discs) or len(result.reports) or 1
+        total_units = self._progress_total_units(total, 100)
+        self.progress.setRange(0, total_units)
+        self.progress.setValue(total_units)
+        self._populate_makemkv_results(result.reports)
+        if result.organizer_result:
+            self._populate_results(result.organizer_result.reports)
+
+        if result.cancelled:
+            self.statusBar().showMessage("MakeMKV batch cancelled")
+        elif result.failures:
+            self.statusBar().showMessage(f"MakeMKV completed with {result.failures} error(s)")
+        elif result.organizer_result and result.organizer_result.failures:
+            self.statusBar().showMessage(f"Organizer completed with {result.organizer_result.failures} error(s)")
+        elif result.organizer_result:
+            self.statusBar().showMessage("MakeMKV and Organizer completed without errors")
+        else:
+            self.statusBar().showMessage("MakeMKV completed without errors")
+        self._set_makemkv_running(False)
+
+    @Slot(str)
+    def handle_makemkv_failed(self, details: str) -> None:
+        self.append_makemkv_log(details)
+        self.statusBar().showMessage("MakeMKV failed")
+        QMessageBox.critical(self, "MakeMKV failed", details)
+        self._set_makemkv_running(False)
+
     @Slot()
     def _thread_finished(self) -> None:
         if self.worker:
@@ -691,6 +1112,15 @@ class MainWindow(QMainWindow):
             self.worker_thread.deleteLater()
         self.worker = None
         self.worker_thread = None
+
+    @Slot()
+    def _makemkv_thread_finished(self) -> None:
+        if self.makemkv_worker:
+            self.makemkv_worker.deleteLater()
+        if self.makemkv_worker_thread:
+            self.makemkv_worker_thread.deleteLater()
+        self.makemkv_worker = None
+        self.makemkv_worker_thread = None
 
     def _refresh_file_list(self, running: bool = False) -> None:
         if self.current_reports:
@@ -728,6 +1158,21 @@ class MainWindow(QMainWindow):
         else:
             self.tracks_table.setRowCount(0)
 
+    def _populate_makemkv_results(self, reports: list[dict]) -> None:
+        self.makemkv_reports = reports
+        self.makemkv_table.setRowCount(len(reports))
+        for row, report in enumerate(reports):
+            input_path = Path(report.get("input", ""))
+            values = [
+                report.get("status", ""),
+                str(input_path),
+                report.get("output", ""),
+                report.get("message", ""),
+            ]
+            self._set_makemkv_row(row, values, input_path)
+
+        self.makemkv_table.resizeColumnsToContents()
+
     def _set_file_row(self, row: int, values: list[str], path: Path) -> None:
         key = str(path.resolve()).casefold() if str(path) else ""
         for column, value in enumerate(values):
@@ -735,6 +1180,14 @@ class MainWindow(QMainWindow):
             if key:
                 item.setData(Qt.UserRole, key)
             self.files_table.setItem(row, column, item)
+
+    def _set_makemkv_row(self, row: int, values: list[str], path: Path) -> None:
+        key = str(path.resolve()).casefold() if str(path) else ""
+        for column, value in enumerate(values):
+            item = QTableWidgetItem(str(value))
+            if key:
+                item.setData(Qt.UserRole, key)
+            self.makemkv_table.setItem(row, column, item)
 
     def _set_file_status(self, path: Path, status: str, message: str) -> None:
         key = str(path.resolve()).casefold()
@@ -748,9 +1201,30 @@ class MainWindow(QMainWindow):
         self.files_table.item(row, 3).setText(message)
         self.files_table.resizeColumnsToContents()
 
+    def _set_makemkv_status(self, path: Path, status: str, message: str) -> None:
+        key = str(path.resolve()).casefold()
+        row = self._makemkv_row_for_key(key)
+        if row is None:
+            row = self.makemkv_table.rowCount()
+            self.makemkv_table.insertRow(row)
+            output_root = self.makemkv_output_edit.text().strip()
+            output = str(Path(output_root) / path.name) if output_root else ""
+            self._set_makemkv_row(row, ["", str(path), output, ""], path)
+
+        self.makemkv_table.item(row, 0).setText(status)
+        self.makemkv_table.item(row, 3).setText(message)
+        self.makemkv_table.resizeColumnsToContents()
+
     def _file_row_for_key(self, key: str) -> int | None:
         for row in range(self.files_table.rowCount()):
             item = self.files_table.item(row, 0)
+            if item and item.data(Qt.UserRole) == key:
+                return row
+        return None
+
+    def _makemkv_row_for_key(self, key: str) -> int | None:
+        for row in range(self.makemkv_table.rowCount()):
+            item = self.makemkv_table.item(row, 0)
             if item and item.data(Qt.UserRole) == key:
                 return row
         return None
@@ -816,6 +1290,15 @@ class MainWindow(QMainWindow):
         self.preview_button.setEnabled(not running)
         self.run_button.setEnabled(not running)
         self.cancel_button.setEnabled(running)
+        self.makemkv_preview_button.setEnabled(not running)
+        self.makemkv_run_button.setEnabled(not running)
+
+    def _set_makemkv_running(self, running: bool) -> None:
+        self.makemkv_preview_button.setEnabled(not running)
+        self.makemkv_run_button.setEnabled(not running)
+        self.makemkv_cancel_button.setEnabled(running)
+        self.preview_button.setEnabled(not running)
+        self.run_button.setEnabled(not running)
 
     def _paths_from_mime(self, mime_data) -> list[Path]:
         if not mime_data.hasUrls():
@@ -864,7 +1347,9 @@ class MainWindow(QMainWindow):
             super().dropEvent(event)
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        if self.worker_thread and self.worker_thread.isRunning():
+        organizer_running = self.worker_thread and self.worker_thread.isRunning()
+        makemkv_running = self.makemkv_worker_thread and self.makemkv_worker_thread.isRunning()
+        if organizer_running or makemkv_running:
             answer = QMessageBox.question(
                 self,
                 "Close",

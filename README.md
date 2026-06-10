@@ -2,7 +2,7 @@
 
 MKV Track Organizer is a Python tool for batch-cleaning MKV track metadata and order with MKVToolNix. It can analyze audio, video, and subtitle tracks, rename them consistently, detect common subtitle roles, and write organized outputs without touching the original files by default.
 
-The project currently includes both a command-line interface and an early desktop UI.
+The project currently includes a command-line interface, a desktop UI, and an early MakeMKV batch workflow.
 
 ## Features
 
@@ -16,13 +16,16 @@ The project currently includes both a command-line interface and an early deskto
 - Use OCR for PGS subtitles when text is needed for language or role detection.
 - Generate TXT/JSON reports for batch runs.
 - Use `mkvpropedit` for metadata-only updates when enabled.
-- Desktop UI with drag-and-drop input, preview, run, track tables, logs, and progress.
+- Desktop UI with organizer and MakeMKV batch tabs, preview, run, cancel, logs, and progress.
+- Batch convert MakeMKV disc backup folders into MKVs.
+- Optionally run MKV Track Organizer automatically after a MakeMKV batch finishes.
 
 ## Requirements
 
 - Python 3.10 or newer.
 - MKVToolNix, especially `mkvmerge`, `mkvextract`, and optionally `mkvpropedit`.
 - PySide6 for the desktop UI.
+- Optional: MakeMKV for the batch disc backup to MKV workflow.
 - Optional: Tesseract and `seconv` for automatic PGS OCR.
 
 Install the Python UI dependency:
@@ -46,6 +49,8 @@ python .\mkv_track_organizer_gui.py
 ```
 
 Use **Preview** to analyze files without writing outputs. Use **Run** to apply the selected settings.
+
+The **MakeMKV Batch** tab can convert one disc backup folder or a folder containing multiple disc backup folders. Its selection modes cover English audio, all audio, all tracks, or a custom MakeMKV selection string. Enable **Run Organizer after MakeMKV** to feed the MakeMKV output folder into the Organizer tab settings automatically.
 
 ## Command Line
 
@@ -100,9 +105,9 @@ python -m pytest -q
 Run syntax checks:
 
 ```powershell
-python -m py_compile .\mkv_track_organizer.py .\mkv_track_organizer_gui.py .\tests\test_mkv_track_organizer.py
+python -m py_compile .\mkv_track_organizer.py .\mkv_track_organizer_gui.py .\makemkv_batch.py .\tests\test_mkv_track_organizer.py .\tests\test_makemkv_batch.py
 ```
 
 ## Project Status
 
-This is still a work in progress. The core organizer is usable from the CLI, and the desktop UI is being shaped into a more polished app for publishing.
+This is still a work in progress. The core organizer is usable from the CLI, and the desktop UI is being shaped into a more polished app for publishing. The MakeMKV batch tab is new and should be treated as an early workflow until it has been tested across more disc backups.
