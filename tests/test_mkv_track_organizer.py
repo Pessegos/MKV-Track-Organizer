@@ -113,6 +113,11 @@ def test_language_names_and_aliases() -> None:
     assert m.language_for_mkvmerge("nob") == "nb"
     assert m.legacy_language_for_mkvpropedit("nob") == "nob"
     assert m.ietf_language_for_mkvpropedit("nob") == "nb"
+    assert m.normalize_language_code("msa") == "may"
+    assert m.normalize_language_code("ms") == "may"
+    assert m.language_display_name("msa") == "Malay"
+    assert m.normalize_language_from_properties("und", "Malay") == "may"
+    assert m.ietf_language_for_mkvpropedit("may") == "ms"
 
 
 def test_language_hints_fix_wrong_metadata_language() -> None:

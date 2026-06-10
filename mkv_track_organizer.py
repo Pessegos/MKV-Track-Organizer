@@ -409,6 +409,10 @@ LANGUAGE_ALIASES = {
     "vie": "vie",
     "id": "ind",
     "ind": "ind",
+    "ms": "may",
+    "msa": "may",
+    "may": "may",
+    "zlm": "may",
     "hi": "hin",
     "hin": "hin",
     "uk": "ukr",
@@ -471,6 +475,7 @@ IETF_PRIMARY_BY_MKV_LANGUAGE = {
     "tha": "th",
     "vie": "vi",
     "ind": "id",
+    "may": "ms",
     "hin": "hi",
     "ukr": "uk",
     "bul": "bg",
@@ -538,6 +543,7 @@ LANGUAGE_NAMES = {
     "tha": "Thai",
     "vie": "Vietnamese",
     "ind": "Indonesian",
+    "may": "Malay",
     "hin": "Hindi",
     "ukr": "Ukrainian",
     "bul": "Bulgarian",
@@ -683,7 +689,7 @@ REGIONAL_LANGUAGE_GROUPS = (
         "asia",
         (
             "chi", "cmn", "yue", "zh-Hant", "zh-Hans", "zh-TW", "zh-HK", "jpn", "kor",
-            "hin", "ori", "tha", "vie", "ind",
+            "hin", "ori", "tha", "vie", "ind", "may",
         ),
     ),
     (
@@ -755,6 +761,7 @@ LANGUAGE_NAME_HINTS = (
     ("zh-Hans", ("zh-hans", "chinese simplified", "simplified chinese")),
     ("cmn", ("mandarin chinese", "mandarin", "taiwanese mandarin")),
     ("yue", ("cantonese", "yue chinese")),
+    ("may", ("malay", "bahasa malaysia", "bahasa melayu")),
 )
 
 

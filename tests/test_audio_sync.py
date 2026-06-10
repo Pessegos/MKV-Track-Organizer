@@ -76,6 +76,35 @@ def test_build_audio_export_plan(monkeypatch, tmp_path: Path) -> None:
     assert plan.command[-2:] == ["copy", str(plan.output_path)]
 
 
+def test_build_combined_audio_export_plan(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(sync, "resolve_binary", lambda name, explicit_path=None: Path("ffmpeg"))
+    streams = [
+        sync.MediaStream(index=1, relative_index=0, type="audio", codec="aac", language="eng"),
+        sync.MediaStream(index=2, relative_index=1, type="audio", codec="eac3", language="por"),
+    ]
+
+    plan = sync.build_combined_audio_export_plan(tmp_path / "source.mkv", streams, 0.97513, tmp_path / "out")
+
+    assert plan.output_path.name == "source.synced.delay+975ms.mka"
+    assert plan.streams == tuple(streams)
+    assert plan.command.count("-map") == 2
+    assert "0:a:0" in plan.command
+    assert "0:a:1" in plan.command
+    assert plan.command[-2:] == ["copy", str(plan.output_path)]
+
+
+def test_combined_audio_export_rejects_subtitles(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(sync, "resolve_binary", lambda name, explicit_path=None: Path("ffmpeg"))
+    streams = [sync.MediaStream(index=57, relative_index=0, type="subtitle", codec="subrip", language="por")]
+
+    try:
+        sync.build_combined_audio_export_plan(tmp_path / "source.mkv", streams, 0.250, tmp_path / "out")
+    except sync.AudioSyncError as error:
+        assert "only supports audio" in str(error)
+    else:
+        raise AssertionError("Expected subtitle streams to be rejected")
+
+
 def test_build_subtitle_export_plan(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(sync, "resolve_binary", lambda name, explicit_path=None: Path("ffmpeg"))
     stream = sync.MediaStream(index=57, relative_index=0, type="subtitle", codec="subrip", language="por")

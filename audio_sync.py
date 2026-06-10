@@ -56,7 +56,7 @@ class AudioSyncSettings:
     reference_audio_stream: int = 0
     source_audio_stream: int = 0
     start_seconds: float = 600.0
-    duration_seconds: float = 90.0
+    duration_seconds: float = 120.0
     checkpoints: int = 4
     checkpoint_spacing_seconds: float = 900.0
     max_offset_seconds: float = 5.0
@@ -82,9 +82,10 @@ class AudioSyncResult:
 
 @dataclass(frozen=True)
 class ExportPlan:
-    stream: MediaStream
+    stream: MediaStream | None
     output_path: Path
     command: list[str]
+    streams: tuple[MediaStream, ...] = ()
 
 
 def parse_time(value: str | float | int) -> float:
@@ -574,6 +575,56 @@ def build_export_plan(
         str(output_path),
     ]
     return ExportPlan(stream, output_path, command)
+
+
+def build_combined_audio_export_plan(
+    source_path: Path,
+    streams: list[MediaStream],
+    timeline_shift_seconds: float,
+    output_dir: Path,
+    ffmpeg_path: Path | None = None,
+) -> ExportPlan:
+    ffmpeg = resolve_binary("ffmpeg", ffmpeg_path)
+    audio_streams = [stream for stream in streams if stream.type == "audio"]
+    if len(audio_streams) != len(streams):
+        raise AudioSyncError("Combined .mka export only supports audio streams.")
+    if not audio_streams:
+        raise AudioSyncError("Select at least one audio stream to export.")
+
+    output_dir = Path(output_dir).expanduser()
+    delay_ms = int(round(timeline_shift_seconds * 1000))
+    suffix = f"delay{delay_ms:+d}ms"
+    output_path = output_dir / f"{Path(source_path).stem}.synced.{suffix}.mka"
+
+    command = [
+        str(ffmpeg),
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-itsoffset",
+        f"{timeline_shift_seconds:.6f}",
+        "-i",
+        str(source_path),
+    ]
+    for stream in audio_streams:
+        command.extend(["-map", f"0:a:{stream.relative_index}"])
+    command.extend(["-c", "copy", str(output_path)])
+    return ExportPlan(None, output_path, command, tuple(audio_streams))
+
+
+def export_combined_audio_streams(
+    source_path: Path,
+    streams: list[MediaStream],
+    timeline_shift_seconds: float,
+    output_dir: Path,
+    ffmpeg_path: Path | None = None,
+    cancel_callback: Callable[[], bool] | None = None,
+) -> ExportPlan:
+    plan = build_combined_audio_export_plan(source_path, streams, timeline_shift_seconds, output_dir, ffmpeg_path)
+    plan.output_path.parent.mkdir(parents=True, exist_ok=True)
+    run_capture(plan.command, cancel_callback)
+    return plan
 
 
 def export_shifted_stream(

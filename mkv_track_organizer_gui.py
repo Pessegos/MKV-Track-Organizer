@@ -19,6 +19,7 @@ try:
         QGroupBox,
         QHBoxLayout,
         QHeaderView,
+        QInputDialog,
         QLabel,
         QLineEdit,
         QMainWindow,
@@ -248,19 +249,16 @@ class AudioSyncExportWorker(QObject):
     @Slot()
     def run(self) -> None:
         try:
-            plans = []
-            for stream in self.streams:
-                self.log.emit(f"Exporting {stream.label}")
-                plan = audio_sync.export_shifted_stream(
-                    self.source_path,
-                    stream,
-                    self.timeline_shift_seconds,
-                    self.output_dir,
-                    cancel_callback=self.cancel_requested,
-                )
-                plans.append(plan)
-                self.log.emit(f"  wrote {plan.output_path}")
-            self.completed.emit(plans)
+            self.log.emit(f"Exporting {len(self.streams)} audio stream(s) to one .mka")
+            plan = audio_sync.export_combined_audio_streams(
+                self.source_path,
+                self.streams,
+                self.timeline_shift_seconds,
+                self.output_dir,
+                cancel_callback=self.cancel_requested,
+            )
+            self.log.emit(f"  wrote {plan.output_path}")
+            self.completed.emit(plan)
         except audio_sync.AudioSyncCancelled:
             self.failed.emit("Audio sync export cancelled.")
         except Exception:
@@ -278,6 +276,22 @@ class MainWindow(QMainWindow):
     FILE_COLUMNS = ["Status", "Input", "Output", "Message"]
     MAKEMKV_COLUMNS = ["Status", "Source", "Output", "Message"]
     AUDIO_SYNC_COLUMNS = ["Export", "Type", "Index", "Codec", "Language", "Title"]
+    AUDIO_SYNC_MEDIA_SUFFIXES = {".mkv", ".mka", ".mp4", ".mov", ".avi", ".flac", ".wav", ".aac", ".ac3", ".dts"}
+    AUDIO_SYNC_CUSTOM_PRESET = "custom"
+    AUDIO_SYNC_DURATION_PRESETS = (
+        ("60 s - Fast", 60.0),
+        ("120 s - Balanced", 120.0),
+        ("180 s - Robust", 180.0),
+        ("300 s - Very robust / slow", 300.0),
+        ("Custom...", AUDIO_SYNC_CUSTOM_PRESET),
+    )
+    AUDIO_SYNC_SPACING_PRESETS = (
+        ("5 min - Close", 300.0),
+        ("10 min", 600.0),
+        ("15 min - Balanced", 900.0),
+        ("30 min - Wide", 1800.0),
+        ("Custom...", AUDIO_SYNC_CUSTOM_PRESET),
+    )
     FINALIZATION_PROGRESS_UNITS = 10
     TRACK_COLUMNS = [
         "ID",
@@ -479,25 +493,40 @@ class MainWindow(QMainWindow):
         self.audio_sync_ref_combo = QComboBox()
         self.audio_sync_source_combo = QComboBox()
         self.audio_sync_start_edit = QLineEdit("00:10:00")
-        self.audio_sync_duration_edit = QLineEdit("90")
-        self.audio_sync_spacing_edit = QLineEdit("00:15:00")
+        self.audio_sync_duration_combo = QComboBox()
+        for label, seconds in self.AUDIO_SYNC_DURATION_PRESETS:
+            self.audio_sync_duration_combo.addItem(label, seconds)
+        self.audio_sync_duration_combo.setCurrentIndex(1)
+        self.audio_sync_spacing_combo = QComboBox()
+        for label, seconds in self.AUDIO_SYNC_SPACING_PRESETS:
+            self.audio_sync_spacing_combo.addItem(label, seconds)
+        self.audio_sync_spacing_combo.setCurrentIndex(2)
+        self.audio_sync_custom_duration_seconds = 120.0
+        self.audio_sync_custom_spacing_seconds = 900.0
+        self.audio_sync_previous_duration_index = self.audio_sync_duration_combo.currentIndex()
+        self.audio_sync_previous_spacing_index = self.audio_sync_spacing_combo.currentIndex()
+        self._audio_sync_preset_prompt_active = False
         self.audio_sync_max_offset_edit = QLineEdit("5")
         self.audio_sync_checkpoints_spin = QSpinBox()
         self.audio_sync_checkpoints_spin.setRange(1, 20)
         self.audio_sync_checkpoints_spin.setValue(4)
-        self.audio_sync_sample_rate_spin = QSpinBox()
-        self.audio_sync_sample_rate_spin.setRange(8_000, 96_000)
-        self.audio_sync_sample_rate_spin.setValue(16_000)
-        self.audio_sync_sample_rate_spin.setSingleStep(1_000)
+        self.audio_sync_sample_rate_combo = QComboBox()
+        for sample_rate in (8_000, 16_000, 24_000, 48_000, 96_000):
+            self.audio_sync_sample_rate_combo.addItem(f"{sample_rate} Hz", sample_rate)
+        self.audio_sync_sample_rate_combo.setCurrentIndex(1)
         self.audio_sync_check_button = QPushButton("Check tools")
         self.audio_sync_load_button = QPushButton("Load streams")
         self.audio_sync_analyze_button = QPushButton("Analyze")
-        self.audio_sync_export_button = QPushButton("Export selected")
+        self.audio_sync_export_button = QPushButton("Export audio .mka")
+        self.audio_sync_select_all_button = QPushButton("Select all")
+        self.audio_sync_clear_selection_button = QPushButton("Clear")
         self.audio_sync_cancel_button = QPushButton("Cancel")
         self.audio_sync_check_button.setObjectName("secondaryButton")
         self.audio_sync_load_button.setObjectName("secondaryButton")
         self.audio_sync_analyze_button.setObjectName("primaryButton")
         self.audio_sync_export_button.setObjectName("secondaryButton")
+        self.audio_sync_select_all_button.setObjectName("secondaryButton")
+        self.audio_sync_clear_selection_button.setObjectName("secondaryButton")
         self.audio_sync_cancel_button.setObjectName("dangerButton")
         self.audio_sync_tracks_table = QTableWidget(0, len(self.AUDIO_SYNC_COLUMNS))
         self.audio_sync_summary_edit = QPlainTextEdit()
@@ -698,8 +727,8 @@ class MainWindow(QMainWindow):
         self.statusBar().addPermanentWidget(self.progress_label)
         self.statusBar().addPermanentWidget(self.progress, 1)
         self.tabs.addTab(organizer_tab, style.standardIcon(QStyle.SP_FileIcon), "Organizer")
-        self.tabs.addTab(self._build_makemkv_tab(), style.standardIcon(QStyle.SP_DirOpenIcon), "MakeMKV Batch")
         self.tabs.addTab(self._build_audio_sync_tab(), style.standardIcon(QStyle.SP_MediaSeekForward), "Audio Sync")
+        self.tabs.addTab(self._build_makemkv_tab(), style.standardIcon(QStyle.SP_DirOpenIcon), "MakeMKV Batch")
         self.setCentralWidget(self.tabs)
 
         file_button.clicked.connect(self.choose_file)
@@ -822,6 +851,9 @@ class MainWindow(QMainWindow):
         files_group = QGroupBox("Reference and source")
         files_grid = QGridLayout(files_group)
         files_grid.setColumnStretch(1, 1)
+        for edit in [self.audio_sync_reference_edit, self.audio_sync_source_edit]:
+            edit.setAcceptDrops(True)
+            edit.installEventFilter(self)
 
         reference_button = self._tool_button(QStyle.SP_FileIcon, "Choose reference file")
         source_button = self._tool_button(QStyle.SP_FileIcon, "Choose source file")
@@ -851,6 +883,9 @@ class MainWindow(QMainWindow):
         compare_grid.setColumnStretch(3, 1)
         self.audio_sync_ref_combo.setToolTip("Reference audio stream, counted among audio streams")
         self.audio_sync_source_combo.setToolTip("Source audio stream to compare against the reference")
+        self.audio_sync_duration_combo.setToolTip("Longer windows are slower but more reliable. 120 seconds is a balanced default.")
+        self.audio_sync_spacing_combo.setToolTip("Distance between checkpoints. Wider spacing checks whether the delay stays stable.")
+        self.audio_sync_sample_rate_combo.setToolTip("Analysis sample rate. 16000 Hz is usually enough; higher values are slower.")
         compare_grid.addWidget(QLabel("Reference audio"), 0, 0)
         compare_grid.addWidget(self.audio_sync_ref_combo, 0, 1)
         compare_grid.addWidget(QLabel("Source audio"), 0, 2)
@@ -858,22 +893,27 @@ class MainWindow(QMainWindow):
         compare_grid.addWidget(QLabel("Start"), 1, 0)
         compare_grid.addWidget(self.audio_sync_start_edit, 1, 1)
         compare_grid.addWidget(QLabel("Duration"), 1, 2)
-        compare_grid.addWidget(self.audio_sync_duration_edit, 1, 3)
+        compare_grid.addWidget(self.audio_sync_duration_combo, 1, 3)
         compare_grid.addWidget(QLabel("Checkpoints"), 2, 0)
         compare_grid.addWidget(self.audio_sync_checkpoints_spin, 2, 1)
         compare_grid.addWidget(QLabel("Spacing"), 2, 2)
-        compare_grid.addWidget(self.audio_sync_spacing_edit, 2, 3)
+        compare_grid.addWidget(self.audio_sync_spacing_combo, 2, 3)
         compare_grid.addWidget(QLabel("Max offset"), 3, 0)
         compare_grid.addWidget(self.audio_sync_max_offset_edit, 3, 1)
         compare_grid.addWidget(QLabel("Sample rate"), 3, 2)
-        compare_grid.addWidget(self.audio_sync_sample_rate_spin, 3, 3)
+        compare_grid.addWidget(self.audio_sync_sample_rate_combo, 3, 3)
         root.addWidget(compare_group)
 
         self.audio_sync_check_button.setIcon(style.standardIcon(QStyle.SP_DialogApplyButton))
         self.audio_sync_load_button.setIcon(style.standardIcon(QStyle.SP_BrowserReload))
         self.audio_sync_analyze_button.setIcon(style.standardIcon(QStyle.SP_MediaPlay))
         self.audio_sync_export_button.setIcon(style.standardIcon(QStyle.SP_DialogSaveButton))
+        self.audio_sync_export_button.setToolTip("Export selected source audio streams together into one synced .mka file")
         self.audio_sync_export_button.setEnabled(False)
+        self.audio_sync_select_all_button.setIcon(style.standardIcon(QStyle.SP_DialogApplyButton))
+        self.audio_sync_select_all_button.setEnabled(False)
+        self.audio_sync_clear_selection_button.setIcon(style.standardIcon(QStyle.SP_DialogResetButton))
+        self.audio_sync_clear_selection_button.setEnabled(False)
         self.audio_sync_cancel_button.setIcon(style.standardIcon(QStyle.SP_BrowserStop))
         self.audio_sync_cancel_button.setEnabled(False)
 
@@ -886,9 +926,14 @@ class MainWindow(QMainWindow):
         top_bar.addWidget(self.audio_sync_cancel_button)
         root.addLayout(top_bar)
 
-        streams_group = QGroupBox("Source tracks to export")
+        streams_group = QGroupBox("Source audio to export")
         streams_layout = QVBoxLayout(streams_group)
         streams_layout.setContentsMargins(8, 8, 8, 8)
+        streams_bar = QHBoxLayout()
+        streams_bar.addStretch(1)
+        streams_bar.addWidget(self.audio_sync_select_all_button)
+        streams_bar.addWidget(self.audio_sync_clear_selection_button)
+        streams_layout.addLayout(streams_bar)
         self.audio_sync_tracks_table.setHorizontalHeaderLabels(self.AUDIO_SYNC_COLUMNS)
         self.audio_sync_tracks_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.audio_sync_tracks_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
@@ -931,7 +976,13 @@ class MainWindow(QMainWindow):
         self.audio_sync_load_button.clicked.connect(self.load_audio_sync_streams)
         self.audio_sync_analyze_button.clicked.connect(self.start_audio_sync_analysis)
         self.audio_sync_export_button.clicked.connect(self.start_audio_sync_export)
+        self.audio_sync_select_all_button.clicked.connect(self.select_all_audio_sync_streams)
+        self.audio_sync_clear_selection_button.clicked.connect(self.clear_audio_sync_stream_selection)
         self.audio_sync_cancel_button.clicked.connect(self.cancel_audio_sync_task)
+        self.audio_sync_reference_edit.textEdited.connect(lambda _text: self._clear_audio_sync_loaded_streams())
+        self.audio_sync_source_edit.textEdited.connect(lambda _text: self._clear_audio_sync_loaded_streams())
+        self.audio_sync_duration_combo.activated.connect(self._audio_sync_duration_preset_activated)
+        self.audio_sync_spacing_combo.activated.connect(self._audio_sync_spacing_preset_activated)
         self.input_edit.textEdited.connect(self._manual_input_changed)
         self.files_table.itemSelectionChanged.connect(self._populate_tracks_for_selection)
         self.metadata_combo.currentIndexChanged.connect(
@@ -1281,21 +1332,128 @@ class MainWindow(QMainWindow):
     def choose_audio_sync_reference_file(self) -> None:
         path, _filter = QFileDialog.getOpenFileName(self, "Choose reference media", "", "Media files (*.mkv *.mka *.mp4 *.mov *.avi *.flac *.wav *.aac *.ac3 *.dts);;All files (*)")
         if path:
-            self.audio_sync_reference_edit.setText(path)
+            self._set_audio_sync_media_path(self.audio_sync_reference_edit, Path(path))
 
     @Slot()
     def choose_audio_sync_source_file(self) -> None:
         path, _filter = QFileDialog.getOpenFileName(self, "Choose source media", "", "Media files (*.mkv *.mka *.mp4 *.mov *.avi *.flac *.wav *.aac *.ac3 *.dts);;All files (*)")
         if path:
-            self.audio_sync_source_edit.setText(path)
-            if not self.audio_sync_output_edit.text().strip():
-                self.audio_sync_output_edit.setText(str(Path(path).parent / "synced"))
+            self._set_audio_sync_media_path(self.audio_sync_source_edit, Path(path))
 
     @Slot()
     def choose_audio_sync_output_folder(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Choose audio sync export folder")
         if path:
             self.audio_sync_output_edit.setText(path)
+
+    def _set_audio_sync_media_path(self, edit: QLineEdit, path: Path) -> None:
+        resolved_path = Path(path).expanduser().resolve()
+        edit.setText(str(resolved_path))
+        if edit is self.audio_sync_source_edit and not self.audio_sync_output_edit.text().strip():
+            self.audio_sync_output_edit.setText(str(resolved_path.parent / "synced"))
+        self._clear_audio_sync_loaded_streams()
+
+    def _clear_audio_sync_loaded_streams(self) -> None:
+        self.audio_sync_reference_streams = []
+        self.audio_sync_source_streams = []
+        self.audio_sync_result = None
+        self.audio_sync_ref_combo.clear()
+        self.audio_sync_source_combo.clear()
+        self.audio_sync_tracks_table.setRowCount(0)
+        self.audio_sync_export_button.setEnabled(False)
+        self._set_audio_sync_selection_controls_enabled(False)
+
+    @Slot()
+    def select_all_audio_sync_streams(self) -> None:
+        self._set_audio_sync_stream_checks(Qt.Checked)
+
+    @Slot()
+    def clear_audio_sync_stream_selection(self) -> None:
+        self._set_audio_sync_stream_checks(Qt.Unchecked)
+
+    def _set_audio_sync_stream_checks(self, check_state: Qt.CheckState) -> None:
+        for row in range(self.audio_sync_tracks_table.rowCount()):
+            item = self.audio_sync_tracks_table.item(row, 0)
+            if item:
+                item.setCheckState(check_state)
+
+    def _set_audio_sync_selection_controls_enabled(self, enabled: bool) -> None:
+        self.audio_sync_select_all_button.setEnabled(enabled)
+        self.audio_sync_clear_selection_button.setEnabled(enabled)
+
+    @Slot(int)
+    def _audio_sync_duration_preset_activated(self, index: int) -> None:
+        if self.audio_sync_duration_combo.itemData(index) != self.AUDIO_SYNC_CUSTOM_PRESET:
+            self.audio_sync_previous_duration_index = index
+            return
+        if self._audio_sync_preset_prompt_active:
+            return
+        self._audio_sync_preset_prompt_active = True
+        try:
+            seconds, accepted = QInputDialog.getDouble(
+                self,
+                "Custom duration",
+                "Duration in seconds",
+                self.audio_sync_custom_duration_seconds,
+                10.0,
+                600.0,
+                1,
+            )
+            if accepted:
+                self.audio_sync_custom_duration_seconds = float(seconds)
+                self.audio_sync_duration_combo.setItemText(
+                    index,
+                    f"Custom: {self._format_audio_sync_seconds(seconds)}",
+                )
+                self.audio_sync_previous_duration_index = index
+            else:
+                self.audio_sync_duration_combo.setCurrentIndex(self.audio_sync_previous_duration_index)
+        finally:
+            self._audio_sync_preset_prompt_active = False
+
+    @Slot(int)
+    def _audio_sync_spacing_preset_activated(self, index: int) -> None:
+        if self.audio_sync_spacing_combo.itemData(index) != self.AUDIO_SYNC_CUSTOM_PRESET:
+            self.audio_sync_previous_spacing_index = index
+            return
+        if self._audio_sync_preset_prompt_active:
+            return
+        self._audio_sync_preset_prompt_active = True
+        try:
+            minutes, accepted = QInputDialog.getDouble(
+                self,
+                "Custom spacing",
+                "Spacing in minutes",
+                self.audio_sync_custom_spacing_seconds / 60.0,
+                1.0,
+                60.0,
+                1,
+            )
+            if accepted:
+                self.audio_sync_custom_spacing_seconds = float(minutes) * 60.0
+                self.audio_sync_spacing_combo.setItemText(
+                    index,
+                    f"Custom: {self._format_audio_sync_seconds(self.audio_sync_custom_spacing_seconds)}",
+                )
+                self.audio_sync_previous_spacing_index = index
+            else:
+                self.audio_sync_spacing_combo.setCurrentIndex(self.audio_sync_previous_spacing_index)
+        finally:
+            self._audio_sync_preset_prompt_active = False
+
+    def _audio_sync_preset_seconds(self, combo: QComboBox, custom_seconds: float) -> float:
+        value = combo.currentData()
+        if value == self.AUDIO_SYNC_CUSTOM_PRESET:
+            return custom_seconds
+        return float(value)
+
+    def _format_audio_sync_seconds(self, seconds: float) -> str:
+        if seconds >= 60 and seconds % 60 == 0:
+            minutes = int(seconds // 60)
+            return f"{minutes} min"
+        if seconds == int(seconds):
+            return f"{int(seconds)} s"
+        return f"{seconds:.1f} s"
 
     @Slot()
     def _makemkv_selection_changed(self) -> None:
@@ -1459,6 +1617,7 @@ class MainWindow(QMainWindow):
         self._populate_audio_sync_export_table(self.audio_sync_source_streams)
         self.audio_sync_result = None
         self.audio_sync_export_button.setEnabled(False)
+        self._set_audio_sync_selection_controls_enabled(self.audio_sync_tracks_table.rowCount() > 0)
         self.audio_sync_summary_edit.clear()
         self.append_audio_sync_summary_line("Streams loaded.")
         self.append_audio_sync_summary_line(f"Reference audio streams: {len(reference_audio)}")
@@ -1529,7 +1688,7 @@ class MainWindow(QMainWindow):
 
         selected_streams = self._selected_audio_sync_streams()
         if not selected_streams:
-            QMessageBox.information(self, "Audio Sync export", "Select at least one source track to export.")
+            QMessageBox.information(self, "Audio Sync export", "Select at least one source audio track to export.")
             return
 
         try:
@@ -1540,6 +1699,7 @@ class MainWindow(QMainWindow):
             return
 
         self.append_audio_sync_summary_line("Export started.")
+        self.append_audio_sync_summary_line(f"Writing {len(selected_streams)} selected audio track(s) to one .mka.")
         self.progress.setRange(0, 0)
         self._set_progress_label("Audio sync export")
         self._set_audio_sync_running(True)
@@ -1795,11 +1955,17 @@ class MainWindow(QMainWindow):
             reference_audio_stream=int(reference_stream),
             source_audio_stream=int(source_stream),
             start_seconds=audio_sync.parse_time(self.audio_sync_start_edit.text()),
-            duration_seconds=audio_sync.parse_time(self.audio_sync_duration_edit.text()),
+            duration_seconds=self._audio_sync_preset_seconds(
+                self.audio_sync_duration_combo,
+                self.audio_sync_custom_duration_seconds,
+            ),
             checkpoints=self.audio_sync_checkpoints_spin.value(),
-            checkpoint_spacing_seconds=audio_sync.parse_time(self.audio_sync_spacing_edit.text()),
+            checkpoint_spacing_seconds=self._audio_sync_preset_seconds(
+                self.audio_sync_spacing_combo,
+                self.audio_sync_custom_spacing_seconds,
+            ),
             max_offset_seconds=audio_sync.parse_time(self.audio_sync_max_offset_edit.text()),
-            sample_rate=self.audio_sync_sample_rate_spin.value(),
+            sample_rate=int(self.audio_sync_sample_rate_combo.currentData()),
         )
 
     def _populate_audio_sync_combo(self, combo: QComboBox, streams: list[audio_sync.MediaStream]) -> None:
@@ -1808,17 +1974,17 @@ class MainWindow(QMainWindow):
             combo.addItem(stream.label, stream.relative_index)
 
     def _populate_audio_sync_export_table(self, streams: list[audio_sync.MediaStream]) -> None:
-        exportable_streams = [stream for stream in streams if stream.type in {"audio", "subtitle"}]
+        exportable_streams = [stream for stream in streams if stream.type == "audio"]
         self.audio_sync_tracks_table.setRowCount(len(exportable_streams))
         for row, stream in enumerate(exportable_streams):
             export_item = QTableWidgetItem("")
             export_item.setFlags(export_item.flags() | Qt.ItemIsUserCheckable)
-            export_item.setCheckState(Qt.Checked if stream.type == "audio" else Qt.Unchecked)
+            export_item.setCheckState(Qt.Checked)
             export_item.setData(Qt.UserRole, stream)
             self.audio_sync_tracks_table.setItem(row, 0, export_item)
             values = [
                 stream.type.title(),
-                str(stream.index if stream.type == "subtitle" else f"0:a:{stream.relative_index}"),
+                f"0:a:{stream.relative_index}",
                 stream.codec,
                 stream.language,
                 stream.title,
@@ -2188,19 +2354,20 @@ class MainWindow(QMainWindow):
         if result.spread_seconds > 0.020:
             self.append_audio_sync_summary_line("Warning: spread is above 20 ms; this may not be a fixed delay.")
         self.append_audio_sync_summary_line()
-        self.audio_sync_export_button.setEnabled(True)
+        self.audio_sync_export_button.setEnabled(self.audio_sync_tracks_table.rowCount() > 0)
+        self._set_audio_sync_selection_controls_enabled(self.audio_sync_tracks_table.rowCount() > 0)
         self.statusBar().showMessage("Audio Sync analysis completed")
         self._set_audio_sync_running(False)
 
     @Slot(object)
-    def handle_audio_sync_export_completed(self, plans: list[audio_sync.ExportPlan]) -> None:
+    def handle_audio_sync_export_completed(self, plan: audio_sync.ExportPlan) -> None:
         self.progress.setRange(0, 1)
         self.progress.setValue(1)
         self._set_progress_label("Audio sync export completed")
         self.append_audio_sync_summary_line()
-        self.append_audio_sync_summary_line("Exported")
-        for plan in plans:
-            self.append_audio_sync_summary_line(str(plan.output_path))
+        self.append_audio_sync_summary_line("Exported .mka")
+        self.append_audio_sync_summary_line(str(plan.output_path))
+        self.append_audio_sync_summary_line(f"Audio tracks: {len(plan.streams)}")
         self.append_audio_sync_summary_line()
         self.statusBar().showMessage("Audio Sync export completed")
         self._set_audio_sync_running(False)
@@ -2504,6 +2671,7 @@ class MainWindow(QMainWindow):
         self.audio_sync_load_button.setEnabled(not running)
         self.audio_sync_analyze_button.setEnabled(not running)
         self.audio_sync_export_button.setEnabled(bool(self.audio_sync_result) and not running)
+        self._set_audio_sync_selection_controls_enabled(self.audio_sync_tracks_table.rowCount() > 0 and not running)
 
     def _set_makemkv_running(self, running: bool) -> None:
         self.makemkv_check_button.setEnabled(not running)
@@ -2517,12 +2685,14 @@ class MainWindow(QMainWindow):
         self.audio_sync_load_button.setEnabled(not running)
         self.audio_sync_analyze_button.setEnabled(not running)
         self.audio_sync_export_button.setEnabled(bool(self.audio_sync_result) and not running)
+        self._set_audio_sync_selection_controls_enabled(self.audio_sync_tracks_table.rowCount() > 0 and not running)
 
     def _set_audio_sync_running(self, running: bool) -> None:
         self.audio_sync_check_button.setEnabled(not running)
         self.audio_sync_load_button.setEnabled(not running)
         self.audio_sync_analyze_button.setEnabled(not running)
         self.audio_sync_export_button.setEnabled(bool(self.audio_sync_result) and not running)
+        self._set_audio_sync_selection_controls_enabled(self.audio_sync_tracks_table.rowCount() > 0 and not running)
         self.audio_sync_cancel_button.setEnabled(running)
         self.check_tools_button.setEnabled(not running)
         self.preview_button.setEnabled(not running)
@@ -2546,6 +2716,32 @@ class MainWindow(QMainWindow):
                 paths.append(Path(url.toLocalFile()))
         return paths
 
+    def _is_supported_audio_sync_media_path(self, path: Path) -> bool:
+        return path.is_file() and path.suffix.lower() in self.AUDIO_SYNC_MEDIA_SUFFIXES
+
+    def _audio_sync_drop_target(self, watched) -> QLineEdit | None:
+        if watched is self.audio_sync_reference_edit:
+            return self.audio_sync_reference_edit
+        if watched is self.audio_sync_source_edit:
+            return self.audio_sync_source_edit
+        return None
+
+    def _accepts_audio_sync_drop_event(self, event) -> bool:
+        paths = self._paths_from_mime(event.mimeData())
+        if not any(self._is_supported_audio_sync_media_path(path) for path in paths):
+            return False
+        event.acceptProposedAction()
+        return True
+
+    def _handle_audio_sync_drop_event(self, event, target_edit: QLineEdit) -> bool:
+        paths = self._paths_from_mime(event.mimeData())
+        supported_paths = [path for path in paths if self._is_supported_audio_sync_media_path(path)]
+        if not supported_paths:
+            return False
+        event.acceptProposedAction()
+        self._set_audio_sync_media_path(target_edit, supported_paths[0])
+        return True
+
     def _accepts_drop_event(self, event) -> bool:
         paths = self._paths_from_mime(event.mimeData())
         if not any(self._is_supported_input_path(path) for path in paths):
@@ -2563,6 +2759,14 @@ class MainWindow(QMainWindow):
         return True
 
     def eventFilter(self, watched, event) -> bool:
+        audio_sync_target = self._audio_sync_drop_target(watched)
+        if audio_sync_target is not None:
+            if event.type() in {QEvent.Type.DragEnter, QEvent.Type.DragMove}:
+                if self._accepts_audio_sync_drop_event(event):
+                    return True
+            if event.type() == QEvent.Type.Drop:
+                if self._handle_audio_sync_drop_event(event, audio_sync_target):
+                    return True
         if event.type() in {QEvent.Type.DragEnter, QEvent.Type.DragMove}:
             if self._accepts_drop_event(event):
                 return True
