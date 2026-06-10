@@ -1088,23 +1088,40 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def check_organizer_tools(self) -> None:
+        self.summary_edit.clear()
         try:
             args, config_path = self._build_args(dry_run=True)
-            context = self._validate_organizer_settings(args, config_path)
+            if self._has_organizer_input(args):
+                context = self._validate_organizer_settings(args, config_path)
+            else:
+                context = None
+                args = self._validate_organizer_settings(args, config_path, allow_empty_input=True)
         except Exception as error:
             self.append_summary_line(f"Check failed: {error}")
             QMessageBox.critical(self, "Organizer check failed", str(error))
             return
 
         self.append_summary_line("Organizer check passed.")
-        self.append_summary_line(f"MKVs found: {len(context.input_files)}")
-        self.append_summary_line(f"mkvmerge: {context.args.mkvmerge}")
-        self.append_summary_line(f"mkvextract: {context.args.mkvextract}")
-        if context.args.mkvpropedit:
-            self.append_summary_line(f"mkvpropedit: {context.args.mkvpropedit}")
+        if context:
+            args = context.args
+            self.append_summary_line(f"MKVs found: {len(context.input_files)}")
+        else:
+            self.append_summary_line("Input: not selected yet")
+            self.append_summary_line("Choose an MKV file/folder to check file discovery and track IDs.")
+        self.append_summary_line(f"mkvmerge: {args.mkvmerge}")
+        self.append_summary_line(f"mkvextract: {args.mkvextract}")
+        if args.mkvpropedit:
+            self.append_summary_line(f"mkvpropedit: {args.mkvpropedit}")
         self.append_summary_line()
         self.statusBar().showMessage("Organizer check passed")
-        QMessageBox.information(self, "Organizer check", f"Ready. MKVs found: {len(context.input_files)}")
+        if context:
+            QMessageBox.information(self, "Organizer check", f"Ready. MKVs found: {len(context.input_files)}")
+        else:
+            QMessageBox.information(
+                self,
+                "Organizer check",
+                "Tools look ready. Choose an input MKV file/folder to check files and track IDs.",
+            )
 
     @Slot()
     def check_makemkv_tools(self) -> None:
@@ -1336,8 +1353,112 @@ class MainWindow(QMainWindow):
     def _validate_organizer_settings(self, args, config_path: Path | None, allow_empty_input: bool = False):
         self._validate_organizer_output_location(args)
         if allow_empty_input:
-            return None
+            return self._validate_organizer_tools_only(args, config_path)
         return organizer.prepare_batch_run(args, config_path)
+
+    def _validate_organizer_tools_only(self, args, config_path: Path | None):
+        args.config_path = config_path
+        args.mkvmerge = organizer.resolve_tool_path(
+            args.mkvmerge,
+            "mkvmerge",
+            "MKVMERGE",
+            organizer.common_mkvtoolnix_paths("mkvmerge.exe"),
+        )
+        if args.mkvextract is None:
+            mkvextract_fallbacks = []
+            if args.mkvmerge:
+                mkvextract_fallbacks.append(args.mkvmerge.with_name(organizer.MKVEXTRACT.name))
+            mkvextract_fallbacks.extend(organizer.common_mkvtoolnix_paths("mkvextract.exe"))
+            args.mkvextract = organizer.resolve_tool_path(None, "mkvextract", "MKVEXTRACT", mkvextract_fallbacks)
+        else:
+            args.mkvextract = organizer.resolve_tool_path(
+                args.mkvextract,
+                "mkvextract",
+                "MKVEXTRACT",
+                organizer.common_mkvtoolnix_paths("mkvextract.exe"),
+            )
+
+        mkvpropedit_fallbacks = []
+        if args.mkvmerge:
+            mkvpropedit_fallbacks.append(args.mkvmerge.with_name(organizer.MKVPROPEDIT.name))
+        mkvpropedit_fallbacks.extend(organizer.common_mkvtoolnix_paths("mkvpropedit.exe"))
+        args.mkvpropedit = organizer.resolve_tool_path(
+            args.mkvpropedit,
+            "mkvpropedit",
+            "MKVPROPEDIT",
+            mkvpropedit_fallbacks,
+        )
+        args.subtitle_edit = organizer.resolve_tool_path(
+            args.subtitle_edit,
+            "SubtitleEdit",
+            "SUBTITLE_EDIT",
+            organizer.common_subtitle_edit_paths(),
+        )
+        args.seconv = organizer.resolve_seconv_path(args.seconv)
+        args.tesseract = organizer.resolve_tool_path(
+            args.tesseract,
+            "tesseract",
+            "TESSERACT",
+            organizer.common_tesseract_paths(),
+        )
+
+        if args.pgs_ocr_timeout_seconds <= 0:
+            raise organizer.OrganizerError("--pgs-ocr-timeout-seconds must be greater than zero.")
+        if args.ocr_cache_dir:
+            args.ocr_cache_dir = Path(args.ocr_cache_dir).resolve()
+        if args.output_dir:
+            args.output_dir = Path(args.output_dir).resolve()
+        if args.report_dir:
+            args.report_dir = Path(args.report_dir).resolve()
+
+        raw_variant_context_dirs = getattr(args, "variant_context_dir", None)
+        if raw_variant_context_dirs is None:
+            raw_variant_context_dirs = getattr(args, "variant_context_dirs", [])
+        args.variant_context_dirs = [
+            Path(context_dir).expanduser().resolve()
+            for context_dir in (raw_variant_context_dirs or [])
+            if context_dir
+        ]
+        for context_dir in args.variant_context_dirs:
+            if not context_dir.is_dir():
+                raise organizer.OrganizerError(f"--variant-context-dir is not a valid folder: {context_dir}")
+
+        if args.overwrite and args.skip_existing:
+            raise organizer.OrganizerError("Use only one option: --overwrite or --skip-existing.")
+        if args.report_format not in {"json", "txt", "both"}:
+            raise organizer.OrganizerError("--report-format must be json, txt, or both.")
+        if args.tessdata_model not in organizer.TESSDATA_REPOS:
+            raise organizer.OrganizerError("--tessdata-model must be best or fast.")
+        args.audio_name_style = str(getattr(args, "audio_name_style", "auto") or "auto").strip().lower().replace("_", "-")
+        if args.audio_name_style not in organizer.AUDIO_NAME_STYLES:
+            allowed = ", ".join(sorted(organizer.AUDIO_NAME_STYLES))
+            raise organizer.OrganizerError(f"--audio-name-style must be one of these values: {allowed}.")
+        args.language_order_style = (
+            str(getattr(args, "language_order_style", "default") or "default").strip().lower().replace("_", "-")
+        )
+        if args.language_order_style not in organizer.LANGUAGE_ORDER_STYLES:
+            allowed = ", ".join(sorted(organizer.LANGUAGE_ORDER_STYLES))
+            raise organizer.OrganizerError(f"--language-order-style must be one of these values: {allowed}.")
+
+        organizer.require_tool(args.mkvmerge, "mkvmerge")
+        if args.metadata_edit_mode == "only":
+            organizer.require_tool(args.mkvpropedit, "mkvpropedit")
+        if (
+            args.analyze_sub_sizes
+            or args.smart_sub_detection
+            or args.drop_empty_subs
+            or args.detect_language_variants
+            or args.prepare_pgs_ocr
+            or args.auto_commentary_ocr
+        ):
+            organizer.require_tool(args.mkvextract, "mkvextract")
+
+        organizer.parse_id_list(args.forced_subtitle_ids, "--forced-subtitle-ids")
+        organizer.parse_subtitle_language_overrides(args.subtitle_language_ids)
+        organizer.parse_track_delay_overrides(args.audio_delays, "--audio-delays")
+        organizer.parse_track_delay_overrides(args.subtitle_delays, "--subtitle-delays")
+        organizer.parse_id_list(args.explain_track, "--explain-track")
+        return args
 
     def _validate_organizer_output_location(self, args) -> None:
         if not args.output_dir:
@@ -1362,6 +1483,9 @@ class MainWindow(QMainWindow):
                     "With Recursive enabled, use an output folder outside the input tree, "
                     "or leave Output empty to use the safe _sorted folder."
                 )
+
+    def _has_organizer_input(self, args) -> bool:
+        return bool(getattr(args, "input_paths", None)) or bool(getattr(args, "path", None))
 
     def _validate_makemkv_settings(self, job: makemkv.MakeMkvBatchJob) -> tuple[Path, list[Path], str]:
         makemkv_path = makemkv.find_makemkv(job.makemkv_path)
