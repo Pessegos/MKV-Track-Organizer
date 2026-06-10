@@ -16,7 +16,8 @@ The project currently includes a command-line interface, a desktop UI, and an ea
 - Use OCR for PGS subtitles when text is needed for language or role detection.
 - Generate TXT/JSON reports for batch runs.
 - Use `mkvpropedit` for metadata-only updates when enabled.
-- Desktop UI with organizer and MakeMKV batch tabs, preview, run, cancel, logs, and progress.
+- Desktop UI with organizer and MakeMKV batch tabs, preview, run, cancel, summaries, raw logs, and progress.
+- Validate configured tools and source/output paths before starting a run.
 - Batch convert MakeMKV disc backup folders into MKVs.
 - Optionally run MKV Track Organizer automatically after a MakeMKV batch finishes.
 
@@ -48,9 +49,11 @@ Run:
 python .\mkv_track_organizer_gui.py
 ```
 
-Use **Preview** to analyze files without writing outputs. Use **Run** to apply the selected settings.
+Use **Check tools** to validate paths and external tools before a run. Use **Preview** to analyze files without writing outputs. Use **Run** to apply the selected settings.
 
-The **MakeMKV Batch** tab can convert one disc backup folder or a folder containing multiple disc backup folders. Its selection modes cover English audio, all audio, all tracks, or a custom MakeMKV selection string. Enable **Run Organizer after MakeMKV** to feed the MakeMKV output folder into the Organizer tab settings automatically.
+The lower panel separates the readable **Summary** from the full **Raw log**, so normal runs are easier to scan while still keeping the diagnostic output available.
+
+The **MakeMKV Batch** tab can convert one disc backup folder or a folder containing multiple disc backup folders. Its selection modes cover English audio, all audio, all tracks, or a custom MakeMKV selection string. Enable **Run Organizer after MakeMKV** to feed the MakeMKV output folder into the Organizer tab settings automatically. MakeMKV runs in robot mode so progress is used when the console output exposes it.
 
 ## Command Line
 

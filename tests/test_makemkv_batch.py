@@ -44,12 +44,19 @@ def test_build_makemkv_command() -> None:
 
     assert command == [
         r"C:\MakeMKV\makemkvcon64.exe",
+        "-r",
         "--minlength=900",
         "mkv",
         r"file:D:\disc1",
         "all",
         r"E:\out\disc1",
     ]
+
+
+def test_parse_robot_progress() -> None:
+    assert makemkv.parse_robot_progress("PRGV:50,0,100") == (50, 100)
+    assert makemkv.parse_robot_progress("PRGV:10,100,0") == (10, 100)
+    assert makemkv.parse_robot_progress("MSG:1005,0,1") is None
 
 
 def test_dry_run_batch_builds_reports_without_writing_output(tmp_path: Path) -> None:

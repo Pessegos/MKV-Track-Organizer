@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import queue
+import re
 import shutil
 import subprocess
 import threading
@@ -23,6 +24,7 @@ DEFAULT_MAKEMKV_PATHS = [
 ]
 REGISTRY_KEY_PATH = r"Software\MakeMKV"
 SELECTION_VALUE_NAME = "app_DefaultSelectionString"
+ROBOT_PROGRESS_RE = re.compile(r"^PRGV:\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)")
 
 SELECTION_RULES = {
     "english": (
@@ -170,6 +172,7 @@ def build_makemkv_command(
 ) -> list[str]:
     return [
         str(makemkv_path),
+        "-r",
         f"--minlength={min_length_seconds}",
         "mkv",
         f"file:{disc_folder}",
@@ -180,6 +183,23 @@ def build_makemkv_command(
 
 def format_command(command: list[str]) -> str:
     return " ".join(f'"{part}"' if " " in part else part for part in command)
+
+
+def parse_robot_progress(line: str) -> tuple[int, int] | None:
+    match = ROBOT_PROGRESS_RE.match(line.strip())
+    if not match:
+        return None
+
+    first, second, third = (int(part) for part in match.groups())
+    candidates = [
+        (first, third),
+        (first, second),
+        (second, third),
+    ]
+    for current, maximum in candidates:
+        if maximum > 0 and 0 <= current <= maximum:
+            return current, maximum
+    return None
 
 
 def run_batch(
@@ -399,6 +419,7 @@ def _run_command(
             output_lines.put(line)
 
     reader = _start_thread(read_output)
+    last_step = 5
     try:
         while process.poll() is None or not output_lines.empty():
             _ensure_not_cancelled(cancel_callback)
@@ -408,6 +429,10 @@ def _run_command(
                 continue
             else:
                 print(line, end="")
+                progress = parse_robot_progress(line)
+                if progress:
+                    current, maximum = progress
+                    last_step = max(1, min(99, round(current * 100 / maximum)))
                 _emit(
                     event_callback,
                     "disc-progress",
@@ -415,7 +440,7 @@ def _run_command(
                     disc=disc_folder,
                     index=index,
                     total=total,
-                    step=50,
+                    step=last_step,
                     steps=100,
                 )
         reader.join(timeout=1)
