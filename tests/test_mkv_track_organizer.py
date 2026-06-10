@@ -680,6 +680,75 @@ def test_mkvmerge_command_excludes_dropped_subtitles(tmp_path: Path) -> None:
     assert "2:English" not in command
 
 
+def test_parse_track_delay_overrides() -> None:
+    assert m.parse_track_delay_overrides("1: 150, 2:-250 3=0", "--audio-delays") == {
+        1: 150,
+        2: -250,
+        3: 0,
+    }
+
+
+def test_parse_track_delay_overrides_rejects_bad_input() -> None:
+    try:
+        m.parse_track_delay_overrides("1:+abc", "--audio-delays")
+    except m.OrganizerError as error:
+        assert "Invalid delay override" in str(error)
+    else:
+        raise AssertionError("Expected OrganizerError")
+
+
+def test_mkvmerge_command_applies_audio_and_subtitle_delays(tmp_path: Path) -> None:
+    audio = audio_track(1)
+    subtitle = subtitle_track(2, "eng", "large")
+    audio.suggested_name = "DTS-HD MA 5.1"
+    subtitle.suggested_name = "English"
+    audio.delay_ms = 150
+    subtitle.delay_ms = -250
+
+    command = m.build_mkvmerge_command(
+        mkvmerge=Path("mkvmerge"),
+        input_path=tmp_path / "in.mkv",
+        output_path=tmp_path / "out.mkv",
+        videos=[video_track(0)],
+        audio_tracks=[audio],
+        subtitles=[subtitle],
+    )
+
+    sync_values = [
+        command[index + 1]
+        for index, value in enumerate(command)
+        if value == "--sync"
+    ]
+    assert "1:150" in sync_values
+    assert "2:-250" in sync_values
+
+
+def test_track_delay_overrides_validate_track_type() -> None:
+    audio = audio_track(1)
+    subtitle = subtitle_track(2)
+
+    m.apply_track_delay_overrides([audio], [subtitle], {1: 100}, {2: -100})
+    assert audio.delay_ms == 100
+    assert subtitle.delay_ms == -100
+
+    try:
+        m.apply_track_delay_overrides([audio], [subtitle], {2: 100}, {})
+    except m.OrganizerError as error:
+        assert "audio tracks" in str(error)
+    else:
+        raise AssertionError("Expected OrganizerError")
+
+
+def test_metadata_edit_plan_rejects_track_delays() -> None:
+    audio = audio_track(1)
+    audio.delay_ms = 120
+
+    plan = m.metadata_edit_plan([video_track(0)], [audio], [])
+
+    assert plan.can_edit is False
+    assert plan.reason == "track delays require remux"
+
+
 def test_metadata_edit_plan_allows_metadata_only_language_and_name_change(tmp_path: Path) -> None:
     video = m.TrackInfo(
         id=0,

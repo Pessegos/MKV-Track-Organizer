@@ -9,7 +9,7 @@ from pathlib import Path
 
 try:
     from PySide6.QtCore import QEvent, QObject, QThread, Qt, Signal, Slot
-    from PySide6.QtGui import QCloseEvent, QDragEnterEvent, QDropEvent, QTextCursor
+    from PySide6.QtGui import QColor, QCloseEvent, QDragEnterEvent, QDropEvent, QTextCursor
     from PySide6.QtWidgets import (
         QApplication,
         QCheckBox,
@@ -206,8 +206,25 @@ class MainWindow(QMainWindow):
         "Forced",
         "Drop",
         "Role",
+        "Delay",
         "Reason",
     ]
+    STATUS_COLORS = {
+        "Ready": ("#edf7ed", "#1f6f3f"),
+        "Queued": ("#fff7df", "#8a5a00"),
+        "Running": ("#eaf2ff", "#1d4ed8"),
+        "Done": ("#e7f7ee", "#166534"),
+        "Error": ("#fdecec", "#b42318"),
+        "Cancelled": ("#f1f5f9", "#475569"),
+        "dry-run": ("#eef6ff", "#0369a1"),
+        "processed": ("#e7f7ee", "#166534"),
+        "metadata-edited": ("#e7f7ee", "#166534"),
+        "unchanged": ("#f1f5f9", "#475569"),
+        "skipped": ("#fff7df", "#8a5a00"),
+        "error": ("#fdecec", "#b42318"),
+        "cancelled": ("#f1f5f9", "#475569"),
+        "ready": ("#edf7ed", "#1f6f3f"),
+    }
     AUDIO_NAME_STYLE_HELP = {
         "auto": (
             "Uses format-only names when the file has one audio language, "
@@ -261,6 +278,10 @@ class MainWindow(QMainWindow):
         self.subtitle_language_edit.setPlaceholderText("spa:7,8; fr-CA:9")
         self.forced_ids_edit = QLineEdit()
         self.forced_ids_edit.setPlaceholderText("5,8,12")
+        self.audio_delays_edit = QLineEdit()
+        self.audio_delays_edit.setPlaceholderText("1:150, 2:-250")
+        self.subtitle_delays_edit = QLineEdit()
+        self.subtitle_delays_edit.setPlaceholderText("5:-250")
 
         self.recursive_check = QCheckBox("Recursive")
         self.smart_subs_check = QCheckBox("Smart subtitle detection")
@@ -289,6 +310,10 @@ class MainWindow(QMainWindow):
         self.preview_button = QPushButton("Preview")
         self.run_button = QPushButton("Run")
         self.cancel_button = QPushButton("Cancel")
+        self.check_tools_button.setObjectName("secondaryButton")
+        self.preview_button.setObjectName("secondaryButton")
+        self.run_button.setObjectName("primaryButton")
+        self.cancel_button.setObjectName("dangerButton")
         self.files_table = QTableWidget(0, len(self.FILE_COLUMNS))
         self.results_table = self.files_table
         self.tracks_table = QTableWidget(0, len(self.TRACK_COLUMNS))
@@ -324,12 +349,17 @@ class MainWindow(QMainWindow):
         self.makemkv_preview_button = QPushButton("Preview")
         self.makemkv_run_button = QPushButton("Run")
         self.makemkv_cancel_button = QPushButton("Cancel")
+        self.makemkv_check_button.setObjectName("secondaryButton")
+        self.makemkv_preview_button.setObjectName("secondaryButton")
+        self.makemkv_run_button.setObjectName("primaryButton")
+        self.makemkv_cancel_button.setObjectName("dangerButton")
         self.makemkv_table = QTableWidget(0, len(self.MAKEMKV_COLUMNS))
         self.makemkv_summary_edit = QPlainTextEdit()
         self.makemkv_log_edit = QPlainTextEdit()
         self.makemkv_output_tabs = QTabWidget()
 
         self._build_ui()
+        self._apply_theme()
         self._apply_default_args(self.default_args)
         self._connect_signals()
         self._refresh_file_list()
@@ -407,6 +437,8 @@ class MainWindow(QMainWindow):
         self._apply_combo_help(self.language_order_style_combo, self.LANGUAGE_ORDER_STYLE_HELP)
         self.subtitle_language_edit.setToolTip("Manual language override, for example spa:7,8; fr-CA:9")
         self.forced_ids_edit.setToolTip("Manual forced-subtitle override, for example 5,8,12")
+        self.audio_delays_edit.setToolTip("Manual audio delays in milliseconds. Example: 1:150, 2:-250")
+        self.subtitle_delays_edit.setToolTip("Manual subtitle delays in milliseconds. Example: 5:-250")
         self.smart_subs_check.setToolTip("Automatically classify forced, empty, commentary, and SDH subtitles")
         self.drop_empty_check.setToolTip("Exclude subtitles classified as empty")
         self.variant_check.setToolTip("Automatically detect language variants such as es-ES vs es-419")
@@ -437,6 +469,10 @@ class MainWindow(QMainWindow):
         advanced_layout.addWidget(self.subtitle_language_edit, 3, 1)
         advanced_layout.addWidget(QLabel("Forced IDs"), 3, 2)
         advanced_layout.addWidget(self.forced_ids_edit, 3, 3)
+        advanced_layout.addWidget(QLabel("Audio delays"), 4, 0)
+        advanced_layout.addWidget(self.audio_delays_edit, 4, 1)
+        advanced_layout.addWidget(QLabel("Subtitle delays"), 4, 2)
+        advanced_layout.addWidget(self.subtitle_delays_edit, 4, 3)
 
         advanced_toggles = QHBoxLayout()
         for checkbox in [
@@ -449,7 +485,7 @@ class MainWindow(QMainWindow):
         ]:
             advanced_toggles.addWidget(checkbox)
         advanced_toggles.addStretch(1)
-        advanced_layout.addLayout(advanced_toggles, 4, 0, 1, 4)
+        advanced_layout.addLayout(advanced_toggles, 5, 0, 1, 4)
         self.advanced_panel.setVisible(False)
         root.addWidget(self.advanced_panel)
 
@@ -513,8 +549,8 @@ class MainWindow(QMainWindow):
         self.progress_label.setMinimumWidth(220)
         self.statusBar().addPermanentWidget(self.progress_label)
         self.statusBar().addPermanentWidget(self.progress, 1)
-        tabs.addTab(organizer_tab, "Organizer")
-        tabs.addTab(self._build_makemkv_tab(), "MakeMKV Batch")
+        tabs.addTab(organizer_tab, style.standardIcon(QStyle.SP_FileIcon), "Organizer")
+        tabs.addTab(self._build_makemkv_tab(), style.standardIcon(QStyle.SP_DirOpenIcon), "MakeMKV Batch")
         self.setCentralWidget(tabs)
 
         file_button.clicked.connect(self.choose_file)
@@ -655,6 +691,120 @@ class MainWindow(QMainWindow):
         button.setAutoRaise(True)
         return button
 
+    def _apply_theme(self) -> None:
+        self.setStyleSheet(
+            """
+            QMainWindow, QWidget {
+                background: #f5f7fa;
+                color: #1f2933;
+                font-size: 9.5pt;
+            }
+            QGroupBox {
+                background: #ffffff;
+                border: 1px solid #d7dde5;
+                border-radius: 6px;
+                margin-top: 12px;
+                padding-top: 10px;
+                font-weight: 600;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 4px;
+                color: #334155;
+            }
+            QLineEdit, QPlainTextEdit, QComboBox, QSpinBox {
+                background: #ffffff;
+                border: 1px solid #cbd5e1;
+                border-radius: 5px;
+                padding: 5px 7px;
+                selection-background-color: #2563eb;
+            }
+            QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QSpinBox:focus {
+                border-color: #2563eb;
+            }
+            QPushButton, QToolButton {
+                background: #ffffff;
+                border: 1px solid #cbd5e1;
+                border-radius: 5px;
+                padding: 6px 10px;
+            }
+            QPushButton:hover, QToolButton:hover {
+                background: #f1f5f9;
+                border-color: #94a3b8;
+            }
+            QPushButton#primaryButton {
+                background: #2563eb;
+                border-color: #1d4ed8;
+                color: #ffffff;
+                font-weight: 600;
+            }
+            QPushButton#primaryButton:hover {
+                background: #1d4ed8;
+            }
+            QPushButton#dangerButton {
+                background: #fff5f5;
+                border-color: #f1a5a5;
+                color: #9f1239;
+                font-weight: 600;
+            }
+            QPushButton#dangerButton:hover {
+                background: #ffe4e6;
+            }
+            QPushButton#secondaryButton {
+                background: #eef6ff;
+                border-color: #bfdbfe;
+                color: #1e3a8a;
+            }
+            QTabWidget::pane {
+                border: 1px solid #d7dde5;
+                border-radius: 6px;
+                top: -1px;
+            }
+            QTabBar::tab {
+                background: #e8edf3;
+                color: #475569;
+                border: 1px solid #d7dde5;
+                border-bottom: none;
+                padding: 7px 14px;
+                margin-right: 3px;
+                border-top-left-radius: 5px;
+                border-top-right-radius: 5px;
+            }
+            QTabBar::tab:selected {
+                background: #ffffff;
+                color: #0f172a;
+                border-top: 3px solid #2563eb;
+            }
+            QHeaderView::section {
+                background: #e8edf3;
+                color: #334155;
+                border: none;
+                border-right: 1px solid #d7dde5;
+                padding: 5px 7px;
+                font-weight: 600;
+            }
+            QTableWidget {
+                background: #ffffff;
+                alternate-background-color: #f8fafc;
+                gridline-color: #e2e8f0;
+                border: 1px solid #d7dde5;
+                border-radius: 4px;
+            }
+            QProgressBar {
+                background: #e8edf3;
+                border: 1px solid #cbd5e1;
+                border-radius: 4px;
+                height: 12px;
+                text-align: center;
+            }
+            QProgressBar::chunk {
+                background: #16a34a;
+                border-radius: 3px;
+            }
+            """
+        )
+
     def _apply_combo_help(self, combo: QComboBox, help_by_key: dict[str, str]) -> None:
         for index in range(combo.count()):
             key = combo.itemData(index)
@@ -698,6 +848,8 @@ class MainWindow(QMainWindow):
         self.suffix_edit.setText(args.output_suffix or "")
         self.forced_ids_edit.setText(args.forced_subtitle_ids or "")
         self.subtitle_language_edit.setText("; ".join(args.subtitle_language_ids or []))
+        self.audio_delays_edit.setText(getattr(args, "audio_delays", "") or "")
+        self.subtitle_delays_edit.setText(getattr(args, "subtitle_delays", "") or "")
 
         self.recursive_check.setChecked(bool(args.recursive))
         self.smart_subs_check.setChecked(bool(args.smart_sub_detection))
@@ -1021,6 +1173,8 @@ class MainWindow(QMainWindow):
         args.output_dir = Path(self.output_edit.text().strip()) if self.output_edit.text().strip() else None
         args.output_suffix = self.suffix_edit.text().strip()
         args.forced_subtitle_ids = self.forced_ids_edit.text().strip()
+        args.audio_delays = self.audio_delays_edit.text().strip()
+        args.subtitle_delays = self.subtitle_delays_edit.text().strip()
         args.subtitle_language_ids = [
             item.strip()
             for item in self.subtitle_language_edit.text().split(";")
@@ -1400,6 +1554,8 @@ class MainWindow(QMainWindow):
             item = QTableWidgetItem(str(value))
             if key:
                 item.setData(Qt.UserRole, key)
+            if column == 0:
+                self._apply_status_style(item, str(value))
             self.files_table.setItem(row, column, item)
 
     def _set_makemkv_row(self, row: int, values: list[str], path: Path) -> None:
@@ -1408,6 +1564,8 @@ class MainWindow(QMainWindow):
             item = QTableWidgetItem(str(value))
             if key:
                 item.setData(Qt.UserRole, key)
+            if column == 0:
+                self._apply_status_style(item, str(value))
             self.makemkv_table.setItem(row, column, item)
 
     def _set_file_status(self, path: Path, status: str, message: str) -> None:
@@ -1419,6 +1577,7 @@ class MainWindow(QMainWindow):
             self._set_file_row(row, ["", str(path), "", ""], path)
 
         self.files_table.item(row, 0).setText(status)
+        self._apply_status_style(self.files_table.item(row, 0), status)
         self.files_table.item(row, 3).setText(message)
         self.files_table.resizeColumnsToContents()
 
@@ -1433,8 +1592,17 @@ class MainWindow(QMainWindow):
             self._set_makemkv_row(row, ["", str(path), output, ""], path)
 
         self.makemkv_table.item(row, 0).setText(status)
+        self._apply_status_style(self.makemkv_table.item(row, 0), status)
         self.makemkv_table.item(row, 3).setText(message)
         self.makemkv_table.resizeColumnsToContents()
+
+    def _apply_status_style(self, item: QTableWidgetItem, status: str) -> None:
+        colors = self.STATUS_COLORS.get(status)
+        if not colors:
+            return
+        background, foreground = colors
+        item.setBackground(QColor(background))
+        item.setForeground(QColor(foreground))
 
     def _file_row_for_key(self, key: str) -> int | None:
         for row in range(self.files_table.rowCount()):
@@ -1474,6 +1642,7 @@ class MainWindow(QMainWindow):
                 self._yes_no(track.get("forced")),
                 self._yes_no(track.get("drop")),
                 track.get("role", ""),
+                self._delay_text(track.get("delay_ms")),
                 self._track_reason(track),
             ]
             for column, value in enumerate(values):
@@ -1506,6 +1675,13 @@ class MainWindow(QMainWindow):
 
     def _yes_no(self, value) -> str:
         return "Yes" if value else ""
+
+    def _delay_text(self, value) -> str:
+        try:
+            delay_ms = int(value or 0)
+        except (TypeError, ValueError):
+            return ""
+        return f"{delay_ms:+d} ms" if delay_ms else ""
 
     def _set_running(self, running: bool) -> None:
         self.check_tools_button.setEnabled(not running)

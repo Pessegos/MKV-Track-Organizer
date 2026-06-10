@@ -11,12 +11,13 @@ The project currently includes a command-line interface, a desktop UI, and an ea
 - Preview changes before writing output files.
 - Rename audio tracks by format, language plus format, or keep existing names.
 - Choose default or regional language ordering for audio/subtitle tracks.
+- Apply manual audio/subtitle delays by track ID when a source needs sync correction.
 - Detect forced, empty, commentary, and SDH subtitle tracks.
 - Detect regional language variants such as Portuguese, Spanish, French, and Chinese variants.
 - Use OCR for PGS subtitles when text is needed for language or role detection.
 - Generate TXT/JSON reports for batch runs.
 - Use `mkvpropedit` for metadata-only updates when enabled.
-- Desktop UI with organizer and MakeMKV batch tabs, preview, run, cancel, summaries, raw logs, and progress.
+- Desktop UI with organizer and MakeMKV batch tabs, clearer status colors, preview, run, cancel, summaries, raw logs, and progress.
 - Validate configured tools and source/output paths before starting a run.
 - Batch convert MakeMKV disc backup folders into MKVs.
 - Optionally run MKV Track Organizer automatically after a MakeMKV batch finishes.
@@ -85,6 +86,12 @@ Group languages by broad regions in the output order:
 
 ```powershell
 python .\mkv_track_organizer.py ".\movie.mkv" --language-order-style regional
+```
+
+Apply manual sync delays in milliseconds:
+
+```powershell
+python .\mkv_track_organizer.py ".\movie.mkv" --audio-delays 1:150 --subtitle-delays 5:-250
 ```
 
 ## Configuration

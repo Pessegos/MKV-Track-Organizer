@@ -23,5 +23,7 @@
   "pgs_ocr_timeout_seconds": 900,
   "forced_subtitle_ids": "",
   "subtitle_language_ids": [],
+  "audio_delays": "",
+  "subtitle_delays": "",
   "explain_track": ""
 }

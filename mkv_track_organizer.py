@@ -193,6 +193,7 @@ class TrackInfo:
     default: bool = False
     forced: bool = False
     drop: bool = False
+    delay_ms: int = 0
     pt_variant: dict[str, Any] | None = None
 
 
@@ -288,6 +289,8 @@ CONFIG_INT_KEYS = {"pgs_ocr_timeout_seconds"}
 
 CONFIG_STRING_KEYS = {
     "forced_subtitle_ids",
+    "audio_delays",
+    "subtitle_delays",
     "pgs_ocr_command",
     "pgs_ocr_language",
     "tessdata_model",
@@ -2227,6 +2230,34 @@ def parse_subtitle_language_overrides(
     return overrides
 
 
+def parse_track_delay_overrides(raw_value: str | None, option_name: str) -> dict[int, int]:
+    if not raw_value:
+        return {}
+
+    overrides: dict[int, int] = {}
+    entry_pattern = re.compile(r"(\d+)\s*[:=]\s*([+-]?\d+)(?:ms)?", re.IGNORECASE)
+    matches = list(entry_pattern.finditer(raw_value))
+    remainder = entry_pattern.sub("", raw_value)
+    if not matches or re.sub(r"[,;\s]+", "", remainder):
+        raise OrganizerError(
+            f"Invalid delay override in {option_name}: {raw_value}. "
+            "Expected TRACK_ID:DELAY_MS, for example 2:150 or 5:-250."
+        )
+
+    for match in matches:
+        track_id = int(match.group(1))
+        delay_ms = int(match.group(2))
+        existing_delay = overrides.get(track_id)
+        if existing_delay is not None and existing_delay != delay_ms:
+            raise OrganizerError(
+                f"Track {track_id} has conflicting delay overrides in {option_name}: "
+                f"{existing_delay} and {delay_ms}."
+            )
+        overrides[track_id] = delay_ms
+
+    return overrides
+
+
 def apply_subtitle_language_overrides(subtitles: list[TrackInfo], overrides: dict[int, str]) -> None:
     if not overrides:
         return
@@ -2245,6 +2276,35 @@ def apply_subtitle_language_overrides(subtitles: list[TrackInfo], overrides: dic
             track.language = language
             track.output_language = language
             track.language_name = language_display_name(language)
+
+
+def apply_track_delay_overrides(
+    audio_tracks: list[TrackInfo],
+    subtitles: list[TrackInfo],
+    audio_delays: dict[int, int],
+    subtitle_delays: dict[int, int],
+) -> None:
+    audio_ids = {track.id for track in audio_tracks}
+    subtitle_ids = {track.id for track in subtitles}
+
+    missing_audio_ids = sorted(set(audio_delays) - audio_ids)
+    if missing_audio_ids:
+        raise OrganizerError(
+            "IDs provided in --audio-delays do not exist as audio tracks: "
+            + ", ".join(str(track_id) for track_id in missing_audio_ids)
+        )
+
+    missing_subtitle_ids = sorted(set(subtitle_delays) - subtitle_ids)
+    if missing_subtitle_ids:
+        raise OrganizerError(
+            "IDs provided in --subtitle-delays do not exist as subtitle tracks: "
+            + ", ".join(str(track_id) for track_id in missing_subtitle_ids)
+        )
+
+    for track in audio_tracks:
+        track.delay_ms = audio_delays.get(track.id, 0)
+    for track in subtitles:
+        track.delay_ms = subtitle_delays.get(track.id, 0)
 
 
 def require_tool(path: Path | None, description: str) -> None:
@@ -4388,6 +4448,10 @@ def metadata_edit_plan(
     if dropped_subtitles:
         return MetadataEditPlan(False, "subtitle tracks need to be removed")
 
+    delayed_tracks = [track for track in audio_tracks + subtitles if track.delay_ms]
+    if delayed_tracks:
+        return MetadataEditPlan(False, "track delays require remux")
+
     original_order = [track.id for track in all_tracks]
     desired_order = [track.id for track in desired_tracks]
     if original_order != desired_order:
@@ -4446,6 +4510,8 @@ def build_mkvmerge_command(
         command.extend(["--track-name", f"{track.id}:{track.suggested_name}"])
         command.extend(["--default-track-flag", f"{track.id}:{'yes' if track.default else 'no'}"])
         command.extend(["--commentary-flag", f"{track.id}:{'yes' if detect_audio_role(track) == 'Commentary' else 'no'}"])
+        if track.delay_ms:
+            command.extend(["--sync", f"{track.id}:{track.delay_ms}"])
 
     included_subtitles = [track for track in subtitles if not track.drop]
     dropped_subtitles = [track for track in subtitles if track.drop]
@@ -4463,6 +4529,8 @@ def build_mkvmerge_command(
         command.extend(["--forced-display-flag", f"{track.id}:{'yes' if track.forced else 'no'}"])
         command.extend(["--hearing-impaired-flag", f"{track.id}:{'yes' if track.role == 'sdh' else 'no'}"])
         command.extend(["--commentary-flag", f"{track.id}:{'yes' if track.role == 'commentary' else 'no'}"])
+        if track.delay_ms:
+            command.extend(["--sync", f"{track.id}:{track.delay_ms}"])
 
     command.append(str(input_path))
 
@@ -4486,19 +4554,21 @@ def print_track_plan(
 
     for track in sorted(audio_tracks, key=lambda item: audio_sort_key(item, language_order_style)):
         reason_text = f" | {track.role_reason}" if track.role_reason else ""
+        delay_text = f" | delay={track.delay_ms:+d}ms" if track.delay_ms else ""
         print(
             f"  audio    {track.id:>3}: {track.language_name} | "
-            f"{track.suggested_name} | default={'yes' if track.default else 'no'}{reason_text}"
+            f"{track.suggested_name} | default={'yes' if track.default else 'no'}{delay_text}{reason_text}"
         )
 
     for track in sorted(subtitles, key=lambda item: (item.drop, subtitle_sort_key(item, language_order_style))):
         drop_text = " | DROP" if track.drop else ""
         forced_text = " | forced=yes" if track.forced else ""
         default_text = " | default=yes" if track.default else " | default=no"
+        delay_text = f" | delay={track.delay_ms:+d}ms" if track.delay_ms else ""
         reason_text = f" | {track.role_reason}" if track.role_reason else ""
         print(
             f"  subtitle {track.id:>3}: {track.suggested_name}"
-            f"{default_text}{forced_text}{drop_text}{reason_text}"
+            f"{default_text}{forced_text}{delay_text}{drop_text}{reason_text}"
         )
 
 
@@ -4564,6 +4634,7 @@ def track_report_data(track: TrackInfo) -> dict[str, Any]:
         "default": track.default,
         "forced": track.forced,
         "drop": track.drop,
+        "delay_ms": track.delay_ms,
         "role": track.role,
         "role_reason": track.role_reason,
         "role_scores": {
@@ -5278,6 +5349,7 @@ def process_file(
         raise OrganizerError("No video/audio/subtitle tracks found in this MKV.")
 
     apply_subtitle_language_overrides(subtitles, args.subtitle_language_overrides)
+    apply_track_delay_overrides(audio_tracks, subtitles, args.audio_delay_overrides, args.subtitle_delay_overrides)
     if args.detect_language_variants:
         apply_default_language_variants(subtitles)
     audio_name_style = getattr(args, "audio_name_style", "auto")
@@ -5651,6 +5723,18 @@ def build_parser(config_defaults: dict[str, Any] | None = None) -> argparse.Argu
         ),
     )
     parser.add_argument(
+        "--audio-delays",
+        default=default("audio_delays", ""),
+        metavar="ID:MS[,ID:MS]",
+        help="Apply audio track delays in milliseconds. Example: --audio-delays 1:150,2:-250",
+    )
+    parser.add_argument(
+        "--subtitle-delays",
+        default=default("subtitle_delays", ""),
+        metavar="ID:MS[,ID:MS]",
+        help="Apply subtitle track delays in milliseconds. Example: --subtitle-delays 5:-250",
+    )
+    parser.add_argument(
         "--analyze-sub-sizes",
         action="store_true",
         help="Also print the subtitle size/classification report.",
@@ -5942,6 +6026,8 @@ def prepare_batch_run(args: argparse.Namespace, config_path: Path | None = None)
 
     forced_subtitle_ids = parse_id_list(args.forced_subtitle_ids, "--forced-subtitle-ids")
     args.subtitle_language_overrides = parse_subtitle_language_overrides(args.subtitle_language_ids)
+    args.audio_delay_overrides = parse_track_delay_overrides(args.audio_delays, "--audio-delays")
+    args.subtitle_delay_overrides = parse_track_delay_overrides(args.subtitle_delays, "--subtitle-delays")
     args.explain_track_ids = parse_id_list(args.explain_track, "--explain-track")
     if raw_input_paths:
         input_files, source_root = collect_mkv_files_from_paths(args.input_paths, args.recursive)
