@@ -292,6 +292,14 @@ class MainWindow(QMainWindow):
         ("30 min - Wide", 1800.0),
         ("Custom...", AUDIO_SYNC_CUSTOM_PRESET),
     )
+    AUDIO_SYNC_CHECKPOINT_PRESETS = (
+        ("1 - Fast check", 1),
+        ("2 - Basic", 2),
+        ("4 - Balanced", 4),
+        ("6 - Robust", 6),
+        ("8 - Slow", 8),
+        ("Custom...", AUDIO_SYNC_CUSTOM_PRESET),
+    )
     AUDIO_SYNC_SAMPLE_RATE = 16_000
     FINALIZATION_PROGRESS_UNITS = 10
     TRACK_COLUMNS = [
@@ -524,9 +532,12 @@ class MainWindow(QMainWindow):
         self.audio_sync_previous_spacing_index = self.audio_sync_spacing_combo.currentIndex()
         self._audio_sync_preset_prompt_active = False
         self.audio_sync_max_offset_edit = QLineEdit("5")
-        self.audio_sync_checkpoints_spin = QSpinBox()
-        self.audio_sync_checkpoints_spin.setRange(1, 20)
-        self.audio_sync_checkpoints_spin.setValue(4)
+        self.audio_sync_checkpoints_combo = QComboBox()
+        for label, checkpoints in self.AUDIO_SYNC_CHECKPOINT_PRESETS:
+            self.audio_sync_checkpoints_combo.addItem(label, checkpoints)
+        self.audio_sync_checkpoints_combo.setCurrentIndex(2)
+        self.audio_sync_custom_checkpoints = 4
+        self.audio_sync_previous_checkpoints_index = self.audio_sync_checkpoints_combo.currentIndex()
         self.audio_sync_check_button = QPushButton("Check tools")
         self.audio_sync_load_button = QPushButton("Load streams")
         self.audio_sync_analyze_button = QPushButton("Analyze")
@@ -911,7 +922,7 @@ class MainWindow(QMainWindow):
         self.audio_sync_source_combo.setToolTip("Source audio stream to compare against the reference")
         self.audio_sync_start_edit.setToolTip("First timestamp used for analysis. Skip intros, logos, or long quiet sections when possible.")
         self.audio_sync_duration_combo.setToolTip("Longer windows are slower but more reliable. 120 seconds is a balanced default.")
-        self.audio_sync_checkpoints_spin.setToolTip("Number of timeline positions checked. More checkpoints are slower but help confirm a fixed delay.")
+        self.audio_sync_checkpoints_combo.setToolTip("Number of timeline positions checked. More checkpoints are slower but help confirm a fixed delay.")
         self.audio_sync_spacing_combo.setToolTip("Distance between checkpoints. Wider spacing checks whether the delay stays stable.")
         self.audio_sync_max_offset_edit.setToolTip("Largest delay to search for in either direction. Increase only when the source may be far out of sync.")
         reference_audio_label = QLabel("Reference audio")
@@ -937,7 +948,7 @@ class MainWindow(QMainWindow):
         compare_grid.addWidget(duration_label, 1, 2)
         compare_grid.addWidget(self.audio_sync_duration_combo, 1, 3)
         compare_grid.addWidget(checkpoints_label, 2, 0)
-        compare_grid.addWidget(self.audio_sync_checkpoints_spin, 2, 1)
+        compare_grid.addWidget(self.audio_sync_checkpoints_combo, 2, 1)
         compare_grid.addWidget(spacing_label, 2, 2)
         compare_grid.addWidget(self.audio_sync_spacing_combo, 2, 3)
         compare_grid.addWidget(max_offset_label, 3, 0)
@@ -1028,6 +1039,7 @@ class MainWindow(QMainWindow):
         self.audio_sync_source_edit.textEdited.connect(lambda _text: self._clear_audio_sync_loaded_streams())
         self.audio_sync_duration_combo.activated.connect(self._audio_sync_duration_preset_activated)
         self.audio_sync_spacing_combo.activated.connect(self._audio_sync_spacing_preset_activated)
+        self.audio_sync_checkpoints_combo.activated.connect(self._audio_sync_checkpoints_preset_activated)
         self.input_edit.textEdited.connect(self._manual_input_changed)
         self.files_table.itemSelectionChanged.connect(self._populate_tracks_for_selection)
         self.metadata_combo.currentIndexChanged.connect(
@@ -1528,11 +1540,44 @@ class MainWindow(QMainWindow):
         finally:
             self._audio_sync_preset_prompt_active = False
 
+    @Slot(int)
+    def _audio_sync_checkpoints_preset_activated(self, index: int) -> None:
+        if self.audio_sync_checkpoints_combo.itemData(index) != self.AUDIO_SYNC_CUSTOM_PRESET:
+            self.audio_sync_previous_checkpoints_index = index
+            return
+        if self._audio_sync_preset_prompt_active:
+            return
+        self._audio_sync_preset_prompt_active = True
+        try:
+            checkpoints, accepted = QInputDialog.getInt(
+                self,
+                "Custom checkpoints",
+                "Checkpoints",
+                self.audio_sync_custom_checkpoints,
+                1,
+                20,
+                1,
+            )
+            if accepted:
+                self.audio_sync_custom_checkpoints = int(checkpoints)
+                self.audio_sync_checkpoints_combo.setItemText(index, f"Custom: {checkpoints}")
+                self.audio_sync_previous_checkpoints_index = index
+            else:
+                self.audio_sync_checkpoints_combo.setCurrentIndex(self.audio_sync_previous_checkpoints_index)
+        finally:
+            self._audio_sync_preset_prompt_active = False
+
     def _audio_sync_preset_seconds(self, combo: QComboBox, custom_seconds: float) -> float:
         value = combo.currentData()
         if value == self.AUDIO_SYNC_CUSTOM_PRESET:
             return custom_seconds
         return float(value)
+
+    def _audio_sync_preset_int(self, combo: QComboBox, custom_value: int) -> int:
+        value = combo.currentData()
+        if value == self.AUDIO_SYNC_CUSTOM_PRESET:
+            return custom_value
+        return int(value)
 
     def _format_audio_sync_seconds(self, seconds: float) -> str:
         if seconds >= 60 and seconds % 60 == 0:
@@ -2049,7 +2094,10 @@ class MainWindow(QMainWindow):
                 self.audio_sync_duration_combo,
                 self.audio_sync_custom_duration_seconds,
             ),
-            checkpoints=self.audio_sync_checkpoints_spin.value(),
+            checkpoints=self._audio_sync_preset_int(
+                self.audio_sync_checkpoints_combo,
+                self.audio_sync_custom_checkpoints,
+            ),
             checkpoint_spacing_seconds=self._audio_sync_preset_seconds(
                 self.audio_sync_spacing_combo,
                 self.audio_sync_custom_spacing_seconds,
