@@ -214,6 +214,16 @@ def test_mandarin_pgs_ocr_tries_both_chinese_script_models() -> None:
     assert m.ocr_language_candidates_for_track(mandarin, "auto") == ["chi_sim", "chi_tra"]
 
 
+def test_mandarin_pgs_ocr_uses_name_hint_only_for_engine_order() -> None:
+    simplified = pgs_subtitle_track(21, "cmn")
+    simplified.original_name = "Chinese (Mandarin Simplified)"
+    traditional = pgs_subtitle_track(22, "cmn")
+    traditional.original_name = "Chinese (Mandarin Traditional)"
+
+    assert m.ocr_language_candidates_for_track(simplified, "auto") == ["chi_sim", "chi_tra"]
+    assert m.ocr_language_candidates_for_track(traditional, "auto") == ["chi_tra", "chi_sim"]
+
+
 def test_chinese_ocr_selection_prefers_script_evidence(tmp_path: Path) -> None:
     simplified = tmp_path / "simplified.srt"
     traditional = tmp_path / "traditional.srt"
@@ -589,6 +599,18 @@ def test_commentary_ocr_targets_unknown_full_size_extra_pgs() -> None:
     extra = pgs_subtitle_track(2, language="eng", size_bytes=3_900_000, display_events=900)
 
     assert m.should_ocr_for_commentary_or_sdh_detection(extra, 4_000_000, 1)
+
+
+def test_explicit_pgs_variant_does_not_trigger_automatic_validation_ocr() -> None:
+    spanish = pgs_subtitle_track(28, language="es-419", size_bytes=3_900_000, display_events=900)
+
+    assert not m.should_ocr_for_language_variant_detection(spanish, {"spa": 1})
+
+
+def test_ambiguous_mandarin_pair_triggers_script_ocr() -> None:
+    mandarin = pgs_subtitle_track(8, language="cmn", size_bytes=3_900_000, display_events=900)
+
+    assert m.should_ocr_for_language_variant_detection(mandarin, {"chi": 2})
 
 
 def test_short_variant_subtitle_inherits_single_full_anchor(tmp_path: Path) -> None:

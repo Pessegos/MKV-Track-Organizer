@@ -2844,6 +2844,18 @@ def ocr_language_candidates_for_track(track: TrackInfo, preferred_language: str)
         return [preferred_language]
 
     if needs_chinese_script_ocr(track, preferred_language):
+        hinted_variant = language_variant_from_hints("chi", track.original_name)
+        hinted_language = {
+            "zh-Hans": "chi_sim",
+            "zh-Hant": "chi_tra",
+            "zh-TW": "chi_tra",
+            "zh-HK": "chi_tra",
+        }.get(hinted_variant)
+        if hinted_language:
+            return [hinted_language] + [
+                language for language in CHINESE_OCR_SCRIPT_LANGUAGES
+                if language != hinted_language
+            ]
         return list(CHINESE_OCR_SCRIPT_LANGUAGES)
 
     candidate = (
@@ -2923,16 +2935,42 @@ def run_process_with_timeout(
     env: dict[str, str] | None = None,
     cwd: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
+    process = subprocess.Popen(
         command,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
         encoding="utf-8",
         errors="replace",
-        timeout=timeout_seconds,
         env=env,
         cwd=str(cwd) if cwd else None,
     )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as error:
+        terminate_process_tree(process)
+        try:
+            stdout, stderr = process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            stdout = error.output or ""
+            stderr = error.stderr or ""
+        raise subprocess.TimeoutExpired(command, timeout_seconds, output=stdout, stderr=stderr) from error
+
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
+def terminate_process_tree(process: subprocess.Popen[str]) -> None:
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        return
+
+    process.kill()
 
 
 def console_safe(text: str) -> str:
@@ -2988,6 +3026,17 @@ def should_ocr_for_commentary_or_sdh_detection(
         return False
 
     return (size_bytes / max_size) >= FULL_SIZE_DUPLICATE_RATIO
+
+
+def should_ocr_for_language_variant_detection(track: TrackInfo, variant_counts: dict[str, int]) -> bool:
+    base_code = variant_base_language_key(track)
+    if not is_pgs_subtitle(track) or base_code not in LANGUAGE_VARIANT_CLASSIFIERS:
+        return False
+    if track.output_language in LANGUAGE_VARIANT_BASES:
+        return False
+    if base_code in DEFAULT_LANGUAGE_VARIANTS and variant_counts.get(base_code, 0) <= 1:
+        return False
+    return True
 
 
 def run_seconv_pgs_ocr(
@@ -3137,28 +3186,11 @@ def ensure_pgs_ocr_cache(
         return
 
     max_sizes = max_subtitle_sizes_by_language(subtitles)
-    max_pgs_events = max_pgs_metric_by_language(subtitles, "display_events")
     first_full_tracks = first_full_sized_track_by_language(subtitles, max_sizes)
     variant_counts = count_subtitles_by_variant_base_language(subtitles)
     ocr_targets: dict[int, TrackInfo] = {}
     for track in subtitles:
-        base_code = variant_base_language_key(track)
-        if not is_pgs_subtitle(track) or base_code not in LANGUAGE_VARIANT_CLASSIFIERS:
-            continue
-
-        needs_unknown_variant_ocr = (
-            track.output_language not in LANGUAGE_VARIANT_BASES
-            and (
-                base_code not in DEFAULT_LANGUAGE_VARIANTS
-                or variant_counts.get(base_code, 0) > 1
-            )
-        )
-        needs_variant_validation_ocr = (
-            base_code in OCR_VALIDATED_VARIANT_LANGUAGES
-            and track.output_language in LANGUAGE_VARIANT_BASES
-            and not subtitle_looks_forced_sidecar(track, max_pgs_events.get(base_language_key(track)))
-        )
-        if needs_unknown_variant_ocr or needs_variant_validation_ocr:
+        if should_ocr_for_language_variant_detection(track, variant_counts):
             ocr_targets[track.id] = track
 
     if auto_commentary_ocr:
@@ -3260,27 +3292,40 @@ def ensure_pgs_ocr_cache(
             )
         elif auto_pgs_ocr and len(ocr_languages) > 1 and needs_chinese_script_ocr(track, pgs_ocr_language):
             candidates: list[tuple[str, Path]] = []
+            selected: tuple[str, Path, dict[str, Any]] | None = None
             for ocr_language in ocr_languages:
                 language_cache_dir = cache_dir / f"_ocr_track_{track.id}_{ocr_language}"
                 language_cache_dir.mkdir(parents=True, exist_ok=True)
                 candidate_srt_path = language_cache_dir / f"{sup_path.stem}.{ocr_language}.srt"
                 if force_pgs_ocr and candidate_srt_path.exists():
                     candidate_srt_path.unlink()
-                run_automatic_pgs_ocr(
-                    sup_path=sup_path,
-                    output_srt_path=candidate_srt_path,
-                    cache_dir=language_cache_dir,
-                    seconv=seconv,
-                    subtitle_edit=subtitle_edit,
-                    tesseract=tesseract,
-                    tessdata_dirs=tessdata_dirs,
-                    ocr_language=ocr_language,
-                    timeout_seconds=pgs_ocr_timeout_seconds,
-                    allow_legacy_subtitle_edit_ocr=allow_legacy_subtitle_edit_ocr,
-                )
+                if force_pgs_ocr or not candidate_srt_path.exists():
+                    run_automatic_pgs_ocr(
+                        sup_path=sup_path,
+                        output_srt_path=candidate_srt_path,
+                        cache_dir=language_cache_dir,
+                        seconv=seconv,
+                        subtitle_edit=subtitle_edit,
+                        tesseract=tesseract,
+                        tessdata_dirs=tessdata_dirs,
+                        ocr_language=ocr_language,
+                        timeout_seconds=pgs_ocr_timeout_seconds,
+                        allow_legacy_subtitle_edit_ocr=allow_legacy_subtitle_edit_ocr,
+                    )
                 candidates.append((ocr_language, candidate_srt_path))
 
-            selected = select_chinese_ocr_output(candidates)
+                if candidate_srt_path.exists():
+                    _quality, result = chinese_ocr_candidate_quality(ocr_language, candidate_srt_path)
+                    expected_variant = CHINESE_OCR_LANGUAGE_VARIANTS.get(ocr_language)
+                    if (
+                        result.get("code") == expected_variant
+                        and reliable_variant_code_from_result(result, "chi")
+                    ):
+                        selected = (ocr_language, candidate_srt_path, result)
+                        break
+
+            if selected is None:
+                selected = select_chinese_ocr_output(candidates)
             if selected:
                 selected_language, selected_path, selected_result = selected
                 shutil.copyfile(selected_path, output_srt_path)
