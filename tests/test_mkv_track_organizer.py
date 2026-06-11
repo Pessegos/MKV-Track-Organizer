@@ -1,4 +1,5 @@
 import argparse
+import sys
 from pathlib import Path
 
 import mkv_track_organizer as m
@@ -235,6 +236,21 @@ def test_chinese_ocr_selection_prefers_script_evidence(tmp_path: Path) -> None:
     assert selected is not None
     assert selected[0] == "chi_sim"
     assert selected[1] == simplified
+
+
+def test_run_process_with_timeout_emits_heartbeat() -> None:
+    heartbeats: list[float] = []
+
+    result = m.run_process_with_timeout(
+        [sys.executable, "-c", "import time; time.sleep(0.25); print('ok')"],
+        timeout_seconds=2,
+        heartbeat_callback=heartbeats.append,
+        heartbeat_interval_seconds=0.05,
+    )
+
+    assert result.returncode == 0
+    assert "ok" in result.stdout
+    assert heartbeats
 
 
 def test_portuguese_variant_uses_known_iberian_vocabulary() -> None:

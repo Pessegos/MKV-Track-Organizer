@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unicodedata
 import urllib.error
 import urllib.request
@@ -2934,6 +2935,8 @@ def run_process_with_timeout(
     timeout_seconds: int,
     env: dict[str, str] | None = None,
     cwd: Path | None = None,
+    heartbeat_callback: Callable[[float], None] | None = None,
+    heartbeat_interval_seconds: float = 10.0,
 ) -> subprocess.CompletedProcess[str]:
     process = subprocess.Popen(
         command,
@@ -2945,18 +2948,32 @@ def run_process_with_timeout(
         env=env,
         cwd=str(cwd) if cwd else None,
     )
-    try:
-        stdout, stderr = process.communicate(timeout=timeout_seconds)
-    except subprocess.TimeoutExpired as error:
-        terminate_process_tree(process)
-        try:
-            stdout, stderr = process.communicate(timeout=5)
-        except subprocess.TimeoutExpired:
-            stdout = error.output or ""
-            stderr = error.stderr or ""
-        raise subprocess.TimeoutExpired(command, timeout_seconds, output=stdout, stderr=stderr) from error
+    start_time = time.monotonic()
 
-    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+    while True:
+        elapsed = time.monotonic() - start_time
+        remaining = timeout_seconds - elapsed
+        if remaining <= 0:
+            terminate_process_tree(process)
+            try:
+                stdout, stderr = process.communicate(timeout=5)
+            except subprocess.TimeoutExpired as error:
+                stdout = error.output or ""
+                stderr = error.stderr or ""
+            raise subprocess.TimeoutExpired(command, timeout_seconds, output=stdout, stderr=stderr)
+
+        wait_seconds = max(0.1, min(float(heartbeat_interval_seconds), remaining))
+        try:
+            stdout, stderr = process.communicate(timeout=wait_seconds)
+            return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+        except subprocess.TimeoutExpired:
+            elapsed = time.monotonic() - start_time
+            if heartbeat_callback:
+                try:
+                    heartbeat_callback(elapsed)
+                except BaseException:
+                    terminate_process_tree(process)
+                    raise
 
 
 def terminate_process_tree(process: subprocess.Popen[str]) -> None:
@@ -2971,6 +2988,14 @@ def terminate_process_tree(process: subprocess.Popen[str]) -> None:
         return
 
     process.kill()
+
+
+def format_elapsed_seconds(seconds: float) -> str:
+    total_seconds = max(0, int(seconds))
+    minutes, remaining_seconds = divmod(total_seconds, 60)
+    if minutes:
+        return f"{minutes}m {remaining_seconds:02d}s"
+    return f"{remaining_seconds}s"
 
 
 def console_safe(text: str) -> str:
@@ -3048,6 +3073,7 @@ def run_seconv_pgs_ocr(
     timeout_seconds: int,
     tesseract: Path | None,
     tessdata_dirs: list[Path],
+    heartbeat_callback: Callable[[float], None] | None = None,
 ) -> bool:
     command = [
         str(seconv),
@@ -3070,6 +3096,7 @@ def run_seconv_pgs_ocr(
             timeout_seconds,
             env=tesseract_env(tesseract, tessdata_dirs, ocr_language),
             cwd=cache_dir,
+            heartbeat_callback=heartbeat_callback,
         )
     except subprocess.TimeoutExpired:
         print(f"  Warning: seconv OCR exceeded {timeout_seconds}s on {sup_path.name}")
@@ -3093,6 +3120,7 @@ def run_subtitle_edit_pgs_ocr(
     output_srt_path: Path,
     cache_dir: Path,
     timeout_seconds: int,
+    heartbeat_callback: Callable[[float], None] | None = None,
 ) -> bool:
     command = [
         str(subtitle_edit),
@@ -3104,7 +3132,12 @@ def run_subtitle_edit_pgs_ocr(
     print(f"  OCR PGS via Subtitle Edit: {format_command(command)}")
 
     try:
-        result = run_process_with_timeout(command, timeout_seconds, cwd=cache_dir)
+        result = run_process_with_timeout(
+            command,
+            timeout_seconds,
+            cwd=cache_dir,
+            heartbeat_callback=heartbeat_callback,
+        )
     except subprocess.TimeoutExpired:
         print(f"  Warning: Subtitle Edit OCR exceeded {timeout_seconds}s on {sup_path.name}")
         return False
@@ -3132,6 +3165,7 @@ def run_automatic_pgs_ocr(
     ocr_language: str,
     timeout_seconds: int,
     allow_legacy_subtitle_edit_ocr: bool,
+    heartbeat_callback: Callable[[float], None] | None = None,
 ) -> bool:
     if seconv:
         return run_seconv_pgs_ocr(
@@ -3143,6 +3177,7 @@ def run_automatic_pgs_ocr(
             timeout_seconds=timeout_seconds,
             tesseract=tesseract,
             tessdata_dirs=tessdata_dirs,
+            heartbeat_callback=heartbeat_callback,
         )
 
     if subtitle_edit and allow_legacy_subtitle_edit_ocr:
@@ -3152,6 +3187,7 @@ def run_automatic_pgs_ocr(
             output_srt_path=output_srt_path,
             cache_dir=cache_dir,
             timeout_seconds=timeout_seconds,
+            heartbeat_callback=heartbeat_callback,
         )
 
     print(
@@ -3213,6 +3249,23 @@ def ensure_pgs_ocr_cache(
     ocr_target_items = sorted(ocr_targets.values(), key=lambda item: item.order)
     for ocr_index, track in enumerate(ocr_target_items, start=1):
         ensure_not_cancelled(cancel_callback)
+        def ocr_heartbeat(ocr_language: str) -> Callable[[float], None]:
+            def heartbeat(elapsed_seconds: float) -> None:
+                ensure_not_cancelled(cancel_callback)
+                if progress_callback:
+                    progress_callback(
+                        (
+                            f"OCR PGS track {track.id} ({ocr_index}/{len(ocr_target_items)}) "
+                            f"with {ocr_language}: "
+                            f"{format_elapsed_seconds(elapsed_seconds)} / "
+                            f"{format_elapsed_seconds(pgs_ocr_timeout_seconds)}"
+                        ),
+                        ocr_index,
+                        len(ocr_target_items),
+                    )
+
+            return heartbeat
+
         if progress_callback:
             progress_callback(
                 f"OCR PGS track {track.id} ({ocr_index}/{len(ocr_target_items)})",
@@ -3311,6 +3364,7 @@ def ensure_pgs_ocr_cache(
                         ocr_language=ocr_language,
                         timeout_seconds=pgs_ocr_timeout_seconds,
                         allow_legacy_subtitle_edit_ocr=allow_legacy_subtitle_edit_ocr,
+                        heartbeat_callback=ocr_heartbeat(ocr_language),
                     )
                 candidates.append((ocr_language, candidate_srt_path))
 
@@ -3345,6 +3399,7 @@ def ensure_pgs_ocr_cache(
                 ocr_language=ocr_languages[0],
                 timeout_seconds=pgs_ocr_timeout_seconds,
                 allow_legacy_subtitle_edit_ocr=allow_legacy_subtitle_edit_ocr,
+                heartbeat_callback=ocr_heartbeat(ocr_languages[0]),
             )
 
 
