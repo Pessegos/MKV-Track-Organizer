@@ -427,7 +427,6 @@ class MainWindow(QMainWindow):
         self.variant_check = QCheckBox("Detect language variants")
         self.auto_pgs_ocr_check = QCheckBox("Auto PGS OCR")
         self.auto_commentary_ocr_check = QCheckBox("Commentary/SDH OCR")
-        self.validate_variant_ocr_check = QCheckBox("Validate variants OCR")
         self.report_check = QCheckBox("Write report")
 
         self.metadata_combo = QComboBox()
@@ -647,7 +646,6 @@ class MainWindow(QMainWindow):
         self.variant_check.setToolTip("Automatically detect language variants such as es-ES vs es-419")
         self.auto_pgs_ocr_check.setToolTip("Run OCR for PGS subtitles when needed for language detection")
         self.auto_commentary_ocr_check.setToolTip("OCR extra full-size PGS tracks that may be commentary or SDH; normal and named SDH tracks are skipped")
-        self.validate_variant_ocr_check.setToolTip("Optional slow OCR to validate variants already tagged in the MKV, such as es-419")
         self.report_check.setToolTip("Write TXT/JSON batch reports")
 
         metadata_label = QLabel("Metadata mode")
@@ -689,7 +687,6 @@ class MainWindow(QMainWindow):
             self.variant_check,
             self.auto_pgs_ocr_check,
             self.auto_commentary_ocr_check,
-            self.validate_variant_ocr_check,
             self.report_check,
         ]:
             advanced_toggles.addWidget(checkbox)
@@ -1331,7 +1328,6 @@ class MainWindow(QMainWindow):
         self.variant_check.setChecked(bool(args.detect_language_variants))
         self.auto_pgs_ocr_check.setChecked(bool(args.auto_pgs_ocr))
         self.auto_commentary_ocr_check.setChecked(bool(args.auto_commentary_ocr))
-        self.validate_variant_ocr_check.setChecked(bool(getattr(args, "validate_explicit_variant_ocr", False)))
         self.report_check.setChecked(bool(args.report))
 
         self.metadata_combo.setCurrentText(args.metadata_edit_mode)
@@ -2065,7 +2061,6 @@ class MainWindow(QMainWindow):
         args.detect_language_variants = self.variant_check.isChecked()
         args.auto_pgs_ocr = self.auto_pgs_ocr_check.isChecked()
         args.auto_commentary_ocr = self.auto_commentary_ocr_check.isChecked()
-        args.validate_explicit_variant_ocr = self.validate_variant_ocr_check.isChecked()
         args.report = self.report_check.isChecked()
         args.metadata_edit_mode = self.metadata_combo.currentText()
         args.audio_name_style = self.audio_name_style_combo.currentData() or "auto"
