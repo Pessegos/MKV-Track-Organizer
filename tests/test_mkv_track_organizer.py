@@ -1004,6 +1004,36 @@ def test_ordered_tracks_puts_default_audio_first() -> None:
     assert [track.id for track in m.ordered_tracks([video], audio_tracks, [])] == [0, 6, 1, 2]
 
 
+def test_duplicate_audio_detection_marks_source_and_leader() -> None:
+    first = audio_track(1, "eng", codec="AC-3", codec_id="A_AC3", channels=6)
+    second = audio_track(2, "eng", codec="AC-3", codec_id="A_AC3", channels=6)
+    stereo = audio_track(3, "eng", codec="AC-3", codec_id="A_AC3", channels=2)
+
+    m.detect_duplicate_tracks(Path("source-a.mkv"), [first, second, stereo], [])
+
+    assert first.duplicate_group
+    assert first.duplicate_of_id is None
+    assert second.duplicate_of_id == first.id
+    assert first.duplicate_member_ids == [1, 2]
+    assert "source-a.mkv" in second.duplicate_reason
+    assert not stereo.duplicate_group
+
+
+def test_duplicate_subtitle_detection_keeps_forced_separate() -> None:
+    first = subtitle_track(4, "eng")
+    second = subtitle_track(5, "eng")
+    forced = subtitle_track(6, "eng")
+    forced.role = "forced"
+    forced.forced = True
+
+    m.detect_duplicate_tracks(Path("source-b.mkv"), [], [first, second, forced])
+
+    assert first.duplicate_group
+    assert second.duplicate_of_id == first.id
+    assert "source-b.mkv" in first.duplicate_reason
+    assert not forced.duplicate_group
+
+
 def test_ordered_tracks_can_group_audio_by_region() -> None:
     video = video_track(0)
     cantonese = audio_track(1, "yue")

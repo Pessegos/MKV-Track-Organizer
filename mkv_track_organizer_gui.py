@@ -424,6 +424,7 @@ class MainWindow(QMainWindow):
         self.recursive_check = QCheckBox("Recursive")
         self.smart_subs_check = QCheckBox("Smart subtitle detection")
         self.drop_empty_check = QCheckBox("Drop empty subtitles")
+        self.duplicate_check = QCheckBox("Detect duplicates")
         self.variant_check = QCheckBox("Detect language variants")
         self.auto_pgs_ocr_check = QCheckBox("Auto PGS OCR")
         self.auto_commentary_ocr_check = QCheckBox("Commentary/SDH OCR")
@@ -648,6 +649,7 @@ class MainWindow(QMainWindow):
         self.subtitle_delays_edit.setToolTip("Manual subtitle delays in milliseconds. Example: 5:-250")
         self.smart_subs_check.setToolTip("Automatically classify forced, empty, commentary, and SDH subtitles")
         self.drop_empty_check.setToolTip("Exclude subtitles classified as empty")
+        self.duplicate_check.setToolTip("Highlight likely duplicate audio/subtitle tracks without dropping them")
         self.variant_check.setToolTip("Automatically detect language variants such as es-ES vs es-419")
         self.auto_pgs_ocr_check.setToolTip("Run OCR for PGS subtitles when needed for language detection")
         self.auto_commentary_ocr_check.setToolTip("OCR extra full-size PGS tracks that may be commentary or SDH; normal and named SDH tracks are skipped")
@@ -689,6 +691,7 @@ class MainWindow(QMainWindow):
         for checkbox in [
             self.smart_subs_check,
             self.drop_empty_check,
+            self.duplicate_check,
             self.variant_check,
             self.auto_pgs_ocr_check,
             self.auto_commentary_ocr_check,
@@ -1338,6 +1341,7 @@ class MainWindow(QMainWindow):
         self.recursive_check.setChecked(bool(args.recursive))
         self.smart_subs_check.setChecked(bool(args.smart_sub_detection))
         self.drop_empty_check.setChecked(bool(args.drop_empty_subs))
+        self.duplicate_check.setChecked(bool(getattr(args, "detect_duplicate_tracks", True)))
         self.variant_check.setChecked(bool(args.detect_language_variants))
         self.auto_pgs_ocr_check.setChecked(bool(args.auto_pgs_ocr))
         self.auto_commentary_ocr_check.setChecked(bool(args.auto_commentary_ocr))
@@ -2165,6 +2169,7 @@ class MainWindow(QMainWindow):
         args.dry_run = dry_run
         args.smart_sub_detection = self.smart_subs_check.isChecked()
         args.drop_empty_subs = self.drop_empty_check.isChecked()
+        args.detect_duplicate_tracks = self.duplicate_check.isChecked()
         args.detect_language_variants = self.variant_check.isChecked()
         args.auto_pgs_ocr = self.auto_pgs_ocr_check.isChecked()
         args.auto_commentary_ocr = self.auto_commentary_ocr_check.isChecked()
@@ -2389,6 +2394,7 @@ class MainWindow(QMainWindow):
             args.analyze_sub_sizes
             or args.smart_sub_detection
             or args.drop_empty_subs
+            or args.detect_duplicate_tracks
             or args.detect_language_variants
             or args.prepare_pgs_ocr
             or args.auto_commentary_ocr
@@ -2916,8 +2922,14 @@ class MainWindow(QMainWindow):
             ]
             for column, value in enumerate(values):
                 item = QTableWidgetItem(str(value))
+                tooltips = []
                 if column == 5 and track.get("original_name"):
-                    item.setToolTip(f"Original: {track['original_name']}")
+                    tooltips.append(f"Original: {track['original_name']}")
+                if track.get("duplicate_reason"):
+                    tooltips.append(str(track["duplicate_reason"]))
+                if tooltips:
+                    item.setToolTip("\n".join(tooltips))
+                self._style_track_item(item, track)
                 self.tracks_table.setItem(track_row, column, item)
         self.tracks_table.resizeColumnsToContents()
 
@@ -2935,12 +2947,23 @@ class MainWindow(QMainWindow):
         return track_type.title() if track_type else ""
 
     def _track_reason(self, track: dict) -> str:
-        reason = track.get("role_reason") or ""
-        if reason:
-            return reason
+        reasons = [track.get("duplicate_reason") or "", track.get("role_reason") or ""]
+        reason_text = " | ".join(reason for reason in reasons if reason)
+        if reason_text:
+            return reason_text
         scores = track.get("role_scores") or {}
         score_parts = [f"{name}:{score}" for name, score in scores.items() if score]
         return ", ".join(score_parts)
+
+    def _style_track_item(self, item: QTableWidgetItem, track: dict) -> None:
+        if not track.get("duplicate_group"):
+            return
+        if self.current_theme == "light":
+            item.setBackground(QColor("#ffe4e6"))
+            item.setForeground(QColor("#9f1239"))
+        else:
+            item.setBackground(QColor("#3a1f27"))
+            item.setForeground(QColor("#ffb4bd"))
 
     def _yes_no(self, value) -> str:
         return "Yes" if value else ""

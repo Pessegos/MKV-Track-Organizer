@@ -15,6 +15,7 @@
   "variant_context_dirs": [],
   "smart_sub_detection": true,
   "drop_empty_subs": true,
+  "detect_duplicate_tracks": true,
   "detect_language_variants": true,
   "auto_pgs_ocr": true,
   "auto_commentary_ocr": true,

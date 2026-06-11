@@ -14,6 +14,7 @@ The project currently includes a command-line interface, a desktop UI, an early 
 - Apply manual audio/subtitle delays by track ID when a source needs sync correction.
 - Estimate fixed audio delay between a reference file and a source file, then apply it in Organizer or export shifted audio tracks.
 - Detect forced, empty, commentary, and SDH subtitle tracks.
+- Highlight likely duplicate audio/subtitle tracks in the Organizer preview without dropping them automatically.
 - Detect regional language variants such as Portuguese, Spanish, French, and Chinese variants.
 - Use OCR for PGS subtitles when text is needed for language or role detection.
 - Generate TXT/JSON reports for batch runs.
