@@ -1018,12 +1018,12 @@ def test_config_defaults(tmp_path: Path) -> None:
     assert defaults["regional_order"] == ["asia", "americas"]
 
 
-def test_parser_defaults_keep_commentary_ocr_opt_in() -> None:
+def test_parser_defaults_keep_commentary_ocr_enabled() -> None:
     parser = m.build_parser({})
     args = parser.parse_args([])
 
     assert args.auto_pgs_ocr is True
-    assert args.auto_commentary_ocr is False
+    assert args.auto_commentary_ocr is True
 
 
 def test_config_metadata_edit_mode_accepts_off_and_only(tmp_path: Path) -> None:
