@@ -292,6 +292,7 @@ class MainWindow(QMainWindow):
         ("30 min - Wide", 1800.0),
         ("Custom...", AUDIO_SYNC_CUSTOM_PRESET),
     )
+    AUDIO_SYNC_SAMPLE_RATE = 16_000
     FINALIZATION_PROGRESS_UNITS = 10
     TRACK_COLUMNS = [
         "ID",
@@ -510,10 +511,6 @@ class MainWindow(QMainWindow):
         self.audio_sync_checkpoints_spin = QSpinBox()
         self.audio_sync_checkpoints_spin.setRange(1, 20)
         self.audio_sync_checkpoints_spin.setValue(4)
-        self.audio_sync_sample_rate_combo = QComboBox()
-        for sample_rate in (8_000, 16_000, 24_000, 48_000, 96_000):
-            self.audio_sync_sample_rate_combo.addItem(f"{sample_rate} Hz", sample_rate)
-        self.audio_sync_sample_rate_combo.setCurrentIndex(1)
         self.audio_sync_check_button = QPushButton("Check tools")
         self.audio_sync_load_button = QPushButton("Load streams")
         self.audio_sync_analyze_button = QPushButton("Analyze")
@@ -885,7 +882,6 @@ class MainWindow(QMainWindow):
         self.audio_sync_source_combo.setToolTip("Source audio stream to compare against the reference")
         self.audio_sync_duration_combo.setToolTip("Longer windows are slower but more reliable. 120 seconds is a balanced default.")
         self.audio_sync_spacing_combo.setToolTip("Distance between checkpoints. Wider spacing checks whether the delay stays stable.")
-        self.audio_sync_sample_rate_combo.setToolTip("Analysis sample rate. 16000 Hz is usually enough; higher values are slower.")
         compare_grid.addWidget(QLabel("Reference audio"), 0, 0)
         compare_grid.addWidget(self.audio_sync_ref_combo, 0, 1)
         compare_grid.addWidget(QLabel("Source audio"), 0, 2)
@@ -900,8 +896,6 @@ class MainWindow(QMainWindow):
         compare_grid.addWidget(self.audio_sync_spacing_combo, 2, 3)
         compare_grid.addWidget(QLabel("Max offset"), 3, 0)
         compare_grid.addWidget(self.audio_sync_max_offset_edit, 3, 1)
-        compare_grid.addWidget(QLabel("Sample rate"), 3, 2)
-        compare_grid.addWidget(self.audio_sync_sample_rate_combo, 3, 3)
         root.addWidget(compare_group)
 
         self.audio_sync_check_button.setIcon(style.standardIcon(QStyle.SP_DialogApplyButton))
@@ -1965,7 +1959,7 @@ class MainWindow(QMainWindow):
                 self.audio_sync_custom_spacing_seconds,
             ),
             max_offset_seconds=audio_sync.parse_time(self.audio_sync_max_offset_edit.text()),
-            sample_rate=int(self.audio_sync_sample_rate_combo.currentData()),
+            sample_rate=self.AUDIO_SYNC_SAMPLE_RATE,
         )
 
     def _populate_audio_sync_combo(self, combo: QComboBox, streams: list[audio_sync.MediaStream]) -> None:
