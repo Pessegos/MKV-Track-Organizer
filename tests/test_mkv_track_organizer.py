@@ -860,6 +860,47 @@ def test_mkvmerge_command_applies_audio_and_subtitle_delays(tmp_path: Path) -> N
     assert "2:-250" in sync_values
 
 
+def test_merge_output_path_defaults_to_merged_suffix(tmp_path: Path) -> None:
+    first = tmp_path / "main.mkv"
+    second = tmp_path / "extra.mkv"
+
+    assert m.merge_output_path_for([first, second]) == tmp_path / "_sorted" / "main.merged.mkv"
+    assert m.merge_output_path_for([first, second], output_suffix="hybrid") == tmp_path / "_sorted" / "main.hybrid.mkv"
+
+
+def test_mkvmerge_command_can_merge_multiple_sources(tmp_path: Path) -> None:
+    first_input = tmp_path / "main.mkv"
+    second_input = tmp_path / "extra.mkv"
+    main_video = video_track(0)
+    main_audio = audio_track(1)
+    extra_video = video_track(0)
+    extra_audio = audio_track(1, "por")
+
+    for track in [main_video, main_audio]:
+        track.source_index = 0
+        track.source_name = first_input.name
+    for track in [extra_video, extra_audio]:
+        track.source_index = 1
+        track.source_name = second_input.name
+    extra_video.drop = True
+    main_audio.suggested_name = "English - DTS-HD MA 5.1"
+    extra_audio.suggested_name = "Portuguese - DTS-HD MA 5.1"
+
+    command = m.build_mkvmerge_command(
+        mkvmerge=Path("mkvmerge"),
+        input_path=[first_input, second_input],
+        output_path=tmp_path / "out.mkv",
+        videos=[main_video, extra_video],
+        audio_tracks=[main_audio, extra_audio],
+        subtitles=[],
+    )
+
+    assert str(first_input) in command
+    assert str(second_input) in command
+    assert "--no-video" in command
+    assert command[command.index("--track-order") + 1] == "0:0,0:1,1:1"
+
+
 def test_track_delay_overrides_validate_track_type() -> None:
     audio = audio_track(1)
     subtitle = subtitle_track(2)
@@ -1227,6 +1268,61 @@ def test_run_batch_returns_reports_and_events(tmp_path: Path, monkeypatch) -> No
     ]
     progress_events = [event for event in events if event.kind == "file-progress"]
     assert [(event.step, event.steps) for event in progress_events] == [(5, 100), (100, 100)]
+
+
+def test_run_batch_merge_inputs_uses_single_report(tmp_path: Path, monkeypatch) -> None:
+    first = tmp_path / "main.mkv"
+    second = tmp_path / "extra.mkv"
+    first.write_bytes(b"")
+    second.write_bytes(b"")
+    args = argparse.Namespace(
+        path=first,
+        output_dir=None,
+        output_suffix="",
+        report=False,
+        report_dir=None,
+        report_format="both",
+        dry_run=True,
+        merge_inputs=True,
+        detect_language_variants=False,
+        batch_language_variant_consensus=True,
+    )
+    context = m.BatchRunContext(
+        args=args,
+        input_files=[first, second],
+        source_root=None,
+        forced_subtitle_ids=set(),
+    )
+
+    def fake_process_merged_inputs(
+        input_files,
+        output_file,
+        _args,
+        _forced_ids,
+        _consensus,
+        progress_callback=None,
+        cancel_callback=None,
+    ):
+        if progress_callback:
+            progress_callback("Preview complete", 100, 100)
+        return m.file_report_data(input_files[0], output_file, "dry-run", input_paths=input_files)
+
+    monkeypatch.setattr(m, "process_merged_inputs", fake_process_merged_inputs)
+    events: list[m.BatchRunEvent] = []
+
+    result = m.run_batch(context, events.append)
+
+    assert result.failures == 0
+    assert len(result.reports) == 1
+    assert result.reports[0]["inputs"] == [str(first), str(second)]
+    assert result.reports[0]["output"].endswith("main.merged.mkv")
+    assert [event.kind for event in events] == [
+        "batch-started",
+        "file-started",
+        "file-progress",
+        "file-finished",
+        "batch-finished",
+    ]
 
 
 def test_run_batch_can_be_cancelled(tmp_path: Path, monkeypatch) -> None:

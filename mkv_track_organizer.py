@@ -203,6 +203,9 @@ class TrackInfo:
     duplicate_reason: str = ""
     duplicate_source: str = ""
     duplicate_of_source: str = ""
+    source_index: int = 0
+    source_path: str = ""
+    source_name: str = ""
 
 
 @dataclass
@@ -282,6 +285,7 @@ CONFIG_BOOL_KEYS = {
     "smart_sub_detection",
     "drop_empty_subs",
     "detect_duplicate_tracks",
+    "merge_inputs",
     "detect_language_variants",
     "batch_language_variant_consensus",
     "prepare_pgs_ocr",
@@ -2475,8 +2479,10 @@ def load_metadata(mkvmerge: Path, input_path: Path) -> dict[str, Any]:
         raise OrganizerError(f"mkvmerge -J returned invalid JSON: {error}") from error
 
 
-def build_tracks(metadata: dict[str, Any]) -> list[TrackInfo]:
+def build_tracks(metadata: dict[str, Any], source_index: int = 0, source_path: Path | None = None) -> list[TrackInfo]:
     tracks: list[TrackInfo] = []
+    source_text = str(source_path) if source_path else ""
+    source_name = source_path.name if source_path else ""
 
     for order, raw_track in enumerate(metadata.get("tracks", [])):
         properties = raw_track.get("properties") or {}
@@ -2493,11 +2499,14 @@ def build_tracks(metadata: dict[str, Any]) -> list[TrackInfo]:
             output_language=language,
             language_name=language_display_name(language),
             original_name=original_name,
-            order=order,
+            order=source_index * 100000 + order,
             properties=properties,
             channels=parse_channels(properties.get("audio_channels")),
             default=bool(properties.get("default_track", False)),
             forced=bool(properties.get("forced_track", False)),
+            source_index=source_index,
+            source_path=source_text,
+            source_name=source_name,
         )
         tracks.append(track)
 
@@ -4626,8 +4635,21 @@ def reset_duplicate_tracking(tracks: Iterable[TrackInfo]) -> None:
         track.duplicate_of_source = ""
 
 
-def duplicate_source_label(input_path: Path) -> str:
-    return input_path.name or str(input_path)
+def duplicate_source_label(input_path: Path | None = None, track: TrackInfo | None = None) -> str:
+    if track and track.source_name:
+        return track.source_name
+    if track and track.source_path:
+        return Path(track.source_path).name
+    if input_path:
+        return input_path.name or str(input_path)
+    return ""
+
+
+def duplicate_track_label(track: TrackInfo, fallback_input_path: Path | None = None) -> str:
+    source = duplicate_source_label(fallback_input_path, track)
+    if source:
+        return f"{source} track {track.id}"
+    return f"track {track.id}"
 
 
 def duplicate_language_key(track: TrackInfo) -> str:
@@ -4716,25 +4738,26 @@ def duplicate_group_reason(track: TrackInfo) -> str:
 def mark_duplicate_group(input_path: Path, tracks: list[TrackInfo]) -> None:
     if len(tracks) < 2:
         return
-    source = duplicate_source_label(input_path)
     leader = min(tracks, key=lambda item: item.order)
     member_ids = [track.id for track in sorted(tracks, key=lambda item: item.order)]
-    member_text = ", ".join(str(track_id) for track_id in member_ids)
-    group_id = f"{source}:{leader.type}:{leader.id}"
+    member_text = ", ".join(duplicate_track_label(track, input_path) for track in sorted(tracks, key=lambda item: item.order))
+    group_id = f"{duplicate_source_label(input_path, leader)}:{leader.type}:{leader.id}"
     reason = duplicate_group_reason(leader)
+    leader_label = duplicate_track_label(leader, input_path)
 
     for track in tracks:
+        source = duplicate_source_label(input_path, track)
         track.duplicate_group = group_id
         track.duplicate_member_ids = member_ids
         track.duplicate_source = source
         if track is leader:
             track.duplicate_of_id = None
             track.duplicate_of_source = ""
-            track.duplicate_reason = f"Possible duplicate group in {source}: tracks {member_text}; {reason}"
+            track.duplicate_reason = f"Possible duplicate group: {member_text}; {reason}"
         else:
             track.duplicate_of_id = leader.id
-            track.duplicate_of_source = source
-            track.duplicate_reason = f"Possible duplicate of track {leader.id} in {source}; {reason}"
+            track.duplicate_of_source = duplicate_source_label(input_path, leader)
+            track.duplicate_reason = f"Possible duplicate of {leader_label}; {reason}"
 
 
 def detect_duplicate_tracks(input_path: Path, audio_tracks: list[TrackInfo], subtitles: list[TrackInfo]) -> None:
@@ -4875,9 +4898,10 @@ def ordered_tracks(
     language_order_style: str = "default",
     regional_order: Any = None,
 ) -> list[TrackInfo]:
+    included_videos = [track for track in videos if not track.drop]
     included_subtitles = [track for track in subtitles if not track.drop]
     return (
-        sorted(videos, key=lambda item: item.order)
+        sorted(included_videos, key=lambda item: item.order)
         + sorted(audio_tracks, key=lambda item: audio_sort_key(item, language_order_style, regional_order))
         + sorted(included_subtitles, key=lambda item: subtitle_sort_key(item, language_order_style, regional_order))
     )
@@ -5021,7 +5045,7 @@ def build_mkvpropedit_command(
 
 def build_mkvmerge_command(
     mkvmerge: Path,
-    input_path: Path,
+    input_path: Path | list[Path],
     output_path: Path,
     videos: list[TrackInfo],
     audio_tracks: list[TrackInfo],
@@ -5030,42 +5054,60 @@ def build_mkvmerge_command(
     regional_order: Any = None,
 ) -> list[str]:
     command = command_with_mkvtoolnix_ui_language([str(mkvmerge), "--output", str(output_path)])
+    input_paths = [input_path] if isinstance(input_path, Path) else list(input_path)
 
-    for track in videos:
-        command.extend(["--default-track-flag", f"{track.id}:{'yes' if track.default else 'no'}"])
+    for source_index, source_path in enumerate(input_paths):
+        source_videos = [track for track in videos if track.source_index == source_index]
+        source_audio = [track for track in audio_tracks if track.source_index == source_index]
+        source_subtitles = [track for track in subtitles if track.source_index == source_index]
+        included_videos = [track for track in source_videos if not track.drop]
+        included_subtitles = [track for track in source_subtitles if not track.drop]
 
-    for track in audio_tracks:
-        command.extend(["--language", f"{track.id}:{language_for_mkvmerge(track.output_language)}"])
-        command.extend(["--track-name", f"{track.id}:{track.suggested_name}"])
-        command.extend(["--default-track-flag", f"{track.id}:{'yes' if track.default else 'no'}"])
-        command.extend(["--commentary-flag", f"{track.id}:{'yes' if detect_audio_role(track) == 'Commentary' else 'no'}"])
-        if track.delay_ms:
-            command.extend(["--sync", f"{track.id}:{track.delay_ms}"])
+        if len(input_paths) > 1:
+            if included_videos:
+                command.extend(["--video-tracks", ",".join(str(track.id) for track in included_videos)])
+            else:
+                command.append("--no-video")
+            if source_audio:
+                command.extend(["--audio-tracks", ",".join(str(track.id) for track in source_audio)])
+            else:
+                command.append("--no-audio")
+            if included_subtitles:
+                command.extend(["--subtitle-tracks", ",".join(str(track.id) for track in included_subtitles)])
+            else:
+                command.append("--no-subtitles")
+        elif any(track.drop for track in source_subtitles):
+            if included_subtitles:
+                command.extend(["--subtitle-tracks", ",".join(str(track.id) for track in included_subtitles)])
+            else:
+                command.append("--no-subtitles")
 
-    included_subtitles = [track for track in subtitles if not track.drop]
-    dropped_subtitles = [track for track in subtitles if track.drop]
+        for track in included_videos:
+            command.extend(["--default-track-flag", f"{track.id}:{'yes' if track.default else 'no'}"])
 
-    if dropped_subtitles:
-        if included_subtitles:
-            command.extend(["--subtitle-tracks", ",".join(str(track.id) for track in included_subtitles)])
-        else:
-            command.append("--no-subtitles")
+        for track in source_audio:
+            command.extend(["--language", f"{track.id}:{language_for_mkvmerge(track.output_language)}"])
+            command.extend(["--track-name", f"{track.id}:{track.suggested_name}"])
+            command.extend(["--default-track-flag", f"{track.id}:{'yes' if track.default else 'no'}"])
+            command.extend(["--commentary-flag", f"{track.id}:{'yes' if detect_audio_role(track) == 'Commentary' else 'no'}"])
+            if track.delay_ms:
+                command.extend(["--sync", f"{track.id}:{track.delay_ms}"])
 
-    for track in included_subtitles:
-        command.extend(["--language", f"{track.id}:{language_for_mkvmerge(track.output_language)}"])
-        command.extend(["--track-name", f"{track.id}:{track.suggested_name}"])
-        command.extend(["--default-track-flag", f"{track.id}:{'yes' if track.default else 'no'}"])
-        command.extend(["--forced-display-flag", f"{track.id}:{'yes' if track.forced else 'no'}"])
-        command.extend(["--hearing-impaired-flag", f"{track.id}:{'yes' if track.role == 'sdh' else 'no'}"])
-        command.extend(["--commentary-flag", f"{track.id}:{'yes' if track.role == 'commentary' else 'no'}"])
-        if track.delay_ms:
-            command.extend(["--sync", f"{track.id}:{track.delay_ms}"])
+        for track in included_subtitles:
+            command.extend(["--language", f"{track.id}:{language_for_mkvmerge(track.output_language)}"])
+            command.extend(["--track-name", f"{track.id}:{track.suggested_name}"])
+            command.extend(["--default-track-flag", f"{track.id}:{'yes' if track.default else 'no'}"])
+            command.extend(["--forced-display-flag", f"{track.id}:{'yes' if track.forced else 'no'}"])
+            command.extend(["--hearing-impaired-flag", f"{track.id}:{'yes' if track.role == 'sdh' else 'no'}"])
+            command.extend(["--commentary-flag", f"{track.id}:{'yes' if track.role == 'commentary' else 'no'}"])
+            if track.delay_ms:
+                command.extend(["--sync", f"{track.id}:{track.delay_ms}"])
 
-    command.append(str(input_path))
+        command.append(str(source_path))
 
     ordered = ordered_tracks(videos, audio_tracks, subtitles, language_order_style, regional_order)
     if ordered:
-        command.extend(["--track-order", ",".join(f"0:{track.id}" for track in ordered)])
+        command.extend(["--track-order", ",".join(f"{track.source_index}:{track.id}" for track in ordered)])
 
     return command
 
@@ -5073,6 +5115,10 @@ def build_mkvmerge_command(
 def track_note_text(track: TrackInfo) -> str:
     notes = [note for note in [track.duplicate_reason, track.role_reason] if note]
     return f" | {' | '.join(notes)}" if notes else ""
+
+
+def track_source_text(track: TrackInfo, show_source: bool) -> str:
+    return f" | source={track.source_name}" if show_source and track.source_name else ""
 
 
 def print_track_plan(
@@ -5083,16 +5129,22 @@ def print_track_plan(
     regional_order: Any = None,
 ) -> None:
     print("\nTrack plan:")
+    show_source = any(track.source_index for track in [*videos, *audio_tracks, *subtitles])
 
     for track in sorted(videos, key=lambda item: item.order):
-        print(f"  video    {track.id:>3}: default={'yes' if track.default else 'no'}")
+        drop_text = " | DROP" if track.drop else ""
+        print(
+            f"  video    {track.id:>3}: default={'yes' if track.default else 'no'}"
+            f"{track_source_text(track, show_source)}{drop_text}"
+        )
 
     for track in sorted(audio_tracks, key=lambda item: audio_sort_key(item, language_order_style, regional_order)):
         reason_text = track_note_text(track)
         delay_text = f" | delay={track.delay_ms:+d}ms" if track.delay_ms else ""
         print(
             f"  audio    {track.id:>3}: {track.language_name} | "
-            f"{track.suggested_name} | default={'yes' if track.default else 'no'}{delay_text}{reason_text}"
+            f"{track.suggested_name} | default={'yes' if track.default else 'no'}"
+            f"{track_source_text(track, show_source)}{delay_text}{reason_text}"
         )
 
     for track in sorted(
@@ -5106,7 +5158,7 @@ def print_track_plan(
         reason_text = track_note_text(track)
         print(
             f"  subtitle {track.id:>3}: {track.suggested_name}"
-            f"{default_text}{forced_text}{delay_text}{drop_text}{reason_text}"
+            f"{default_text}{forced_text}{track_source_text(track, show_source)}{delay_text}{drop_text}{reason_text}"
         )
 
 
@@ -5163,6 +5215,9 @@ def track_report_data(track: TrackInfo) -> dict[str, Any]:
     score = track.role_score
     return {
         "id": track.id,
+        "source_index": track.source_index,
+        "source_path": track.source_path,
+        "source_name": track.source_name,
         "type": track.type,
         "codec": track.codec,
         "input_language": track.language,
@@ -5211,9 +5266,11 @@ def file_report_data(
     audio_tracks: list[TrackInfo] | None = None,
     subtitles: list[TrackInfo] | None = None,
     message: str = "",
+    input_paths: list[Path] | None = None,
 ) -> dict[str, Any]:
     return {
         "input": str(input_path),
+        "inputs": [str(path) for path in (input_paths or [input_path])],
         "output": str(output_path),
         "status": status,
         "message": message,
@@ -5287,6 +5344,10 @@ def write_batch_report(
             )
             if item.get("message"):
                 lines.append(f"  note:   {item['message']}")
+            item_inputs = item.get("inputs") or []
+            if len(item_inputs) > 1:
+                lines.append("  sources:")
+                lines.extend(f"    - {input_item}" for input_item in item_inputs)
             track_groups = item.get("tracks", {})
             audio_tracks = track_groups.get("audio", [])
             subtitles = track_groups.get("subtitles", [])
@@ -5530,6 +5591,20 @@ def output_path_for(
     relative_output = relative_path.with_name(output_name)
     base_dir = output_dir or (source_root / SORTED_DIR_NAME)
     return base_dir / relative_output
+
+
+def merge_output_path_for(
+    input_files: list[Path],
+    output_dir: Path | None = None,
+    output_suffix: str | None = None,
+) -> Path:
+    if not input_files:
+        raise OrganizerError("No input files to merge.")
+    primary = input_files[0]
+    suffix = output_suffix_text(output_suffix) or ".merged"
+    output_name = f"{primary.stem}{suffix}.mkv"
+    base_dir = output_dir or (primary.parent / SORTED_DIR_NAME)
+    return base_dir / output_name
 
 
 def should_skip_generated_mkv_path(source_root: Path, candidate: Path) -> bool:
@@ -5803,6 +5878,32 @@ def remux_skip_message(input_path: Path, output_path: Path, args: argparse.Names
     return None
 
 
+def merge_remux_skip_message(input_files: list[Path], output_path: Path, args: argparse.Namespace) -> str | None:
+    for input_path in input_files:
+        if output_path.resolve() == input_path.resolve():
+            raise OrganizerError(
+                "Calculated merge output is the same as one of the inputs. "
+                "Use a different output folder or --output-suffix."
+            )
+
+    output_exists = output_path.exists()
+    if output_exists and args.skip_existing:
+        return "output already exists; merge skipped"
+
+    if output_exists and not args.dry_run and not args.overwrite:
+        raise OrganizerError(
+            f"Output already exists for this merge:\n{output_path}\n"
+            "Will not overwrite. Use --overwrite, --skip-existing, or --output-suffix."
+        )
+    if output_exists and args.overwrite:
+        action = "would overwrite" if args.dry_run else "will overwrite"
+        print(f"Warning: merge output already exists; {action}: {output_path}")
+    elif output_exists and args.dry_run:
+        print("Warning: merge output already exists; because this is dry-run, continuing only to show the plan.")
+
+    return None
+
+
 def command_with_gui_mode(command: list[str]) -> list[str]:
     if "--gui-mode" in command:
         return command
@@ -5896,7 +5997,7 @@ def process_file(
 
     progress("Reading metadata", 5)
     metadata = load_metadata(args.mkvmerge, input_path)
-    tracks = build_tracks(metadata)
+    tracks = build_tracks(metadata, source_index=0, source_path=input_path)
 
     videos = [track for track in tracks if track.type == "video"]
     audio_tracks = [track for track in tracks if track.type == "audio"]
@@ -5908,7 +6009,8 @@ def process_file(
     apply_subtitle_language_overrides(subtitles, args.subtitle_language_overrides)
     apply_track_delay_overrides(audio_tracks, subtitles, args.audio_delay_overrides, args.subtitle_delay_overrides)
     if args.detect_language_variants:
-        apply_default_language_variants(subtitles)
+        for source_index in range(len(input_files)):
+            apply_default_language_variants(tracks_for_source(subtitles, source_index, "subtitles"))
     audio_name_style = getattr(args, "audio_name_style", "auto")
     language_order_style = getattr(args, "language_order_style", "default")
     regional_order = getattr(args, "regional_order", None)
@@ -5919,7 +6021,7 @@ def process_file(
         args.analyze_sub_sizes
         or args.smart_sub_detection
         or args.drop_empty_subs
-        or args.detect_duplicate_tracks
+        or getattr(args, "detect_duplicate_tracks", True)
         or args.detect_language_variants
         or args.auto_commentary_ocr
     )
@@ -5981,7 +6083,7 @@ def process_file(
     )
     infer_audio_commentary_from_subtitles(audio_tracks, subtitles)
     apply_audio_names(audio_tracks, audio_name_style)
-    if args.detect_duplicate_tracks:
+    if getattr(args, "detect_duplicate_tracks", True):
         detect_duplicate_tracks(input_path, audio_tracks, subtitles)
     apply_default_flags(videos, audio_tracks, subtitles, language_order_style, regional_order)
 
@@ -6129,6 +6231,239 @@ def process_file(
     )
 
 
+def tracks_for_source(tracks: list[TrackInfo], source_index: int, track_type: str | None = None) -> list[TrackInfo]:
+    return [
+        track for track in tracks
+        if track.source_index == source_index and (track_type is None or track.type == track_type)
+    ]
+
+
+def process_merged_inputs(
+    input_files: list[Path],
+    output_path: Path,
+    args: argparse.Namespace,
+    forced_subtitle_ids: set[int],
+    batch_variant_consensus: dict[str, str] | None = None,
+    progress_callback: Callable[[str, int, int], None] | None = None,
+    cancel_callback: Callable[[], bool] | None = None,
+) -> dict[str, Any]:
+    def progress(message: str, step: int, steps: int = 100) -> None:
+        ensure_not_cancelled(cancel_callback)
+        if progress_callback:
+            progress_callback(message, step, steps)
+
+    if len(input_files) < 2:
+        raise OrganizerError("Merge mode needs at least two MKV input files.")
+
+    print("\n====================================")
+    print("Merging sources:")
+    for input_path in input_files:
+        print(f"  - {input_path}")
+    print(f"Output: {output_path}")
+    print("====================================")
+
+    progress("Reading metadata", 5)
+    all_tracks: list[TrackInfo] = []
+    for source_index, input_path in enumerate(input_files):
+        metadata = load_metadata(args.mkvmerge, input_path)
+        tracks = build_tracks(metadata, source_index=source_index, source_path=input_path)
+        all_tracks.extend(tracks)
+
+    videos = [track for track in all_tracks if track.type == "video"]
+    audio_tracks = [track for track in all_tracks if track.type == "audio"]
+    subtitles = [track for track in all_tracks if track.type == "subtitles"]
+
+    if not videos and not audio_tracks and not subtitles:
+        raise OrganizerError("No video/audio/subtitle tracks found in the selected MKVs.")
+
+    primary_video_source_index = next((track.source_index for track in sorted(videos, key=lambda item: item.order)), 0)
+    for track in videos:
+        track.drop = track.source_index != primary_video_source_index
+
+    apply_subtitle_language_overrides(subtitles, args.subtitle_language_overrides)
+    apply_track_delay_overrides(audio_tracks, subtitles, args.audio_delay_overrides, args.subtitle_delay_overrides)
+    if args.detect_language_variants:
+        apply_default_language_variants(subtitles)
+
+    audio_name_style = getattr(args, "audio_name_style", "auto")
+    language_order_style = getattr(args, "language_order_style", "default")
+    regional_order = getattr(args, "regional_order", None)
+    apply_audio_names(audio_tracks, audio_name_style)
+
+    progress("Analyzing subtitle sizes", 15)
+    needs_subtitle_sizes = (
+        args.analyze_sub_sizes
+        or args.smart_sub_detection
+        or args.drop_empty_subs
+        or getattr(args, "detect_duplicate_tracks", True)
+        or args.detect_language_variants
+        or args.auto_commentary_ocr
+    )
+    if needs_subtitle_sizes and subtitles:
+        for source_index, input_path in enumerate(input_files):
+            source_subtitles = tracks_for_source(subtitles, source_index, "subtitles")
+            if source_subtitles:
+                analyze_subtitle_sizes(input_path, source_subtitles, args.mkvextract)
+    if args.detect_language_variants:
+        for source_index in range(len(input_files)):
+            apply_ordered_pgs_language_variants(tracks_for_source(subtitles, source_index, "subtitles"))
+
+    progress("Preparing OCR cache", 30)
+    needs_ocr_cache = args.detect_language_variants or args.auto_commentary_ocr or args.prepare_pgs_ocr
+    if needs_ocr_cache:
+        for source_index, input_path in enumerate(input_files):
+            source_subtitles = tracks_for_source(subtitles, source_index, "subtitles")
+            if not source_subtitles:
+                continue
+            cache_dir = args.ocr_cache_dir or (input_path.parent / OCR_CACHE_DIR_NAME)
+
+            def ocr_progress(message: str, index: int, total: int, source_name: str = input_path.name) -> None:
+                step = 30 + int(max(0, index - 1) * 15 / max(1, total))
+                progress(f"{source_name}: {message}", min(step, 44))
+
+            if args.prepare_pgs_ocr:
+                extract_pgs_for_manual_ocr(
+                    input_path=input_path,
+                    subtitles=source_subtitles,
+                    cache_dir=cache_dir,
+                    mkvextract=args.mkvextract,
+                )
+            ensure_pgs_ocr_cache(
+                input_path=input_path,
+                subtitles=source_subtitles,
+                cache_dir=cache_dir,
+                mkvextract=args.mkvextract,
+                pgs_ocr_command=args.pgs_ocr_command,
+                auto_pgs_ocr=args.auto_pgs_ocr,
+                auto_commentary_ocr=args.auto_commentary_ocr,
+                seconv=args.seconv,
+                subtitle_edit=args.subtitle_edit,
+                tesseract=args.tesseract,
+                tessdata_dirs=args.tessdata_dirs,
+                pgs_ocr_language=args.pgs_ocr_language,
+                pgs_ocr_timeout_seconds=args.pgs_ocr_timeout_seconds,
+                allow_legacy_subtitle_edit_ocr=args.allow_subtitle_edit_legacy_ocr,
+                auto_download_tessdata=args.auto_download_tessdata,
+                tessdata_model=args.tessdata_model,
+                force_pgs_ocr=args.force_pgs_ocr,
+                progress_callback=ocr_progress,
+                cancel_callback=cancel_callback,
+            )
+            attach_cached_ocr_text(input_path, source_subtitles, cache_dir)
+
+    progress("Detecting language variants", 45)
+    if args.detect_language_variants:
+        for source_index, input_path in enumerate(input_files):
+            source_subtitles = tracks_for_source(subtitles, source_index, "subtitles")
+            if source_subtitles:
+                cache_dir = args.ocr_cache_dir or (input_path.parent / OCR_CACHE_DIR_NAME)
+                detect_language_variants(input_path, source_subtitles, cache_dir, batch_variant_consensus)
+
+    progress("Classifying tracks", 60)
+    for source_index in range(len(input_files)):
+        classify_subtitle_roles(
+            subtitles=tracks_for_source(subtitles, source_index, "subtitles"),
+            audio_tracks=tracks_for_source(audio_tracks, source_index, "audio"),
+            forced_subtitle_ids=forced_subtitle_ids,
+            smart_sub_detection=args.smart_sub_detection,
+            drop_empty_subs=args.drop_empty_subs,
+        )
+    infer_audio_commentary_from_subtitles(audio_tracks, subtitles)
+    apply_audio_names(audio_tracks, audio_name_style)
+    if getattr(args, "detect_duplicate_tracks", True):
+        detect_duplicate_tracks(input_files[0], audio_tracks, subtitles)
+    apply_default_flags(videos, audio_tracks, subtitles, language_order_style, regional_order)
+
+    progress("Building track plan", 70)
+    if args.analyze_sub_sizes:
+        print_subtitle_size_report(subtitles)
+    if args.smart_sub_detection:
+        print_subtitle_role_score_report(subtitles)
+    print_track_plan(videos, audio_tracks, subtitles, language_order_style, regional_order)
+    print_track_explanations(subtitles, args.explain_track_ids)
+
+    metadata_mode = getattr(args, "metadata_edit_mode", "off")
+    if metadata_mode in {"auto", "only"}:
+        print("\nMetadata-only plan: no (multiple input sources require remux)")
+    if metadata_mode == "only":
+        raise OrganizerError("metadata_edit_mode=only cannot merge multiple input sources.")
+
+    skip_message = merge_remux_skip_message(input_files, output_path, args)
+    if skip_message:
+        print(f"Skipping: {skip_message}.")
+        progress("Skipped", 100)
+        return file_report_data(
+            input_files[0],
+            output_path,
+            "skipped",
+            videos=videos,
+            audio_tracks=audio_tracks,
+            subtitles=subtitles,
+            message=skip_message,
+            input_paths=input_files,
+        )
+
+    progress("Building command", 80)
+    command = build_mkvmerge_command(
+        mkvmerge=args.mkvmerge,
+        input_path=input_files,
+        output_path=output_path,
+        videos=videos,
+        audio_tracks=audio_tracks,
+        subtitles=subtitles,
+        language_order_style=language_order_style,
+        regional_order=regional_order,
+    )
+
+    print("\nmkvmerge command:")
+    print(format_command(command))
+
+    if args.dry_run:
+        print("DRY-RUN active: final merge was not executed.")
+        progress("Preview complete", 100)
+        return file_report_data(
+            input_files[0],
+            output_path,
+            "dry-run",
+            command=command,
+            videos=videos,
+            audio_tracks=audio_tracks,
+            subtitles=subtitles,
+            message=f"merged preview from {len(input_files)} sources",
+            input_paths=input_files,
+        )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.exists() and args.overwrite:
+        output_path.unlink()
+    progress("Merging output", 85)
+    result = run_command_with_progress(
+        command,
+        progress_callback,
+        "Merging output",
+        85,
+        100,
+        cancel_callback,
+    )
+
+    if result.returncode != 0:
+        raise OrganizerError(f"mkvmerge failed with exit code {result.returncode}: {output_path}")
+
+    print(f"Completed merge: {output_path}")
+    progress("Merge complete", 100)
+    return file_report_data(
+        input_files[0],
+        output_path,
+        "processed",
+        command=command,
+        videos=videos,
+        audio_tracks=audio_tracks,
+        subtitles=subtitles,
+        message=f"merged {len(input_files)} sources",
+        input_paths=input_files,
+    )
+
+
 def build_parser(config_defaults: dict[str, Any] | None = None) -> argparse.ArgumentParser:
     config_defaults = config_defaults or {}
 
@@ -6141,6 +6476,7 @@ def build_parser(config_defaults: dict[str, Any] | None = None) -> argparse.Argu
     parser.set_defaults(
         smart_sub_detection=default("smart_sub_detection", True),
         detect_duplicate_tracks=default("detect_duplicate_tracks", True),
+        merge_inputs=default("merge_inputs", False),
         detect_language_variants=default("detect_language_variants", True),
         auto_pgs_ocr=default("auto_pgs_ocr", True),
         auto_commentary_ocr=default("auto_commentary_ocr", True),
@@ -6162,6 +6498,21 @@ def build_parser(config_defaults: dict[str, Any] | None = None) -> argparse.Argu
     parser.add_argument("--no-config", action="store_true", help="Ignore mkv_track_organizer.config.json.")
     parser.add_argument("--recursive", action="store_true", help="Search for MKVs inside subfolders.")
     parser.add_argument("--dry-run", action="store_true", help="Show the plan and command without running the final remux.")
+    parser.add_argument(
+        "--merge-inputs",
+        dest="merge_inputs",
+        action="store_true",
+        help=(
+            "Merge all discovered/selected MKVs into one output. "
+            "The first source with video supplies video; audio/subtitle tracks are taken from every source."
+        ),
+    )
+    parser.add_argument(
+        "--no-merge-inputs",
+        dest="merge_inputs",
+        action="store_false",
+        help="Process multiple inputs as a batch instead of one merged output.",
+    )
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -6626,6 +6977,9 @@ def prepare_batch_run(args: argparse.Namespace, config_path: Path | None = None)
     else:
         input_files, source_root = collect_mkv_files(args.path, args.recursive)
 
+    if args.merge_inputs and len(input_files) < 2:
+        raise OrganizerError("Merge mode needs at least two MKV files.")
+
     return BatchRunContext(
         args=args,
         input_files=input_files,
@@ -6667,6 +7021,113 @@ def run_batch(
             source_root=source_root,
             cancelled=True,
         )
+
+    if getattr(args, "merge_inputs", False):
+        output_path = merge_output_path_for(
+            input_files,
+            output_dir=args.output_dir,
+            output_suffix=args.output_suffix,
+        )
+        primary_file = input_files[0]
+        emit_batch_event(
+            event_callback,
+            "file-started",
+            f"Merging {len(input_files)} sources",
+            file=primary_file,
+            index=1,
+            total=1,
+        )
+        try:
+            def emit_merge_progress(message: str, step: int, steps: int) -> None:
+                emit_batch_event(
+                    event_callback,
+                    "file-progress",
+                    f"Merge: {message}",
+                    file=primary_file,
+                    index=1,
+                    total=1,
+                    step=step,
+                    steps=steps,
+                )
+
+            report = process_merged_inputs(
+                input_files,
+                output_path,
+                args,
+                context.forced_subtitle_ids,
+                batch_variant_consensus,
+                progress_callback=emit_merge_progress if event_callback else None,
+                cancel_callback=cancel_callback,
+            )
+            reports.append(report)
+            emit_batch_event(
+                event_callback,
+                "file-finished",
+                f"Finished merge: {report['status']}",
+                file=primary_file,
+                index=1,
+                total=1,
+            )
+        except OrganizerCancelled:
+            cancelled = True
+            print("\nCancelled while merging sources.")
+            reports.append(
+                file_report_data(
+                    primary_file,
+                    output_path,
+                    "cancelled",
+                    message="operation cancelled",
+                    input_paths=input_files,
+                )
+            )
+            emit_batch_event(
+                event_callback,
+                "file-cancelled",
+                "Cancelled merge",
+                file=primary_file,
+                index=1,
+                total=1,
+            )
+        except OrganizerError as error:
+            failures += 1
+            print("\nError while merging sources:")
+            print(error)
+            reports.append(
+                file_report_data(
+                    primary_file,
+                    output_path,
+                    "error",
+                    message=str(error),
+                    input_paths=input_files,
+                )
+            )
+            emit_batch_event(
+                event_callback,
+                "file-error",
+                f"Merge: {error}",
+                file=primary_file,
+                index=1,
+                total=1,
+            )
+
+        write_batch_report(reports, args, source_root, input_files, failures)
+        result = BatchRunResult(
+            reports=reports,
+            failures=failures,
+            input_files=input_files,
+            source_root=source_root,
+            cancelled=cancelled,
+        )
+        if cancelled:
+            print("\nMerge cancelled.")
+            emit_batch_event(event_callback, "batch-cancelled", "Merge cancelled.")
+        elif failures:
+            print(f"\nMerge completed with {failures} error(s).")
+            emit_batch_event(event_callback, "batch-finished", f"Merge completed with {failures} error(s).")
+        else:
+            print("\nMerge completed without errors.")
+            emit_batch_event(event_callback, "batch-finished", "Merge completed without errors.")
+        return result
 
     for index, input_path in enumerate(input_files, start=1):
         try:

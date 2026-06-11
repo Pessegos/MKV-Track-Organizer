@@ -3,6 +3,7 @@
   "dry_run": false,
   "output_dir": null,
   "output_suffix": "",
+  "merge_inputs": false,
   "overwrite": false,
   "skip_existing": false,
   "report": true,

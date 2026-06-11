@@ -304,6 +304,7 @@ class MainWindow(QMainWindow):
     FINALIZATION_PROGRESS_UNITS = 10
     TRACK_COLUMNS = [
         "ID",
+        "Source",
         "Type",
         "Codec",
         "Input lang",
@@ -422,6 +423,7 @@ class MainWindow(QMainWindow):
         self.subtitle_delays_edit.setPlaceholderText("5:-250")
 
         self.recursive_check = QCheckBox("Recursive")
+        self.merge_inputs_check = QCheckBox("Merge selected sources")
         self.smart_subs_check = QCheckBox("Smart subtitle detection")
         self.drop_empty_check = QCheckBox("Drop empty subtitles")
         self.duplicate_check = QCheckBox("Detect duplicates")
@@ -647,6 +649,9 @@ class MainWindow(QMainWindow):
         self.forced_ids_edit.setToolTip("Manual forced-subtitle override, for example 5,8,12")
         self.audio_delays_edit.setToolTip("Manual audio delays in milliseconds. Example: 1:150, 2:-250")
         self.subtitle_delays_edit.setToolTip("Manual subtitle delays in milliseconds. Example: 5:-250")
+        self.merge_inputs_check.setToolTip(
+            "Mux selected MKVs into one output. The first source with video supplies video; audio/subtitles come from all sources."
+        )
         self.smart_subs_check.setToolTip("Automatically classify forced, empty, commentary, and SDH subtitles")
         self.drop_empty_check.setToolTip("Exclude subtitles classified as empty")
         self.duplicate_check.setToolTip("Highlight likely duplicate audio/subtitle tracks without dropping them")
@@ -689,6 +694,7 @@ class MainWindow(QMainWindow):
 
         advanced_toggles = QHBoxLayout()
         for checkbox in [
+            self.merge_inputs_check,
             self.smart_subs_check,
             self.drop_empty_check,
             self.duplicate_check,
@@ -728,7 +734,7 @@ class MainWindow(QMainWindow):
         self.tracks_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.tracks_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.tracks_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.tracks_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch)
+        self.tracks_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.Stretch)
         self.tracks_table.horizontalHeader().setStretchLastSection(True)
         self.tracks_table.setAlternatingRowColors(True)
         self.tracks_table.setSelectionBehavior(QTableWidget.SelectRows)
@@ -1339,6 +1345,7 @@ class MainWindow(QMainWindow):
         self.subtitle_delays_edit.setText(getattr(args, "subtitle_delays", "") or "")
 
         self.recursive_check.setChecked(bool(args.recursive))
+        self.merge_inputs_check.setChecked(bool(getattr(args, "merge_inputs", False)))
         self.smart_subs_check.setChecked(bool(args.smart_sub_detection))
         self.drop_empty_check.setChecked(bool(args.drop_empty_subs))
         self.duplicate_check.setChecked(bool(getattr(args, "detect_duplicate_tracks", True)))
@@ -2167,6 +2174,7 @@ class MainWindow(QMainWindow):
 
         args.recursive = self.recursive_check.isChecked()
         args.dry_run = dry_run
+        args.merge_inputs = self.merge_inputs_check.isChecked()
         args.smart_sub_detection = self.smart_subs_check.isChecked()
         args.drop_empty_subs = self.drop_empty_check.isChecked()
         args.detect_duplicate_tracks = self.duplicate_check.isChecked()
@@ -2908,6 +2916,7 @@ class MainWindow(QMainWindow):
         for track_row, track in enumerate(tracks):
             values = [
                 track.get("id", ""),
+                track.get("source_name", ""),
                 self._track_type_label(track.get("type", "")),
                 track.get("codec", ""),
                 track.get("input_language", ""),
@@ -2923,7 +2932,7 @@ class MainWindow(QMainWindow):
             for column, value in enumerate(values):
                 item = QTableWidgetItem(str(value))
                 tooltips = []
-                if column == 5 and track.get("original_name"):
+                if column == 6 and track.get("original_name"):
                     tooltips.append(f"Original: {track['original_name']}")
                 if track.get("duplicate_reason"):
                     tooltips.append(str(track["duplicate_reason"]))

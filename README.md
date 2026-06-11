@@ -7,6 +7,7 @@ The project currently includes a command-line interface, a desktop UI, an early 
 ## Features
 
 - Batch process one MKV file, a folder, or recursive folders.
+- Optionally merge selected MKV sources into one output; the first source with video supplies video while audio/subtitles can come from every source.
 - Keep originals safe by writing remuxed files to `_sorted` by default.
 - Preview changes before writing output files.
 - Rename audio tracks by format, language plus format, or keep existing names.
