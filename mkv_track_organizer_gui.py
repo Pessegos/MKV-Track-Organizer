@@ -355,6 +355,13 @@ class MainWindow(QMainWindow):
         "default": "Uses the existing organizer order rules.",
         "regional": "Groups languages by broad regions, with Europe before Americas and Asia.",
     }
+    REGIONAL_ORDER_HELP = {
+        "europe,americas,asia,oceania,middle-east-africa": "Europe, then Americas, Asia, Oceania, Middle East/Africa.",
+        "americas,europe,asia,oceania,middle-east-africa": "Americas, then Europe, Asia, Oceania, Middle East/Africa.",
+        "asia,europe,americas,oceania,middle-east-africa": "Asia, then Europe, Americas, Oceania, Middle East/Africa.",
+        "oceania,europe,americas,asia,middle-east-africa": "Oceania, then Europe, Americas, Asia, Middle East/Africa.",
+        "middle-east-africa,europe,americas,asia,oceania": "Middle East/Africa, then Europe, Americas, Asia, Oceania.",
+    }
     MAKEMKV_SELECTION_HELP = {
         "english": "Keeps video, English audio, subtitles, and attachments.",
         "all-audio": "Keeps video, every audio language, subtitles, and attachments.",
@@ -424,6 +431,15 @@ class MainWindow(QMainWindow):
         self.language_order_style_combo = QComboBox()
         self.language_order_style_combo.addItem("Default", "default")
         self.language_order_style_combo.addItem("Regional", "regional")
+        self.regional_order_combo = QComboBox()
+        self.regional_order_combo.addItem("Europe first", "europe,americas,asia,oceania,middle-east-africa")
+        self.regional_order_combo.addItem("Americas first", "americas,europe,asia,oceania,middle-east-africa")
+        self.regional_order_combo.addItem("Asia first", "asia,europe,americas,oceania,middle-east-africa")
+        self.regional_order_combo.addItem("Oceania first", "oceania,europe,americas,asia,middle-east-africa")
+        self.regional_order_combo.addItem(
+            "Middle East/Africa first",
+            "middle-east-africa,europe,americas,asia,oceania",
+        )
         self.report_format_combo = QComboBox()
         self.report_format_combo.addItems(["both", "json", "txt"])
 
@@ -514,6 +530,7 @@ class MainWindow(QMainWindow):
         self.audio_sync_check_button = QPushButton("Check tools")
         self.audio_sync_load_button = QPushButton("Load streams")
         self.audio_sync_analyze_button = QPushButton("Analyze")
+        self.audio_sync_apply_organizer_button = QPushButton("Use in Organizer")
         self.audio_sync_export_button = QPushButton("Export audio .mka")
         self.audio_sync_select_all_button = QPushButton("Select all")
         self.audio_sync_clear_selection_button = QPushButton("Clear")
@@ -521,6 +538,7 @@ class MainWindow(QMainWindow):
         self.audio_sync_check_button.setObjectName("secondaryButton")
         self.audio_sync_load_button.setObjectName("secondaryButton")
         self.audio_sync_analyze_button.setObjectName("primaryButton")
+        self.audio_sync_apply_organizer_button.setObjectName("secondaryButton")
         self.audio_sync_export_button.setObjectName("secondaryButton")
         self.audio_sync_select_all_button.setObjectName("secondaryButton")
         self.audio_sync_clear_selection_button.setObjectName("secondaryButton")
@@ -607,6 +625,7 @@ class MainWindow(QMainWindow):
         self._apply_combo_help(self.metadata_combo, self.METADATA_MODE_HELP)
         self._apply_combo_help(self.audio_name_style_combo, self.AUDIO_NAME_STYLE_HELP)
         self._apply_combo_help(self.language_order_style_combo, self.LANGUAGE_ORDER_STYLE_HELP)
+        self._apply_combo_help(self.regional_order_combo, self.REGIONAL_ORDER_HELP)
         self.subtitle_language_edit.setToolTip("Manual language override, for example spa:7,8; fr-CA:9")
         self.forced_ids_edit.setToolTip("Manual forced-subtitle override, for example 5,8,12")
         self.audio_delays_edit.setToolTip("Manual audio delays in milliseconds. Example: 1:150, 2:-250")
@@ -626,6 +645,8 @@ class MainWindow(QMainWindow):
         audio_names_label.setToolTip("Controls how audio track names are written.")
         language_order_label = QLabel("Language order")
         language_order_label.setToolTip("Controls how languages are sorted in the output.")
+        regional_order_label = QLabel("Region order")
+        regional_order_label.setToolTip("Controls region priority when Language order is Regional.")
 
         advanced_layout.addWidget(QLabel("Output suffix"), 0, 0)
         advanced_layout.addWidget(self.suffix_edit, 0, 1)
@@ -637,6 +658,8 @@ class MainWindow(QMainWindow):
         advanced_layout.addWidget(self.report_format_combo, 1, 3)
         advanced_layout.addWidget(language_order_label, 2, 0)
         advanced_layout.addWidget(self.language_order_style_combo, 2, 1)
+        advanced_layout.addWidget(regional_order_label, 2, 2)
+        advanced_layout.addWidget(self.regional_order_combo, 2, 3)
         advanced_layout.addWidget(QLabel("Language overrides"), 3, 0)
         advanced_layout.addWidget(self.subtitle_language_edit, 3, 1)
         advanced_layout.addWidget(QLabel("Forced IDs"), 3, 2)
@@ -866,11 +889,17 @@ class MainWindow(QMainWindow):
         output_row.addWidget(self.audio_sync_output_edit, 1)
         output_row.addWidget(output_button)
 
-        files_grid.addWidget(QLabel("Reference"), 0, 0)
+        reference_label = QLabel("Reference")
+        reference_label.setToolTip("Media already synced to the target timeline.")
+        source_label = QLabel("Source")
+        source_label.setToolTip("Media whose audio tracks need the measured delay.")
+        export_label = QLabel("Export")
+        export_label.setToolTip("Folder for the combined synced .mka output.")
+        files_grid.addWidget(reference_label, 0, 0)
         files_grid.addLayout(reference_row, 0, 1)
-        files_grid.addWidget(QLabel("Source"), 1, 0)
+        files_grid.addWidget(source_label, 1, 0)
         files_grid.addLayout(source_row, 1, 1)
-        files_grid.addWidget(QLabel("Export"), 2, 0)
+        files_grid.addWidget(export_label, 2, 0)
         files_grid.addLayout(output_row, 2, 1)
         root.addWidget(files_group)
 
@@ -882,25 +911,42 @@ class MainWindow(QMainWindow):
         self.audio_sync_source_combo.setToolTip("Source audio stream to compare against the reference")
         self.audio_sync_duration_combo.setToolTip("Longer windows are slower but more reliable. 120 seconds is a balanced default.")
         self.audio_sync_spacing_combo.setToolTip("Distance between checkpoints. Wider spacing checks whether the delay stays stable.")
-        compare_grid.addWidget(QLabel("Reference audio"), 0, 0)
+        reference_audio_label = QLabel("Reference audio")
+        reference_audio_label.setToolTip("Audio stream from the already synced reference.")
+        source_audio_label = QLabel("Source audio")
+        source_audio_label.setToolTip("Audio stream from the source to compare with the reference.")
+        start_label = QLabel("Start")
+        start_label.setToolTip("First timestamp used for analysis.")
+        duration_label = QLabel("Duration")
+        duration_label.setToolTip("Amount of audio analyzed at each checkpoint.")
+        checkpoints_label = QLabel("Checkpoints")
+        checkpoints_label.setToolTip("Number of timeline positions checked.")
+        spacing_label = QLabel("Spacing")
+        spacing_label.setToolTip("Distance between checkpoint start times.")
+        max_offset_label = QLabel("Max offset")
+        max_offset_label.setToolTip("Largest delay to search for in either direction.")
+        compare_grid.addWidget(reference_audio_label, 0, 0)
         compare_grid.addWidget(self.audio_sync_ref_combo, 0, 1)
-        compare_grid.addWidget(QLabel("Source audio"), 0, 2)
+        compare_grid.addWidget(source_audio_label, 0, 2)
         compare_grid.addWidget(self.audio_sync_source_combo, 0, 3)
-        compare_grid.addWidget(QLabel("Start"), 1, 0)
+        compare_grid.addWidget(start_label, 1, 0)
         compare_grid.addWidget(self.audio_sync_start_edit, 1, 1)
-        compare_grid.addWidget(QLabel("Duration"), 1, 2)
+        compare_grid.addWidget(duration_label, 1, 2)
         compare_grid.addWidget(self.audio_sync_duration_combo, 1, 3)
-        compare_grid.addWidget(QLabel("Checkpoints"), 2, 0)
+        compare_grid.addWidget(checkpoints_label, 2, 0)
         compare_grid.addWidget(self.audio_sync_checkpoints_spin, 2, 1)
-        compare_grid.addWidget(QLabel("Spacing"), 2, 2)
+        compare_grid.addWidget(spacing_label, 2, 2)
         compare_grid.addWidget(self.audio_sync_spacing_combo, 2, 3)
-        compare_grid.addWidget(QLabel("Max offset"), 3, 0)
+        compare_grid.addWidget(max_offset_label, 3, 0)
         compare_grid.addWidget(self.audio_sync_max_offset_edit, 3, 1)
         root.addWidget(compare_group)
 
         self.audio_sync_check_button.setIcon(style.standardIcon(QStyle.SP_DialogApplyButton))
         self.audio_sync_load_button.setIcon(style.standardIcon(QStyle.SP_BrowserReload))
         self.audio_sync_analyze_button.setIcon(style.standardIcon(QStyle.SP_MediaPlay))
+        self.audio_sync_apply_organizer_button.setIcon(style.standardIcon(QStyle.SP_DialogApplyButton))
+        self.audio_sync_apply_organizer_button.setToolTip("Fill the Organizer source and audio delay fields from the selected source audio tracks")
+        self.audio_sync_apply_organizer_button.setEnabled(False)
         self.audio_sync_export_button.setIcon(style.standardIcon(QStyle.SP_DialogSaveButton))
         self.audio_sync_export_button.setToolTip("Export selected source audio streams together into one synced .mka file")
         self.audio_sync_export_button.setEnabled(False)
@@ -916,6 +962,7 @@ class MainWindow(QMainWindow):
         top_bar.addWidget(self.audio_sync_check_button)
         top_bar.addWidget(self.audio_sync_load_button)
         top_bar.addWidget(self.audio_sync_analyze_button)
+        top_bar.addWidget(self.audio_sync_apply_organizer_button)
         top_bar.addWidget(self.audio_sync_export_button)
         top_bar.addWidget(self.audio_sync_cancel_button)
         root.addLayout(top_bar)
@@ -969,6 +1016,7 @@ class MainWindow(QMainWindow):
         self.audio_sync_check_button.clicked.connect(self.check_audio_sync_tools)
         self.audio_sync_load_button.clicked.connect(self.load_audio_sync_streams)
         self.audio_sync_analyze_button.clicked.connect(self.start_audio_sync_analysis)
+        self.audio_sync_apply_organizer_button.clicked.connect(self.apply_audio_sync_delay_to_organizer)
         self.audio_sync_export_button.clicked.connect(self.start_audio_sync_export)
         self.audio_sync_select_all_button.clicked.connect(self.select_all_audio_sync_streams)
         self.audio_sync_clear_selection_button.clicked.connect(self.clear_audio_sync_stream_selection)
@@ -986,7 +1034,10 @@ class MainWindow(QMainWindow):
             lambda _index: self._sync_combo_tooltip(self.audio_name_style_combo, self.AUDIO_NAME_STYLE_HELP)
         )
         self.language_order_style_combo.currentIndexChanged.connect(
-            lambda _index: self._sync_combo_tooltip(self.language_order_style_combo, self.LANGUAGE_ORDER_STYLE_HELP)
+            lambda _index: self._language_order_style_changed()
+        )
+        self.regional_order_combo.currentIndexChanged.connect(
+            lambda _index: self._sync_combo_tooltip(self.regional_order_combo, self.REGIONAL_ORDER_HELP)
         )
         self.theme_combo.currentIndexChanged.connect(self.change_theme)
 
@@ -1210,6 +1261,11 @@ class MainWindow(QMainWindow):
             key = combo.currentText()
         combo.setToolTip(help_by_key.get(str(key), ""))
 
+    def _language_order_style_changed(self) -> None:
+        self._sync_combo_tooltip(self.language_order_style_combo, self.LANGUAGE_ORDER_STYLE_HELP)
+        self.regional_order_combo.setEnabled(self.language_order_style_combo.currentData() == "regional")
+        self._sync_combo_tooltip(self.regional_order_combo, self.REGIONAL_ORDER_HELP)
+
     def _append_text(self, edit: QPlainTextEdit, text: str) -> None:
         edit.moveCursor(QTextCursor.End)
         edit.insertPlainText(text)
@@ -1262,9 +1318,13 @@ class MainWindow(QMainWindow):
         language_order_index = self.language_order_style_combo.findData(getattr(args, "language_order_style", "default"))
         if language_order_index >= 0:
             self.language_order_style_combo.setCurrentIndex(language_order_index)
+        regional_order = ",".join(organizer.parse_regional_order(getattr(args, "regional_order", None)))
+        regional_order_index = self.regional_order_combo.findData(regional_order)
+        if regional_order_index >= 0:
+            self.regional_order_combo.setCurrentIndex(regional_order_index)
         self._sync_combo_tooltip(self.metadata_combo, self.METADATA_MODE_HELP)
         self._sync_combo_tooltip(self.audio_name_style_combo, self.AUDIO_NAME_STYLE_HELP)
-        self._sync_combo_tooltip(self.language_order_style_combo, self.LANGUAGE_ORDER_STYLE_HELP)
+        self._language_order_style_changed()
         self.report_format_combo.setCurrentText(args.report_format)
 
     def _set_input_text(self, text: str) -> None:
@@ -1354,6 +1414,7 @@ class MainWindow(QMainWindow):
         self.audio_sync_ref_combo.clear()
         self.audio_sync_source_combo.clear()
         self.audio_sync_tracks_table.setRowCount(0)
+        self.audio_sync_apply_organizer_button.setEnabled(False)
         self.audio_sync_export_button.setEnabled(False)
         self._set_audio_sync_selection_controls_enabled(False)
 
@@ -1374,6 +1435,35 @@ class MainWindow(QMainWindow):
     def _set_audio_sync_selection_controls_enabled(self, enabled: bool) -> None:
         self.audio_sync_select_all_button.setEnabled(enabled)
         self.audio_sync_clear_selection_button.setEnabled(enabled)
+
+    @Slot()
+    def apply_audio_sync_delay_to_organizer(self) -> None:
+        if not self.audio_sync_result:
+            QMessageBox.information(self, "Audio Sync", "Run an analysis first.")
+            return
+        selected_streams = self._selected_audio_sync_streams()
+        if not selected_streams:
+            QMessageBox.information(self, "Audio Sync", "Select at least one source audio track.")
+            return
+
+        try:
+            _reference_path, source_path = self._audio_sync_paths()
+        except Exception as error:
+            QMessageBox.critical(self, "Invalid Audio Sync settings", str(error))
+            return
+
+        if not source_path.is_file() or source_path.suffix.lower() != ".mkv":
+            QMessageBox.information(self, "Audio Sync", "The Organizer workflow needs an MKV source file.")
+            return
+
+        delay_ms = int(round(self.audio_sync_result.timeline_shift_seconds * 1000))
+        delay_text = ", ".join(f"{stream.index}:{delay_ms:+d}" for stream in selected_streams)
+        self.input_paths = []
+        self.add_input_paths([source_path])
+        self.audio_delays_edit.setText(delay_text)
+        self.tabs.setCurrentIndex(0)
+        self.append_audio_sync_summary_line(f"Organizer audio delays: {delay_text}")
+        self.statusBar().showMessage("Audio Sync delay copied to Organizer")
 
     @Slot(int)
     def _audio_sync_duration_preset_activated(self, index: int) -> None:
@@ -1610,6 +1700,7 @@ class MainWindow(QMainWindow):
         self._populate_audio_sync_combo(self.audio_sync_source_combo, source_audio)
         self._populate_audio_sync_export_table(self.audio_sync_source_streams)
         self.audio_sync_result = None
+        self.audio_sync_apply_organizer_button.setEnabled(False)
         self.audio_sync_export_button.setEnabled(False)
         self._set_audio_sync_selection_controls_enabled(self.audio_sync_tracks_table.rowCount() > 0)
         self.audio_sync_summary_edit.clear()
@@ -1641,6 +1732,7 @@ class MainWindow(QMainWindow):
             return
 
         self.audio_sync_result = None
+        self.audio_sync_apply_organizer_button.setEnabled(False)
         self.audio_sync_export_button.setEnabled(False)
         self.audio_sync_summary_edit.clear()
         self.audio_sync_log_edit.clear()
@@ -1893,6 +1985,7 @@ class MainWindow(QMainWindow):
         args.metadata_edit_mode = self.metadata_combo.currentText()
         args.audio_name_style = self.audio_name_style_combo.currentData() or "auto"
         args.language_order_style = self.language_order_style_combo.currentData() or "default"
+        args.regional_order = self.regional_order_combo.currentData() or ""
         args.report_format = self.report_format_combo.currentText()
         return args, config_path
 
@@ -2097,6 +2190,7 @@ class MainWindow(QMainWindow):
         if args.language_order_style not in organizer.LANGUAGE_ORDER_STYLES:
             allowed = ", ".join(sorted(organizer.LANGUAGE_ORDER_STYLES))
             raise organizer.OrganizerError(f"--language-order-style must be one of these values: {allowed}.")
+        args.regional_order = organizer.parse_regional_order(getattr(args, "regional_order", None))
 
         organizer.require_tool(args.mkvmerge, "mkvmerge")
         if args.metadata_edit_mode == "only":
@@ -2348,6 +2442,7 @@ class MainWindow(QMainWindow):
         if result.spread_seconds > 0.020:
             self.append_audio_sync_summary_line("Warning: spread is above 20 ms; this may not be a fixed delay.")
         self.append_audio_sync_summary_line()
+        self.audio_sync_apply_organizer_button.setEnabled(self.audio_sync_tracks_table.rowCount() > 0)
         self.audio_sync_export_button.setEnabled(self.audio_sync_tracks_table.rowCount() > 0)
         self._set_audio_sync_selection_controls_enabled(self.audio_sync_tracks_table.rowCount() > 0)
         self.statusBar().showMessage("Audio Sync analysis completed")
@@ -2664,6 +2759,7 @@ class MainWindow(QMainWindow):
         self.audio_sync_check_button.setEnabled(not running)
         self.audio_sync_load_button.setEnabled(not running)
         self.audio_sync_analyze_button.setEnabled(not running)
+        self.audio_sync_apply_organizer_button.setEnabled(bool(self.audio_sync_result) and not running)
         self.audio_sync_export_button.setEnabled(bool(self.audio_sync_result) and not running)
         self._set_audio_sync_selection_controls_enabled(self.audio_sync_tracks_table.rowCount() > 0 and not running)
 
@@ -2678,6 +2774,7 @@ class MainWindow(QMainWindow):
         self.audio_sync_check_button.setEnabled(not running)
         self.audio_sync_load_button.setEnabled(not running)
         self.audio_sync_analyze_button.setEnabled(not running)
+        self.audio_sync_apply_organizer_button.setEnabled(bool(self.audio_sync_result) and not running)
         self.audio_sync_export_button.setEnabled(bool(self.audio_sync_result) and not running)
         self._set_audio_sync_selection_controls_enabled(self.audio_sync_tracks_table.rowCount() > 0 and not running)
 
@@ -2685,6 +2782,7 @@ class MainWindow(QMainWindow):
         self.audio_sync_check_button.setEnabled(not running)
         self.audio_sync_load_button.setEnabled(not running)
         self.audio_sync_analyze_button.setEnabled(not running)
+        self.audio_sync_apply_organizer_button.setEnabled(bool(self.audio_sync_result) and not running)
         self.audio_sync_export_button.setEnabled(bool(self.audio_sync_result) and not running)
         self._set_audio_sync_selection_controls_enabled(self.audio_sync_tracks_table.rowCount() > 0 and not running)
         self.audio_sync_cancel_button.setEnabled(running)

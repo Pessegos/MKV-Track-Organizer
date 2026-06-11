@@ -888,6 +888,40 @@ def test_ordered_tracks_can_group_audio_by_region() -> None:
     assert [track.id for track in m.ordered_tracks([video], audio_tracks, [], "regional")] == [0, 6, 5, 2, 1, 4, 3]
 
 
+def test_ordered_tracks_can_customize_regional_order() -> None:
+    video = video_track(0)
+    cantonese = audio_track(1, "yue")
+    catalan = audio_track(2, "cat")
+    arabic = audio_track(3, "ara")
+    taiwan = audio_track(4, "zh-TW")
+    spanish = audio_track(5, "spa")
+    english = audio_track(6, "eng")
+    audio_tracks = [cantonese, catalan, arabic, taiwan, spanish, english]
+
+    m.apply_default_flags([video], audio_tracks, [], "regional", "asia,europe,americas")
+
+    assert english.default is True
+    assert [track.id for track in m.ordered_tracks([video], audio_tracks, [], "regional", "asia,europe,americas")] == [
+        0,
+        6,
+        1,
+        4,
+        5,
+        2,
+        3,
+    ]
+
+
+def test_parse_regional_order_accepts_aliases_and_appends_missing_regions() -> None:
+    assert m.parse_regional_order("asia; middle east africa") == (
+        "asia",
+        "middle-east-africa",
+        "europe",
+        "americas",
+        "oceania",
+    )
+
+
 def test_subtitle_regional_sort_keeps_related_languages_together() -> None:
     cantonese = subtitle_track(1, "yue")
     catalan = subtitle_track(2, "cat")
@@ -907,7 +941,7 @@ def test_config_defaults(tmp_path: Path) -> None:
         (
             '{"recursive": true, "output_suffix": "fixed", "detect_language_variants": false, '
             '"metadata_edit_mode": true, "audio_name_style": "language-format", '
-            '"language_order_style": "regional"}'
+            '"language_order_style": "regional", "regional_order": "asia;americas"}'
         ),
         encoding="utf-8",
     )
@@ -918,6 +952,7 @@ def test_config_defaults(tmp_path: Path) -> None:
     assert defaults["metadata_edit_mode"] == "auto"
     assert defaults["audio_name_style"] == "language-format"
     assert defaults["language_order_style"] == "regional"
+    assert defaults["regional_order"] == ["asia", "americas"]
 
 
 def test_config_metadata_edit_mode_accepts_off_and_only(tmp_path: Path) -> None:

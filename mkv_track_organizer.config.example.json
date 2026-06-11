@@ -11,6 +11,7 @@
   "metadata_edit_mode": "off",
   "audio_name_style": "auto",
   "language_order_style": "default",
+  "regional_order": [],
   "variant_context_dirs": [],
   "smart_sub_detection": true,
   "drop_empty_subs": true,

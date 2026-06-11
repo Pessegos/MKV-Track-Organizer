@@ -10,9 +10,9 @@ The project currently includes a command-line interface, a desktop UI, an early 
 - Keep originals safe by writing remuxed files to `_sorted` by default.
 - Preview changes before writing output files.
 - Rename audio tracks by format, language plus format, or keep existing names.
-- Choose default or regional language ordering for audio/subtitle tracks.
+- Choose default or regional language ordering for audio/subtitle tracks, with optional region priority presets.
 - Apply manual audio/subtitle delays by track ID when a source needs sync correction.
-- Estimate fixed audio delay between a reference file and a source file, then export shifted audio/subtitle tracks.
+- Estimate fixed audio delay between a reference file and a source file, then apply it in Organizer or export shifted audio tracks.
 - Detect forced, empty, commentary, and SDH subtitle tracks.
 - Detect regional language variants such as Portuguese, Spanish, French, and Chinese variants.
 - Use OCR for PGS subtitles when text is needed for language or role detection.
@@ -62,7 +62,7 @@ The desktop UI opens in dark mode by default. Use the theme selector in the stat
 
 The **MakeMKV Batch** tab can convert one disc backup folder or a folder containing multiple disc backup folders. Its selection modes cover English audio, all audio, all tracks, or a custom MakeMKV selection string. Enable **Run Organizer after MakeMKV** to feed the MakeMKV output folder into the Organizer tab settings automatically. MakeMKV runs in robot mode so progress is used when the console output exposes it.
 
-The **Audio Sync** tab compares one reference audio stream against one source audio stream using FFmpeg-decoded checkpoints. Positive source offset means the source is late; the displayed timeline shift is the inverse delay to apply to the source tracks. Duration and spacing use safe presets with a bounded custom option. After analysis, select the source audio tracks you want to export together into one `.mka` file in the `synced` folder.
+The **Audio Sync** tab compares one reference audio stream against one source audio stream using FFmpeg-decoded checkpoints. Positive source offset means the source is late; the displayed timeline shift is the inverse delay to apply to the source tracks. Duration and spacing use safe presets with a bounded custom option. After analysis, select source audio tracks and either copy the delay into the Organizer tab or export the selected tracks together into one `.mka` file in the `synced` folder.
 
 ## Command Line
 
@@ -94,6 +94,12 @@ Group languages by broad regions in the output order:
 
 ```powershell
 python .\mkv_track_organizer.py ".\movie.mkv" --language-order-style regional
+```
+
+Choose which regions come first:
+
+```powershell
+python .\mkv_track_organizer.py ".\movie.mkv" --language-order-style regional --regional-order asia,americas,europe
 ```
 
 Apply manual sync delays in milliseconds:
