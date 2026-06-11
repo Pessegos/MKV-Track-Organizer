@@ -112,6 +112,58 @@ def test_estimate_offset_rejects_when_all_checkpoints_decode_no_audio(monkeypatc
         raise AssertionError("Expected all-empty checkpoints to fail")
 
 
+def test_estimate_offset_marks_consistent_low_confidence_result_as_uncertain(monkeypatch, tmp_path: Path) -> None:
+    reference = tmp_path / "reference.mkv"
+    source = tmp_path / "source.mkv"
+    reference.touch()
+    source.touch()
+    settings = sync.AudioSyncSettings(reference, source, checkpoints=3)
+
+    monkeypatch.setattr(sync, "validate_settings", lambda _settings: None)
+    estimates = iter(
+        [
+            sync.OffsetEstimate(600.0, -0.975, -0.980, 1.2),
+            sync.OffsetEstimate(1500.0, -0.974, -0.980, 1.1),
+            sync.OffsetEstimate(2400.0, -0.976, -0.980, 1.3),
+        ]
+    )
+    monkeypatch.setattr(sync, "estimate_at_checkpoint", lambda *_args, **_kwargs: next(estimates))
+
+    result = sync.estimate_offset(settings)
+
+    assert result.consistency == "excellent"
+    assert result.confidence_summary == "very low"
+    assert result.verdict == "uncertain: very low correlation confidence"
+    assert any("very low" in warning for warning in result.warnings)
+
+
+def test_estimate_offset_ignores_main_cluster_outliers(monkeypatch, tmp_path: Path) -> None:
+    reference = tmp_path / "reference.mkv"
+    source = tmp_path / "source.mkv"
+    reference.touch()
+    source.touch()
+    settings = sync.AudioSyncSettings(reference, source, checkpoints=4)
+
+    monkeypatch.setattr(sync, "validate_settings", lambda _settings: None)
+    estimates = iter(
+        [
+            sync.OffsetEstimate(600.0, 0.170, 0.170, 6.0),
+            sync.OffsetEstimate(1500.0, 0.270, 0.270, 6.0),
+            sync.OffsetEstimate(2400.0, 0.280, 0.280, 6.0),
+            sync.OffsetEstimate(3300.0, 0.272, 0.270, 6.0),
+        ]
+    )
+    monkeypatch.setattr(sync, "estimate_at_checkpoint", lambda *_args, **_kwargs: next(estimates))
+
+    result = sync.estimate_offset(settings)
+
+    assert round(result.median_offset_seconds, 3) == 0.272
+    assert result.used_checkpoints == 3
+    assert result.ignored_checkpoints == 1
+    assert result.all_spread_seconds > 0.050
+    assert any("outlier" in warning for warning in result.warnings)
+
+
 def test_build_audio_export_plan(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(sync, "resolve_binary", lambda name, explicit_path=None: Path("ffmpeg"))
     stream = sync.MediaStream(index=3, relative_index=1, type="audio", codec="aac", language="por")

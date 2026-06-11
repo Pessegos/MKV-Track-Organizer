@@ -1451,10 +1451,27 @@ class MainWindow(QMainWindow):
         self.audio_sync_select_all_button.setEnabled(enabled)
         self.audio_sync_clear_selection_button.setEnabled(enabled)
 
+    def _confirm_audio_sync_warnings(self) -> bool:
+        if not self.audio_sync_result or not self.audio_sync_result.warnings:
+            return True
+        details = "\n".join(f"- {warning}" for warning in self.audio_sync_result.warnings)
+        answer = QMessageBox.question(
+            self,
+            "Audio Sync warnings",
+            "The current sync result has warnings:\n\n"
+            f"{details}\n\n"
+            "Continue anyway?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        return answer == QMessageBox.Yes
+
     @Slot()
     def apply_audio_sync_delay_to_organizer(self) -> None:
         if not self.audio_sync_result:
             QMessageBox.information(self, "Audio Sync", "Run an analysis first.")
+            return
+        if not self._confirm_audio_sync_warnings():
             return
         selected_streams = self._selected_audio_sync_streams()
         if not selected_streams:
@@ -1818,6 +1835,8 @@ class MainWindow(QMainWindow):
             return
         if self._other_workflow_is_running():
             QMessageBox.information(self, "Another task is running", "Wait for the current task to finish first.")
+            return
+        if not self._confirm_audio_sync_warnings():
             return
 
         selected_streams = self._selected_audio_sync_streams()
@@ -2481,7 +2500,9 @@ class MainWindow(QMainWindow):
         self._set_progress_label("Audio sync completed")
         self.append_audio_sync_summary_line()
         self.append_audio_sync_summary_line("Result")
-        self.append_audio_sync_summary_line(f"Checkpoints used: {len(result.estimates)}")
+        self.append_audio_sync_summary_line(
+            f"Checkpoints used: {result.used_checkpoints or len(result.estimates)}/{len(result.estimates)}"
+        )
         self.append_audio_sync_summary_line(
             f"Source offset vs reference: {audio_sync.format_delay_ms(result.median_offset_seconds)}"
         )
@@ -2489,10 +2510,17 @@ class MainWindow(QMainWindow):
             f"Timeline shift to apply: {audio_sync.format_delay_ms(result.timeline_shift_seconds)}"
         )
         self.append_audio_sync_summary_line(f"Checkpoint spread: {result.spread_seconds * 1000:.2f} ms")
+        if result.ignored_checkpoints:
+            self.append_audio_sync_summary_line(f"All-checkpoint spread: {result.all_spread_seconds * 1000:.2f} ms")
+            self.append_audio_sync_summary_line(f"Ignored outliers: {result.ignored_checkpoints}")
+        self.append_audio_sync_summary_line(
+            f"Correlation confidence: {result.confidence_summary or audio_sync.confidence_label(result.average_confidence)} "
+            f"({result.average_confidence:.2f})"
+        )
         self.append_audio_sync_summary_line(f"Consistency: {result.consistency}")
         self.append_audio_sync_summary_line(f"Verdict: {result.verdict}")
-        if result.spread_seconds > 0.020:
-            self.append_audio_sync_summary_line("Warning: spread is above 20 ms; this may not be a fixed delay.")
+        for warning in result.warnings:
+            self.append_audio_sync_summary_line(f"Warning: {warning}.")
         self.append_audio_sync_summary_line()
         self.audio_sync_apply_organizer_button.setEnabled(self.audio_sync_tracks_table.rowCount() > 0)
         self.audio_sync_export_button.setEnabled(self.audio_sync_tracks_table.rowCount() > 0)

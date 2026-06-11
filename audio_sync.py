@@ -78,6 +78,11 @@ class AudioSyncResult:
     average_confidence: float
     consistency: str
     verdict: str
+    used_checkpoints: int = 0
+    ignored_checkpoints: int = 0
+    all_spread_seconds: float = 0.0
+    confidence_summary: str = ""
+    warnings: tuple[str, ...] = ()
 
     @property
     def timeline_shift_seconds(self) -> float:
@@ -255,13 +260,36 @@ def estimate_offset(
             "No usable checkpoints decoded audio. Move Start earlier, reduce Checkpoints, or reduce Spacing."
         )
 
-    offsets = np.array([estimate.offset_seconds for estimate in estimates], dtype=np.float64)
+    selected_estimates, ignored_checkpoints = select_estimates_for_result(estimates)
+    offsets = np.array([estimate.offset_seconds for estimate in selected_estimates], dtype=np.float64)
+    all_offsets = np.array([estimate.offset_seconds for estimate in estimates], dtype=np.float64)
     median = float(np.median(offsets))
     spread = float(np.max(np.abs(offsets - median))) if offsets.size else 0.0
-    average_confidence = float(np.mean([estimate.confidence for estimate in estimates]))
-    consistency = consistency_label(spread, len(estimates))
-    verdict = verdict_label(spread, average_confidence, len(estimates))
-    return AudioSyncResult(estimates, median, spread, average_confidence, consistency, verdict)
+    all_spread = float(np.max(np.abs(all_offsets - float(np.median(all_offsets))))) if all_offsets.size else 0.0
+    average_confidence = float(np.mean([estimate.confidence for estimate in selected_estimates]))
+    consistency = consistency_label(spread, len(selected_estimates))
+    confidence_summary = confidence_label(average_confidence)
+    warnings = result_warnings(
+        selected_estimates=selected_estimates,
+        ignored_checkpoints=ignored_checkpoints,
+        spread_seconds=spread,
+        all_spread_seconds=all_spread,
+        average_confidence=average_confidence,
+    )
+    verdict = verdict_label(spread, average_confidence, len(selected_estimates), ignored_checkpoints)
+    return AudioSyncResult(
+        estimates,
+        median,
+        spread,
+        average_confidence,
+        consistency,
+        verdict,
+        len(selected_estimates),
+        ignored_checkpoints,
+        all_spread,
+        confidence_summary,
+        warnings,
+    )
 
 
 def validate_settings(settings: AudioSyncSettings) -> None:
@@ -518,6 +546,45 @@ def refine_offset_seconds(
     return (float(lags[best_index]) + sub) / sample_rate
 
 
+def estimate_spread_seconds(estimates: list[OffsetEstimate]) -> float:
+    if not estimates:
+        return 0.0
+    offsets = np.array([estimate.offset_seconds for estimate in estimates], dtype=np.float64)
+    median = float(np.median(offsets))
+    return float(np.max(np.abs(offsets - median)))
+
+
+def select_estimates_for_result(
+    estimates: list[OffsetEstimate],
+    cluster_tolerance_seconds: float = 0.050,
+) -> tuple[list[OffsetEstimate], int]:
+    if len(estimates) < 3:
+        return estimates, 0
+
+    best_cluster = estimates
+    best_key: tuple[int, float, float] | None = None
+    for center in estimates:
+        cluster = [
+            estimate
+            for estimate in estimates
+            if abs(estimate.offset_seconds - center.offset_seconds) <= cluster_tolerance_seconds
+        ]
+        spread = estimate_spread_seconds(cluster)
+        confidence = float(np.mean([estimate.confidence for estimate in cluster])) if cluster else 0.0
+        key = (len(cluster), confidence, -spread)
+        if best_key is None or key > best_key:
+            best_key = key
+            best_cluster = cluster
+
+    min_cluster_size = max(2, math.ceil(len(estimates) / 2))
+    if len(best_cluster) < len(estimates) and len(best_cluster) >= min_cluster_size:
+        best_ids = {id(estimate) for estimate in best_cluster}
+        selected = [estimate for estimate in estimates if id(estimate) in best_ids]
+        return selected, len(estimates) - len(selected)
+
+    return estimates, 0
+
+
 def confidence_label(value: float) -> str:
     if value >= 8.0:
         return "high"
@@ -540,8 +607,49 @@ def consistency_label(spread_seconds: float, checkpoints: int) -> str:
     return "poor"
 
 
-def verdict_label(spread_seconds: float, average_confidence: float, checkpoints: int) -> str:
-    if checkpoints >= 2 and spread_seconds <= 0.005:
+def result_warnings(
+    *,
+    selected_estimates: list[OffsetEstimate],
+    ignored_checkpoints: int,
+    spread_seconds: float,
+    all_spread_seconds: float,
+    average_confidence: float,
+) -> tuple[str, ...]:
+    warnings: list[str] = []
+    if average_confidence < 2.0:
+        warnings.append("correlation confidence is very low; verify manually before applying the delay")
+    elif average_confidence < 4.0:
+        warnings.append("correlation confidence is low; spot-check the result before applying the delay")
+    if ignored_checkpoints:
+        warnings.append(f"{ignored_checkpoints} outlier checkpoint(s) were ignored outside the main delay cluster")
+    if len(selected_estimates) < 2:
+        warnings.append("only one usable checkpoint contributed to the result")
+    if spread_seconds > 0.020:
+        warnings.append("selected checkpoints disagree by more than 20 ms")
+    if all_spread_seconds > 0.050 and not ignored_checkpoints:
+        warnings.append("checkpoints do not form a stable delay cluster")
+    return tuple(warnings)
+
+
+def verdict_label(
+    spread_seconds: float,
+    average_confidence: float,
+    checkpoints: int,
+    ignored_checkpoints: int = 0,
+) -> str:
+    if checkpoints < 2:
+        return "single checkpoint; verify manually"
+    if average_confidence < 2.0:
+        return "uncertain: very low correlation confidence"
+    if average_confidence < 4.0:
+        if spread_seconds <= 0.020:
+            return "consistent but low-confidence; verify manually"
+        return "uncertain: low confidence and inconsistent checkpoints"
+    if ignored_checkpoints:
+        if spread_seconds <= 0.020:
+            return "plausible after ignoring outliers; verify manually"
+        return "uncertain: outliers and inconsistent checkpoints"
+    if checkpoints >= 2 and spread_seconds <= 0.005 and average_confidence >= 8.0:
         return "high fixed-delay confidence"
     if checkpoints >= 2 and spread_seconds <= 0.020:
         return "likely fixed delay"
