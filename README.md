@@ -62,7 +62,7 @@ The desktop UI opens in dark mode by default. Use the theme selector in the stat
 
 The **MakeMKV Batch** tab can convert one disc backup folder or a folder containing multiple disc backup folders. Its selection modes cover English audio, all audio, all tracks, or a custom MakeMKV selection string. Enable **Run Organizer after MakeMKV** to feed the MakeMKV output folder into the Organizer tab settings automatically. MakeMKV runs in robot mode so progress is used when the console output exposes it.
 
-The **Audio Sync** tab compares one reference audio stream against one source audio stream using FFmpeg-decoded checkpoints. Positive source offset means the source is late; the displayed timeline shift is the inverse delay to apply to the source tracks. Duration and spacing use safe presets with a bounded custom option. After analysis, select source audio tracks and either copy the delay into the Organizer tab or export the selected tracks together into one `.mka` file in the `synced` folder.
+The **Audio Sync** tab compares one reference audio stream against one source audio stream using FFmpeg-decoded checkpoints. Positive source offset means the source is late; the displayed timeline shift is the inverse delay to apply to the source tracks. Duration and spacing use safe presets with a bounded custom option. After analysis, select source audio tracks and either use **Apply delay in Organizer** to fill the Organizer input and audio delay fields for a remux, or use **Export shifted .mka** to create a separate audio-only file whose selected tracks are already shifted.
 
 ## Command Line
 

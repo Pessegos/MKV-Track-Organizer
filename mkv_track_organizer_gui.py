@@ -541,8 +541,8 @@ class MainWindow(QMainWindow):
         self.audio_sync_check_button = QPushButton("Check tools")
         self.audio_sync_load_button = QPushButton("Load streams")
         self.audio_sync_analyze_button = QPushButton("Analyze")
-        self.audio_sync_apply_organizer_button = QPushButton("Use in Organizer")
-        self.audio_sync_export_button = QPushButton("Export audio .mka")
+        self.audio_sync_apply_organizer_button = QPushButton("Apply delay in Organizer")
+        self.audio_sync_export_button = QPushButton("Export shifted .mka")
         self.audio_sync_select_all_button = QPushButton("Select all")
         self.audio_sync_clear_selection_button = QPushButton("Clear")
         self.audio_sync_cancel_button = QPushButton("Cancel")
@@ -959,10 +959,14 @@ class MainWindow(QMainWindow):
         self.audio_sync_load_button.setIcon(style.standardIcon(QStyle.SP_BrowserReload))
         self.audio_sync_analyze_button.setIcon(style.standardIcon(QStyle.SP_MediaPlay))
         self.audio_sync_apply_organizer_button.setIcon(style.standardIcon(QStyle.SP_DialogApplyButton))
-        self.audio_sync_apply_organizer_button.setToolTip("Fill the Organizer source and audio delay fields from the selected source audio tracks")
+        self.audio_sync_apply_organizer_button.setToolTip(
+            "Fill the Organizer input and audio delay fields; Organizer remux applies the delay with mkvmerge --sync."
+        )
         self.audio_sync_apply_organizer_button.setEnabled(False)
         self.audio_sync_export_button.setIcon(style.standardIcon(QStyle.SP_DialogSaveButton))
-        self.audio_sync_export_button.setToolTip("Export selected source audio streams together into one synced .mka file")
+        self.audio_sync_export_button.setToolTip(
+            "Create a separate .mka whose selected audio tracks are shifted by the measured delay."
+        )
         self.audio_sync_export_button.setEnabled(False)
         self.audio_sync_select_all_button.setIcon(style.standardIcon(QStyle.SP_DialogApplyButton))
         self.audio_sync_select_all_button.setEnabled(False)
@@ -1494,8 +1498,12 @@ class MainWindow(QMainWindow):
         self.add_input_paths([source_path])
         self.audio_delays_edit.setText(delay_text)
         self.tabs.setCurrentIndex(0)
-        self.append_audio_sync_summary_line(f"Organizer audio delays: {delay_text}")
-        self.statusBar().showMessage("Audio Sync delay copied to Organizer")
+        self.append_audio_sync_summary_line(f"Organizer will apply audio delays: {delay_text}")
+        self.append_audio_sync_summary_line(
+            f"Timeline shift: {audio_sync.format_delay_ms(self.audio_sync_result.timeline_shift_seconds)}"
+        )
+        self.append_audio_sync_summary_line("Run Preview or Run in Organizer to remux with those delayed tracks.")
+        self.statusBar().showMessage("Audio Sync delay prepared in Organizer")
 
     @Slot(int)
     def _audio_sync_duration_preset_activated(self, index: int) -> None:
@@ -1852,7 +1860,12 @@ class MainWindow(QMainWindow):
             return
 
         self.append_audio_sync_summary_line("Export started.")
-        self.append_audio_sync_summary_line(f"Writing {len(selected_streams)} selected audio track(s) to one .mka.")
+        self.append_audio_sync_summary_line(
+            f"Writing {len(selected_streams)} selected audio track(s) to one shifted .mka."
+        )
+        self.append_audio_sync_summary_line(
+            f"Timeline shift baked into export: {audio_sync.format_delay_ms(self.audio_sync_result.timeline_shift_seconds)}"
+        )
         self.progress.setRange(0, 0)
         self._set_progress_label("Audio sync export")
         self._set_audio_sync_running(True)
@@ -2534,8 +2547,12 @@ class MainWindow(QMainWindow):
         self.progress.setValue(1)
         self._set_progress_label("Audio sync export completed")
         self.append_audio_sync_summary_line()
-        self.append_audio_sync_summary_line("Exported .mka")
+        self.append_audio_sync_summary_line("Exported shifted .mka")
         self.append_audio_sync_summary_line(str(plan.output_path))
+        if self.audio_sync_result:
+            self.append_audio_sync_summary_line(
+                f"Timeline shift: {audio_sync.format_delay_ms(self.audio_sync_result.timeline_shift_seconds)}"
+            )
         self.append_audio_sync_summary_line(f"Audio tracks: {len(plan.streams)}")
         self.append_audio_sync_summary_line()
         self.statusBar().showMessage("Audio Sync export completed")
