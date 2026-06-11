@@ -2463,7 +2463,7 @@ class MainWindow(QMainWindow):
     @Slot(str)
     def handle_audio_sync_log(self, message: str) -> None:
         self.append_audio_sync_log(message)
-        if message.startswith("Checkpoint") or message.startswith("  offset="):
+        if message.startswith("Checkpoint") or message.startswith("  offset=") or message.startswith("  skipped="):
             self.append_audio_sync_summary_line(message)
         self.statusBar().showMessage(message[:160])
 
@@ -2481,6 +2481,7 @@ class MainWindow(QMainWindow):
         self._set_progress_label("Audio sync completed")
         self.append_audio_sync_summary_line()
         self.append_audio_sync_summary_line("Result")
+        self.append_audio_sync_summary_line(f"Checkpoints used: {len(result.estimates)}")
         self.append_audio_sync_summary_line(
             f"Source offset vs reference: {audio_sync.format_delay_ms(result.median_offset_seconds)}"
         )

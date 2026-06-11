@@ -64,6 +64,54 @@ def test_audio_sync_result_timeline_shift_is_inverse_offset() -> None:
     assert result.timeline_shift_seconds == 0.975
 
 
+def test_estimate_offset_skips_checkpoints_with_no_decoded_audio(monkeypatch, tmp_path: Path) -> None:
+    reference = tmp_path / "reference.mkv"
+    source = tmp_path / "source.mkv"
+    reference.touch()
+    source.touch()
+    settings = sync.AudioSyncSettings(reference, source, checkpoints=3)
+    logs: list[str] = []
+    progress: list[tuple[int, int]] = []
+
+    monkeypatch.setattr(sync, "validate_settings", lambda _settings: None)
+
+    def fake_estimate_at_checkpoint(*_args, checkpoint_seconds: float, **_kwargs):
+        if checkpoint_seconds > settings.start_seconds:
+            raise sync.AudioSyncNoAudio("no audio decoded")
+        return sync.OffsetEstimate(checkpoint_seconds, 0.125, 0.120, 6.0)
+
+    monkeypatch.setattr(sync, "estimate_at_checkpoint", fake_estimate_at_checkpoint)
+
+    result = sync.estimate_offset(settings, logs.append, lambda index, total: progress.append((index, total)))
+
+    assert result.median_offset_seconds == 0.125
+    assert len(result.estimates) == 1
+    assert any("skipped=no audio decoded" in line for line in logs)
+    assert progress == [(1, 3), (2, 3), (3, 3)]
+
+
+def test_estimate_offset_rejects_when_all_checkpoints_decode_no_audio(monkeypatch, tmp_path: Path) -> None:
+    reference = tmp_path / "reference.mkv"
+    source = tmp_path / "source.mkv"
+    reference.touch()
+    source.touch()
+    settings = sync.AudioSyncSettings(reference, source, checkpoints=2)
+
+    monkeypatch.setattr(sync, "validate_settings", lambda _settings: None)
+    monkeypatch.setattr(
+        sync,
+        "estimate_at_checkpoint",
+        lambda *_args, **_kwargs: (_ for _item in ()).throw(sync.AudioSyncNoAudio("no audio decoded")),
+    )
+
+    try:
+        sync.estimate_offset(settings)
+    except sync.AudioSyncError as error:
+        assert "No usable checkpoints" in str(error)
+    else:
+        raise AssertionError("Expected all-empty checkpoints to fail")
+
+
 def test_build_audio_export_plan(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(sync, "resolve_binary", lambda name, explicit_path=None: Path("ffmpeg"))
     stream = sync.MediaStream(index=3, relative_index=1, type="audio", codec="aac", language="por")

@@ -19,6 +19,10 @@ class AudioSyncCancelled(AudioSyncError):
     """Raised when the caller cancels an audio sync operation."""
 
 
+class AudioSyncNoAudio(AudioSyncError):
+    """Raised when FFmpeg returns no decoded samples for a checkpoint."""
+
+
 @dataclass(frozen=True)
 class MediaStream:
     index: int
@@ -214,20 +218,26 @@ def estimate_offset(
     for index, checkpoint in enumerate(checkpoints, start=1):
         ensure_not_cancelled(cancel_callback)
         emit(event_callback, f"Checkpoint {index}/{len(checkpoints)} at {format_time(checkpoint)}")
-        estimate = estimate_at_checkpoint(
-            settings.reference_path,
-            settings.source_path,
-            ref_stream=settings.reference_audio_stream,
-            src_stream=settings.source_audio_stream,
-            checkpoint_seconds=checkpoint,
-            sample_rate=settings.sample_rate,
-            duration_seconds=settings.duration_seconds,
-            max_offset_seconds=settings.max_offset_seconds,
-            envelope_hop_seconds=settings.envelope_hop_seconds,
-            refine_seconds=settings.refine_seconds,
-            ffmpeg_path=settings.ffmpeg_path,
-            cancel_callback=cancel_callback,
-        )
+        try:
+            estimate = estimate_at_checkpoint(
+                settings.reference_path,
+                settings.source_path,
+                ref_stream=settings.reference_audio_stream,
+                src_stream=settings.source_audio_stream,
+                checkpoint_seconds=checkpoint,
+                sample_rate=settings.sample_rate,
+                duration_seconds=settings.duration_seconds,
+                max_offset_seconds=settings.max_offset_seconds,
+                envelope_hop_seconds=settings.envelope_hop_seconds,
+                refine_seconds=settings.refine_seconds,
+                ffmpeg_path=settings.ffmpeg_path,
+                cancel_callback=cancel_callback,
+            )
+        except AudioSyncNoAudio as error:
+            emit(event_callback, f"  skipped={error}")
+            if progress_callback:
+                progress_callback(index, len(checkpoints))
+            continue
         estimates.append(estimate)
         emit(
             event_callback,
@@ -239,6 +249,11 @@ def estimate_offset(
         )
         if progress_callback:
             progress_callback(index, len(checkpoints))
+
+    if not estimates:
+        raise AudioSyncError(
+            "No usable checkpoints decoded audio. Move Start earlier, reduce Checkpoints, or reduce Spacing."
+        )
 
     offsets = np.array([estimate.offset_seconds for estimate in estimates], dtype=np.float64)
     median = float(np.median(offsets))
@@ -369,7 +384,7 @@ def decode_audio(
     result = run_capture(command, cancel_callback)
     audio = np.frombuffer(result.stdout, dtype=np.float32).copy()
     if audio.size == 0:
-        raise AudioSyncError(f"ffmpeg decoded no audio from {path}")
+        raise AudioSyncNoAudio(f"no audio decoded from {path} at {format_time(start_seconds)}")
     return audio
 
 
