@@ -62,6 +62,7 @@ PGS_STRONG_FORCED_EVENT_RATIO = 0.15
 PGS_WEAK_FORCED_EVENT_RATIO = 0.30
 PGS_OCR_TIMEOUT_SECONDS = 900
 PGS_TIMELINE_MATCH_TOLERANCE_SECONDS = 1.25
+CHINESE_SCRIPT_OCR_SAMPLE_EVENTS = 240
 TEXT_SIMILARITY_HIGH = 0.72
 TEXT_SIMILARITY_LOW = 0.28
 TIMELINE_SIMILARITY_HIGH = 0.70
@@ -71,7 +72,7 @@ VARIANT_SHORT_EVIDENCE_MAX_SCORE = 16
 VARIANT_SHORT_EVIDENCE_MIN_CONFIDENCE = 0.85
 VARIANT_METADATA_OVERRIDE_MIN_SCORE = 24
 VARIANT_METADATA_OVERRIDE_MIN_CONFIDENCE = 0.70
-OCR_VALIDATED_VARIANT_LANGUAGES = {"spa"}
+OCR_VALIDATED_VARIANT_LANGUAGES = {"spa", "chi"}
 METADATA_EDIT_MODES = {"off", "auto", "only"}
 AUDIO_NAME_STYLES = {"auto", "format", "language-format", "keep"}
 LANGUAGE_ORDER_STYLES = {"default", "regional"}
@@ -2836,7 +2837,6 @@ def needs_chinese_script_ocr(track: TrackInfo, preferred_language: str) -> bool:
     return (
         preferred_language == "auto"
         and variant_base_language_key(track) == "chi"
-        and track.output_language not in LANGUAGE_VARIANT_BASES
     )
 
 
@@ -2845,7 +2845,7 @@ def ocr_language_candidates_for_track(track: TrackInfo, preferred_language: str)
         return [preferred_language]
 
     if needs_chinese_script_ocr(track, preferred_language):
-        hinted_variant = language_variant_from_hints("chi", track.original_name)
+        hinted_variant = language_variant_from_hints("chi", track.output_language, track.language, track.original_name)
         hinted_language = {
             "zh-Hans": "chi_sim",
             "zh-Hant": "chi_tra",
@@ -3005,6 +3005,45 @@ def console_safe(text: str) -> str:
 
 def process_details(result: subprocess.CompletedProcess[str]) -> str:
     return console_safe((result.stderr.strip() or result.stdout.strip())[:4000])
+
+
+def write_pgs_display_set_sample(
+    sup_path: Path,
+    sample_path: Path,
+    max_display_sets: int = CHINESE_SCRIPT_OCR_SAMPLE_EVENTS,
+) -> int:
+    if max_display_sets <= 0:
+        return 0
+
+    data = sup_path.read_bytes()
+    output = bytearray()
+    offset = 0
+    display_sets = 0
+
+    while offset + 13 <= len(data):
+        if data[offset : offset + 2] != b"PG":
+            break
+
+        segment_type = data[offset + 10]
+        segment_size = int.from_bytes(data[offset + 11 : offset + 13], "big")
+        end = offset + 13 + segment_size
+        if end > len(data):
+            break
+
+        output.extend(data[offset:end])
+        offset = end
+
+        if segment_type == 0x80:
+            display_sets += 1
+            if display_sets >= max_display_sets:
+                break
+
+    if not output or display_sets == 0:
+        return 0
+
+    sample_path.parent.mkdir(parents=True, exist_ok=True)
+    sample_path.write_bytes(output)
+    return display_sets
 
 
 def normalize_ocr_output(cache_dir: Path, sup_path: Path, expected_srt_path: Path, work_dir: Path) -> bool:
@@ -3335,6 +3374,33 @@ def ensure_pgs_ocr_cache(
                 )
                 continue
 
+        ocr_sup_path = sup_path
+        use_chinese_script_sample = (
+            auto_pgs_ocr
+            and not pgs_ocr_command
+            and len(ocr_languages) > 1
+            and needs_chinese_script_ocr(track, pgs_ocr_language)
+        )
+        if use_chinese_script_sample:
+            sample_sup_path = cache_dir / f"{sup_path.stem}.sample_{CHINESE_SCRIPT_OCR_SAMPLE_EVENTS}.sup"
+            if force_pgs_ocr and sample_sup_path.exists():
+                sample_sup_path.unlink()
+            if not sample_sup_path.exists():
+                try:
+                    sampled_events = write_pgs_display_set_sample(sup_path, sample_sup_path)
+                except OSError as error:
+                    sampled_events = 0
+                    print(f"  Warning: could not create PGS OCR sample for track {track.id}: {error}")
+                if sampled_events:
+                    print(
+                        f"  OCR PGS track {track.id}: using {sampled_events} event sample "
+                        f"for Chinese script detection"
+                    )
+                elif sample_sup_path.exists():
+                    sample_sup_path.unlink()
+            if sample_sup_path.exists():
+                ocr_sup_path = sample_sup_path
+
         if pgs_ocr_command:
             run_pgs_ocr_command(
                 command_template=pgs_ocr_command,
@@ -3354,7 +3420,7 @@ def ensure_pgs_ocr_cache(
                     candidate_srt_path.unlink()
                 if force_pgs_ocr or not candidate_srt_path.exists():
                     run_automatic_pgs_ocr(
-                        sup_path=sup_path,
+                        sup_path=ocr_sup_path,
                         output_srt_path=candidate_srt_path,
                         cache_dir=language_cache_dir,
                         seconv=seconv,

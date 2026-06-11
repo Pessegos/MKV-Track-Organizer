@@ -225,6 +225,13 @@ def test_mandarin_pgs_ocr_uses_name_hint_only_for_engine_order() -> None:
     assert m.ocr_language_candidates_for_track(traditional, "auto") == ["chi_tra", "chi_sim"]
 
 
+def test_explicit_chinese_variant_pgs_still_triggers_validation_ocr() -> None:
+    simplified = pgs_subtitle_track(21, "zh-Hans")
+
+    assert m.should_ocr_for_language_variant_detection(simplified, {"chi": 1})
+    assert m.ocr_language_candidates_for_track(simplified, "auto") == ["chi_sim", "chi_tra"]
+
+
 def test_chinese_ocr_selection_prefers_script_evidence(tmp_path: Path) -> None:
     simplified = tmp_path / "simplified.srt"
     traditional = tmp_path / "traditional.srt"
@@ -236,6 +243,30 @@ def test_chinese_ocr_selection_prefers_script_evidence(tmp_path: Path) -> None:
     assert selected is not None
     assert selected[0] == "chi_sim"
     assert selected[1] == simplified
+
+
+def test_pgs_display_set_sample_keeps_complete_events(tmp_path: Path) -> None:
+    def segment(segment_type: int, payload: bytes = b"") -> bytes:
+        return (
+            b"PG"
+            + (0).to_bytes(4, "big")
+            + (0).to_bytes(4, "big")
+            + bytes([segment_type])
+            + len(payload).to_bytes(2, "big")
+            + payload
+        )
+
+    sup_path = tmp_path / "input.sup"
+    sample_path = tmp_path / "sample.sup"
+    first_event = segment(0x16, b"first") + segment(0x80)
+    second_event = segment(0x16, b"second") + segment(0x80)
+    third_event = segment(0x16, b"third") + segment(0x80)
+    sup_path.write_bytes(first_event + second_event + third_event)
+
+    sampled = m.write_pgs_display_set_sample(sup_path, sample_path, max_display_sets=2)
+
+    assert sampled == 2
+    assert sample_path.read_bytes() == first_event + second_event
 
 
 def test_run_process_with_timeout_emits_heartbeat() -> None:
