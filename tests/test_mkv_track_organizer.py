@@ -189,6 +189,44 @@ def test_chinese_taiwan_metadata_survives_traditional_ocr(tmp_path: Path) -> Non
     assert taiwan.language_name == "Chinese (Taiwan)"
 
 
+def test_mandarin_subtitle_can_be_classified_by_chinese_script(tmp_path: Path) -> None:
+    mandarin = subtitle_track(21, "cmn")
+    mandarin.analysis.text_sample = "我们这个电话声音还在门后。"
+
+    m.detect_language_variants(tmp_path / "movie.mkv", [mandarin], tmp_path / "cache")
+
+    assert mandarin.output_language == "zh-Hans"
+    assert mandarin.language_name == "Chinese (Simplified)"
+
+
+def test_mandarin_subtitle_without_text_stays_mandarin(tmp_path: Path) -> None:
+    mandarin = subtitle_track(21, "cmn")
+
+    m.detect_language_variants(tmp_path / "movie.mkv", [mandarin], tmp_path / "cache")
+
+    assert mandarin.output_language == "cmn"
+    assert mandarin.language_name == "Mandarin Chinese"
+
+
+def test_mandarin_pgs_ocr_tries_both_chinese_script_models() -> None:
+    mandarin = pgs_subtitle_track(21, "cmn")
+
+    assert m.ocr_language_candidates_for_track(mandarin, "auto") == ["chi_sim", "chi_tra"]
+
+
+def test_chinese_ocr_selection_prefers_script_evidence(tmp_path: Path) -> None:
+    simplified = tmp_path / "simplified.srt"
+    traditional = tmp_path / "traditional.srt"
+    simplified.write_text("我们这个电话声音还在门后。", encoding="utf-8")
+    traditional.write_text("hello", encoding="utf-8")
+
+    selected = m.select_chinese_ocr_output([("chi_sim", simplified), ("chi_tra", traditional)])
+
+    assert selected is not None
+    assert selected[0] == "chi_sim"
+    assert selected[1] == simplified
+
+
 def test_portuguese_variant_uses_known_iberian_vocabulary() -> None:
     result = m.classify_portuguese_variant(
         "Liga para o telemóvel. "
@@ -526,6 +564,16 @@ def test_ordered_pgs_variants_do_not_guess_spanish_variants_without_evidence() -
 
     assert first.output_language == "spa"
     assert second.output_language == "spa"
+
+
+def test_ordered_pgs_variants_do_not_guess_chinese_scripts_without_evidence() -> None:
+    first = pgs_subtitle_track(1, language="chi", size_bytes=4_000_000, display_events=900)
+    second = pgs_subtitle_track(2, language="chi", size_bytes=3_800_000, display_events=880)
+
+    m.apply_ordered_pgs_language_variants([first, second])
+
+    assert first.output_language == "chi"
+    assert second.output_language == "chi"
 
 
 def test_short_variant_subtitle_inherits_single_full_anchor(tmp_path: Path) -> None:

@@ -645,6 +645,12 @@ TESSERACT_LANGUAGE_ALIASES = {
     "cat": "cat",
 }
 
+CHINESE_OCR_SCRIPT_LANGUAGES = ("chi_sim", "chi_tra")
+CHINESE_OCR_LANGUAGE_VARIANTS = {
+    "chi_sim": "zh-Hans",
+    "chi_tra": "zh-Hant",
+}
+
 
 LANGUAGE_VARIANT_BASES = {
     "en-US": "eng",
@@ -667,6 +673,10 @@ LANGUAGE_VARIANT_BASES = {
     "zh-Hans": "chi",
     "zh-TW": "chi",
     "zh-HK": "chi",
+}
+
+LANGUAGE_VARIANT_BASE_ALIASES = {
+    "cmn": "chi",
 }
 
 
@@ -785,7 +795,6 @@ DEFAULT_LANGUAGE_VARIANTS = {
 ORDERED_PGS_LANGUAGE_VARIANTS = {
     "por": ("pt-BR", "pt-PT"),
     "fre": ("fr-FR", "fr-CA"),
-    "chi": ("zh-Hant", "zh-Hans"),
 }
 
 
@@ -1691,6 +1700,15 @@ def is_english(track: TrackInfo) -> bool:
 
 def base_language_key(track: TrackInfo) -> str:
     return base_language_code(track.output_language or track.language)
+
+
+def variant_base_language_code(code: str | None) -> str:
+    base_code = base_language_code(code)
+    return LANGUAGE_VARIANT_BASE_ALIASES.get(base_code, base_code)
+
+
+def variant_base_language_key(track: TrackInfo) -> str:
+    return variant_base_language_code(track.output_language or track.language)
 
 
 def parse_channels(value: Any) -> int | None:
@@ -2813,26 +2831,80 @@ def download_tessdata(language_code: str, tessdata_dir: Path, model: str) -> boo
         return False
 
 
+def needs_chinese_script_ocr(track: TrackInfo, preferred_language: str) -> bool:
+    return (
+        preferred_language == "auto"
+        and variant_base_language_key(track) == "chi"
+        and track.output_language not in LANGUAGE_VARIANT_BASES
+    )
+
+
+def ocr_language_candidates_for_track(track: TrackInfo, preferred_language: str) -> list[str]:
+    if preferred_language != "auto":
+        return [preferred_language]
+
+    if needs_chinese_script_ocr(track, preferred_language):
+        return list(CHINESE_OCR_SCRIPT_LANGUAGES)
+
+    candidate = (
+        TESSERACT_LANGUAGE_ALIASES.get(track.output_language)
+        or TESSERACT_LANGUAGE_ALIASES.get(track.language)
+        or TESSERACT_LANGUAGE_ALIASES.get(variant_base_language_key(track))
+        or TESSERACT_LANGUAGE_ALIASES.get(base_language_key(track))
+    )
+    return [candidate] if candidate else []
+
+
 def ocr_language_for_track(
     track: TrackInfo,
     preferred_language: str,
     available_languages: set[str],
 ) -> str | None:
-    if preferred_language != "auto":
-        return preferred_language
-
-    candidate = (
-        TESSERACT_LANGUAGE_ALIASES.get(track.output_language)
-        or TESSERACT_LANGUAGE_ALIASES.get(track.language)
-        or TESSERACT_LANGUAGE_ALIASES.get(base_language_key(track))
-    )
-    if not candidate:
+    candidates = ocr_language_candidates_for_track(track, preferred_language)
+    if not candidates:
         return None
 
+    candidate = candidates[0]
     if available_languages and candidate not in available_languages:
         return None
 
     return candidate
+
+
+def cjk_character_count(text: str) -> int:
+    return sum(1 for char in text if "\u4e00" <= char <= "\u9fff")
+
+
+def chinese_ocr_candidate_quality(language_code: str, srt_path: Path) -> tuple[tuple[int, float, float, int], dict[str, Any]]:
+    raw_text = srt_path.read_text(encoding="utf-8", errors="replace")
+    result = classify_chinese_variant(raw_text)
+    expected_variant = CHINESE_OCR_LANGUAGE_VARIANTS.get(language_code)
+    matched_expected = int(result.get("code") == expected_variant)
+    return (
+        (
+            matched_expected,
+            variant_total_score(result),
+            float(result.get("confidence") or 0.0),
+            cjk_character_count(raw_text),
+        ),
+        result,
+    )
+
+
+def select_chinese_ocr_output(candidates: list[tuple[str, Path]]) -> tuple[str, Path, dict[str, Any]] | None:
+    scored: list[tuple[tuple[int, float, float, int], str, Path, dict[str, Any]]] = []
+
+    for language_code, srt_path in candidates:
+        if not srt_path.exists():
+            continue
+        quality, result = chinese_ocr_candidate_quality(language_code, srt_path)
+        scored.append((quality, language_code, srt_path, result))
+
+    if not scored:
+        return None
+
+    _quality, language_code, srt_path, result = max(scored, key=lambda item: item[0])
+    return language_code, srt_path, result
 
 
 def env_with_tool_on_path(tool_path: Path | None) -> dict[str, str] | None:
@@ -3041,32 +3113,27 @@ def ensure_pgs_ocr_cache(
     max_sizes = max_subtitle_sizes_by_language(subtitles)
     max_pgs_events = max_pgs_metric_by_language(subtitles, "display_events")
     first_full_tracks = first_full_sized_track_by_language(subtitles, max_sizes)
-    variant_counts = count_subtitles_by_base_language(subtitles)
-    ocr_targets: dict[int, TrackInfo] = {
-        track.id: track
-        for track in subtitles
-        if (
-            is_pgs_subtitle(track)
-            and base_language_key(track) in LANGUAGE_VARIANT_CLASSIFIERS
+    variant_counts = count_subtitles_by_variant_base_language(subtitles)
+    ocr_targets: dict[int, TrackInfo] = {}
+    for track in subtitles:
+        base_code = variant_base_language_key(track)
+        if not is_pgs_subtitle(track) or base_code not in LANGUAGE_VARIANT_CLASSIFIERS:
+            continue
+
+        needs_unknown_variant_ocr = (
+            track.output_language not in LANGUAGE_VARIANT_BASES
             and (
-                (
-                    track.output_language not in LANGUAGE_VARIANT_BASES
-                    and (
-                        base_language_key(track) not in DEFAULT_LANGUAGE_VARIANTS
-                        or variant_counts.get(base_language_key(track), 0) > 1
-                    )
-                )
-                or (
-                    base_language_key(track) in OCR_VALIDATED_VARIANT_LANGUAGES
-                    and track.output_language in LANGUAGE_VARIANT_BASES
-                    and not subtitle_looks_forced_sidecar(
-                        track,
-                        max_pgs_events.get(base_language_key(track)),
-                    )
-                )
+                base_code not in DEFAULT_LANGUAGE_VARIANTS
+                or variant_counts.get(base_code, 0) > 1
             )
         )
-    }
+        needs_variant_validation_ocr = (
+            base_code in OCR_VALIDATED_VARIANT_LANGUAGES
+            and track.output_language in LANGUAGE_VARIANT_BASES
+            and not subtitle_looks_forced_sidecar(track, max_pgs_events.get(base_language_key(track)))
+        )
+        if needs_unknown_variant_ocr or needs_variant_validation_ocr:
+            ocr_targets[track.id] = track
 
     if auto_commentary_ocr:
         for track in subtitles:
@@ -3111,36 +3178,24 @@ def ensure_pgs_ocr_cache(
             print(f"  OCR PGS track {track.id}: skip, empty track")
             continue
 
-        ocr_language = ocr_language_for_track(track, pgs_ocr_language, available_languages)
-        if (
-            auto_pgs_ocr
-            and not pgs_ocr_command
-            and not ocr_language
-            and pgs_ocr_language == "auto"
-            and auto_download_tessdata
-        ):
-            candidate_language = (
-                TESSERACT_LANGUAGE_ALIASES.get(track.output_language)
-                or TESSERACT_LANGUAGE_ALIASES.get(track.language)
-                or TESSERACT_LANGUAGE_ALIASES.get(base_language_key(track))
-            )
-            if candidate_language and download_tessdata(candidate_language, local_dir, tessdata_model):
-                tessdata_dirs = [local_dir] + tessdata_dirs
-                available_languages.add(candidate_language)
-                ocr_language = candidate_language
+        ocr_languages = ocr_language_candidates_for_track(track, pgs_ocr_language)
+        if auto_pgs_ocr and not pgs_ocr_command:
+            for ocr_language in list(ocr_languages):
+                if (
+                    ocr_language not in available_languages
+                    and auto_download_tessdata
+                    and download_tessdata(ocr_language, local_dir, tessdata_model)
+                ):
+                    tessdata_dirs = [local_dir] + tessdata_dirs
+                    available_languages.add(ocr_language)
 
-        if (
-            auto_pgs_ocr
-            and not pgs_ocr_command
-            and ocr_language
-            and ocr_language not in available_languages
-            and auto_download_tessdata
-            and download_tessdata(ocr_language, local_dir, tessdata_model)
-        ):
-            tessdata_dirs = [local_dir] + tessdata_dirs
-            available_languages.add(ocr_language)
+            if available_languages:
+                ocr_languages = [
+                    ocr_language for ocr_language in ocr_languages
+                    if ocr_language in available_languages
+                ]
 
-        if auto_pgs_ocr and not pgs_ocr_command and not ocr_language:
+        if auto_pgs_ocr and not pgs_ocr_command and not ocr_languages:
             print(
                 f"  OCR PGS track {track.id}: skip, missing Tesseract traineddata for "
                 f"{track.language_name} ({track.output_language})"
@@ -3187,7 +3242,37 @@ def ensure_pgs_ocr_cache(
                 sup_path=sup_path,
                 output_srt_path=output_srt_path,
             )
-        elif auto_pgs_ocr and ocr_language:
+        elif auto_pgs_ocr and len(ocr_languages) > 1 and needs_chinese_script_ocr(track, pgs_ocr_language):
+            candidates: list[tuple[str, Path]] = []
+            for ocr_language in ocr_languages:
+                language_cache_dir = cache_dir / f"_ocr_track_{track.id}_{ocr_language}"
+                language_cache_dir.mkdir(parents=True, exist_ok=True)
+                candidate_srt_path = language_cache_dir / f"{sup_path.stem}.{ocr_language}.srt"
+                if force_pgs_ocr and candidate_srt_path.exists():
+                    candidate_srt_path.unlink()
+                run_automatic_pgs_ocr(
+                    sup_path=sup_path,
+                    output_srt_path=candidate_srt_path,
+                    cache_dir=language_cache_dir,
+                    seconv=seconv,
+                    subtitle_edit=subtitle_edit,
+                    tesseract=tesseract,
+                    tessdata_dirs=tessdata_dirs,
+                    ocr_language=ocr_language,
+                    timeout_seconds=pgs_ocr_timeout_seconds,
+                    allow_legacy_subtitle_edit_ocr=allow_legacy_subtitle_edit_ocr,
+                )
+                candidates.append((ocr_language, candidate_srt_path))
+
+            selected = select_chinese_ocr_output(candidates)
+            if selected:
+                selected_language, selected_path, selected_result = selected
+                shutil.copyfile(selected_path, output_srt_path)
+                print(
+                    f"  OCR PGS track {track.id}: selected {selected_language} "
+                    f"({selected_result['reason']}; {evidence_summary(selected_result)})"
+                )
+        elif auto_pgs_ocr and ocr_languages:
             run_automatic_pgs_ocr(
                 sup_path=sup_path,
                 output_srt_path=output_srt_path,
@@ -3196,7 +3281,7 @@ def ensure_pgs_ocr_cache(
                 subtitle_edit=subtitle_edit,
                 tesseract=tesseract,
                 tessdata_dirs=tessdata_dirs,
-                ocr_language=ocr_language,
+                ocr_language=ocr_languages[0],
                 timeout_seconds=pgs_ocr_timeout_seconds,
                 allow_legacy_subtitle_edit_ocr=allow_legacy_subtitle_edit_ocr,
             )
@@ -3210,7 +3295,7 @@ def extract_pgs_for_manual_ocr(
 ) -> None:
     pgs_variant_subtitles = [
         track for track in subtitles
-        if base_language_key(track) in LANGUAGE_VARIANT_CLASSIFIERS and is_pgs_subtitle(track)
+        if variant_base_language_key(track) in LANGUAGE_VARIANT_CLASSIFIERS and is_pgs_subtitle(track)
     ]
 
     if not pgs_variant_subtitles:
@@ -3361,7 +3446,7 @@ def variant_result_is_weak_for_pairing(result: dict[str, Any] | None, base_code:
 
 
 def language_variant_vote_for_track(track: TrackInfo, result: dict[str, Any] | None) -> str | None:
-    base_code = base_language_key(track)
+    base_code = variant_base_language_key(track)
     if base_code not in LANGUAGE_VARIANT_CLASSIFIERS:
         return None
 
@@ -3401,7 +3486,7 @@ def variant_detection_result(
     track: TrackInfo,
     cache_dir: Path,
 ) -> tuple[dict[str, Any] | None, str]:
-    base_code = base_language_key(track)
+    base_code = variant_base_language_key(track)
     classifier = LANGUAGE_VARIANT_CLASSIFIERS.get(base_code)
     file_classifier = LANGUAGE_VARIANT_FILE_CLASSIFIERS.get(base_code)
     if not classifier or not file_classifier:
@@ -3418,8 +3503,14 @@ def variant_detection_result(
 
 
 def apply_language_variant_result(track: TrackInfo, result: dict[str, Any]) -> None:
-    code = result.get("code") or base_language_key(track)
-    base_code = base_language_key(track)
+    code = result.get("code") or variant_base_language_key(track)
+    base_code = variant_base_language_key(track)
+    if (
+        code == base_code
+        and track.output_language != base_code
+        and track.output_language not in LANGUAGE_VARIANT_BASES
+    ):
+        return
     if track.output_language in CHINESE_TRADITIONAL_REGIONAL_VARIANTS and code == "zh-Hant":
         return
     if (
@@ -3451,7 +3542,7 @@ def reconcile_short_language_variants(
     changes: list[tuple[TrackInfo, str, TrackInfo, str]] = []
 
     for track in subtitles:
-        base_code = base_language_key(track)
+        base_code = variant_base_language_key(track)
         if base_code in LANGUAGE_VARIANT_CLASSIFIERS:
             tracks_by_base.setdefault(base_code, []).append(track)
 
@@ -3519,7 +3610,7 @@ def apply_batch_language_variant_consensus(
     changes: list[tuple[TrackInfo, str, str]] = []
 
     for track in subtitles:
-        base_code = base_language_key(track)
+        base_code = variant_base_language_key(track)
         consensus_code = batch_variant_consensus.get(base_code)
         if not consensus_code or track.output_language == consensus_code:
             continue
@@ -3556,7 +3647,7 @@ def detect_language_variants(
     variant_subtitles = [
         track
         for track in subtitles
-        if base_language_key(track) in LANGUAGE_VARIANT_CLASSIFIERS
+        if variant_base_language_key(track) in LANGUAGE_VARIANT_CLASSIFIERS
     ]
     if not variant_subtitles:
         return
@@ -3571,13 +3662,13 @@ def detect_language_variants(
             if track.output_language not in LANGUAGE_VARIANT_BASES:
                 print(
                     f"  track {track.id}: no extracted/cache text for "
-                    f"{base_language_key(track).upper()} "
+                    f"{variant_base_language_key(track).upper()} "
                     "(for PGS/SUP, use --pgs-ocr-command or place OCR .srt files in _ocr_cache)"
                 )
             continue
 
         variant_results[track.id] = result
-        if base_language_key(track) == "por":
+        if variant_base_language_key(track) == "por":
             track.pt_variant = result
         apply_language_variant_result(track, result)
         print(
@@ -3614,6 +3705,14 @@ def count_subtitles_by_base_language(subtitles: list[TrackInfo]) -> dict[str, in
     counts: dict[str, int] = {}
     for track in subtitles:
         base_code = base_language_key(track)
+        counts[base_code] = counts.get(base_code, 0) + 1
+    return counts
+
+
+def count_subtitles_by_variant_base_language(subtitles: list[TrackInfo]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for track in subtitles:
+        base_code = variant_base_language_key(track)
         counts[base_code] = counts.get(base_code, 0) + 1
     return counts
 
@@ -5163,7 +5262,7 @@ def collect_batch_language_variant_consensus(
             variant_subtitles = [
                 track
                 for track in subtitles
-                if base_language_key(track) in LANGUAGE_VARIANT_CLASSIFIERS
+                if variant_base_language_key(track) in LANGUAGE_VARIANT_CLASSIFIERS
             ]
             if not variant_subtitles:
                 continue
@@ -5196,13 +5295,14 @@ def collect_batch_language_variant_consensus(
             file_votes: dict[str, set[str]] = {}
 
             for track in variant_subtitles:
-                base_code = base_language_key(track)
+                base_code = variant_base_language_key(track)
+                size_base_code = base_language_key(track)
                 if has_commentary_flag(track) or has_sdh_subtitle_hint(track):
                     continue
                 if not subtitle_looks_full_variant_anchor(
                     track,
-                    max_sizes.get(base_code),
-                    max_pgs_events.get(base_code),
+                    max_sizes.get(size_base_code),
+                    max_pgs_events.get(size_base_code),
                 ):
                     continue
 
@@ -5238,7 +5338,7 @@ def explicit_metadata_variant_votes(subtitles: list[TrackInfo]) -> dict[str, set
     votes: dict[str, set[str]] = {}
 
     for track in subtitles:
-        base_code = base_language_key(track)
+        base_code = variant_base_language_key(track)
         if base_code not in LANGUAGE_VARIANT_CLASSIFIERS:
             continue
         if has_forced_flag(track) or has_commentary_flag(track) or has_sdh_subtitle_hint(track):
