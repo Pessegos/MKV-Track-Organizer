@@ -279,6 +279,7 @@ CONFIG_BOOL_KEYS = {
     "prepare_pgs_ocr",
     "auto_pgs_ocr",
     "auto_commentary_ocr",
+    "validate_explicit_variant_ocr",
     "allow_subtitle_edit_legacy_ocr",
     "force_pgs_ocr",
     "auto_download_tessdata",
@@ -3053,12 +3054,20 @@ def should_ocr_for_commentary_or_sdh_detection(
     return (size_bytes / max_size) >= FULL_SIZE_DUPLICATE_RATIO
 
 
-def should_ocr_for_language_variant_detection(track: TrackInfo, variant_counts: dict[str, int]) -> bool:
+def should_ocr_for_language_variant_detection(
+    track: TrackInfo,
+    variant_counts: dict[str, int],
+    validate_explicit_variant_ocr: bool = False,
+) -> bool:
     base_code = variant_base_language_key(track)
     if not is_pgs_subtitle(track) or base_code not in LANGUAGE_VARIANT_CLASSIFIERS:
         return False
     if track.output_language in LANGUAGE_VARIANT_BASES:
-        return False
+        return (
+            validate_explicit_variant_ocr
+            and base_code in OCR_VALIDATED_VARIANT_LANGUAGES
+            and not subtitle_looks_forced_sidecar(track)
+        )
     if base_code in DEFAULT_LANGUAGE_VARIANTS and variant_counts.get(base_code, 0) <= 1:
         return False
     return True
@@ -3215,6 +3224,7 @@ def ensure_pgs_ocr_cache(
     auto_download_tessdata: bool,
     tessdata_model: str,
     force_pgs_ocr: bool,
+    validate_explicit_variant_ocr: bool = False,
     progress_callback: Callable[[str, int, int], None] | None = None,
     cancel_callback: Callable[[], bool] | None = None,
 ) -> None:
@@ -3226,7 +3236,11 @@ def ensure_pgs_ocr_cache(
     variant_counts = count_subtitles_by_variant_base_language(subtitles)
     ocr_targets: dict[int, TrackInfo] = {}
     for track in subtitles:
-        if should_ocr_for_language_variant_detection(track, variant_counts):
+        if should_ocr_for_language_variant_detection(
+            track,
+            variant_counts,
+            validate_explicit_variant_ocr=validate_explicit_variant_ocr,
+        ):
             ocr_targets[track.id] = track
 
     if auto_commentary_ocr:
@@ -5403,6 +5417,7 @@ def collect_batch_language_variant_consensus(
                 auto_download_tessdata=args.auto_download_tessdata,
                 tessdata_model=args.tessdata_model,
                 force_pgs_ocr=args.force_pgs_ocr,
+                validate_explicit_variant_ocr=False,
             )
             attach_cached_ocr_text(input_path, variant_subtitles, cache_dir)
 
@@ -5722,6 +5737,7 @@ def process_file(
             auto_download_tessdata=args.auto_download_tessdata,
             tessdata_model=args.tessdata_model,
             force_pgs_ocr=args.force_pgs_ocr,
+            validate_explicit_variant_ocr=getattr(args, "validate_explicit_variant_ocr", False),
             progress_callback=ocr_progress,
             cancel_callback=cancel_callback,
         )
@@ -5902,6 +5918,7 @@ def build_parser(config_defaults: dict[str, Any] | None = None) -> argparse.Argu
         detect_language_variants=default("detect_language_variants", True),
         auto_pgs_ocr=default("auto_pgs_ocr", True),
         auto_commentary_ocr=default("auto_commentary_ocr", True),
+        validate_explicit_variant_ocr=default("validate_explicit_variant_ocr", False),
         batch_language_variant_consensus=default("batch_language_variant_consensus", True),
         drop_empty_subs=default("drop_empty_subs", True),
         auto_download_tessdata=default("auto_download_tessdata", True),
@@ -6176,6 +6193,21 @@ def build_parser(config_defaults: dict[str, Any] | None = None) -> argparse.Argu
         dest="auto_commentary_ocr",
         action="store_false",
         help="Disable extra automatic OCR for commentary/SDH candidates.",
+    )
+    parser.add_argument(
+        "--validate-explicit-variant-ocr",
+        dest="validate_explicit_variant_ocr",
+        action="store_true",
+        help=(
+            "Run automatic OCR to validate explicit subtitle variants such as es-419. "
+            "Off by default because it can be slow on PGS tracks."
+        ),
+    )
+    parser.add_argument(
+        "--no-validate-explicit-variant-ocr",
+        dest="validate_explicit_variant_ocr",
+        action="store_false",
+        help="Disable automatic OCR validation for explicit subtitle variants.",
     )
     parser.add_argument(
         "--allow-subtitle-edit-legacy-ocr",

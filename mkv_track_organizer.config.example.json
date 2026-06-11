@@ -18,6 +18,7 @@
   "detect_language_variants": true,
   "auto_pgs_ocr": true,
   "auto_commentary_ocr": true,
+  "validate_explicit_variant_ocr": false,
   "auto_download_tessdata": true,
   "tessdata_model": "best",
   "pgs_ocr_language": "auto",

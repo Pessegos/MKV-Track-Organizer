@@ -621,6 +621,11 @@ def test_explicit_pgs_variant_does_not_trigger_automatic_validation_ocr() -> Non
     spanish = pgs_subtitle_track(28, language="es-419", size_bytes=3_900_000, display_events=900)
 
     assert not m.should_ocr_for_language_variant_detection(spanish, {"spa": 1})
+    assert m.should_ocr_for_language_variant_detection(
+        spanish,
+        {"spa": 1},
+        validate_explicit_variant_ocr=True,
+    )
 
 
 def test_ambiguous_mandarin_pair_triggers_script_ocr() -> None:
@@ -1062,6 +1067,7 @@ def test_parser_defaults_keep_commentary_ocr_enabled() -> None:
 
     assert args.auto_pgs_ocr is True
     assert args.auto_commentary_ocr is True
+    assert args.validate_explicit_variant_ocr is False
 
 
 def test_config_metadata_edit_mode_accepts_off_and_only(tmp_path: Path) -> None:
