@@ -17,7 +17,7 @@
   "drop_empty_subs": true,
   "detect_language_variants": true,
   "auto_pgs_ocr": true,
-  "auto_commentary_ocr": true,
+  "auto_commentary_ocr": false,
   "auto_download_tessdata": true,
   "tessdata_model": "best",
   "pgs_ocr_language": "auto",

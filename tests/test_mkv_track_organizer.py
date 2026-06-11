@@ -576,6 +576,21 @@ def test_ordered_pgs_variants_do_not_guess_chinese_scripts_without_evidence() ->
     assert second.output_language == "chi"
 
 
+def test_commentary_ocr_skips_normal_and_explicit_sdh_pgs() -> None:
+    normal = pgs_subtitle_track(1, language="eng", size_bytes=4_000_000, display_events=900)
+    sdh = pgs_subtitle_track(2, language="eng", size_bytes=3_900_000, display_events=900)
+    sdh.original_name = "English (SDH)"
+
+    assert not m.should_ocr_for_commentary_or_sdh_detection(normal, 4_000_000, 1)
+    assert not m.should_ocr_for_commentary_or_sdh_detection(sdh, 4_000_000, 1)
+
+
+def test_commentary_ocr_targets_unknown_full_size_extra_pgs() -> None:
+    extra = pgs_subtitle_track(2, language="eng", size_bytes=3_900_000, display_events=900)
+
+    assert m.should_ocr_for_commentary_or_sdh_detection(extra, 4_000_000, 1)
+
+
 def test_short_variant_subtitle_inherits_single_full_anchor(tmp_path: Path) -> None:
     normal = subtitle_track(1, "por", "large")
     normal.analysis = m.SubtitleAnalysis(
@@ -1001,6 +1016,14 @@ def test_config_defaults(tmp_path: Path) -> None:
     assert defaults["audio_name_style"] == "language-format"
     assert defaults["language_order_style"] == "regional"
     assert defaults["regional_order"] == ["asia", "americas"]
+
+
+def test_parser_defaults_keep_commentary_ocr_opt_in() -> None:
+    parser = m.build_parser({})
+    args = parser.parse_args([])
+
+    assert args.auto_pgs_ocr is True
+    assert args.auto_commentary_ocr is False
 
 
 def test_config_metadata_edit_mode_accepts_off_and_only(tmp_path: Path) -> None:

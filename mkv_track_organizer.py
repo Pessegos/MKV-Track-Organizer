@@ -2966,6 +2966,30 @@ def normalize_ocr_output(cache_dir: Path, sup_path: Path, expected_srt_path: Pat
     return True
 
 
+def should_ocr_for_commentary_or_sdh_detection(
+    track: TrackInfo,
+    max_size: int | None,
+    first_full_track_id: int | None,
+) -> bool:
+    size_bytes = subtitle_size_bytes(track)
+    is_large_pgs = (
+        is_pgs_subtitle(track)
+        and track.analysis
+        and track.analysis.size_class == "large"
+    )
+    if (
+        not is_large_pgs
+        or has_commentary_flag(track)
+        or has_forced_flag(track)
+        or has_sdh_subtitle_hint(track)
+    ):
+        return False
+    if not max_size or size_bytes is None or first_full_track_id == track.id:
+        return False
+
+    return (size_bytes / max_size) >= FULL_SIZE_DUPLICATE_RATIO
+
+
 def run_seconv_pgs_ocr(
     seconv: Path,
     sup_path: Path,
@@ -3106,6 +3130,8 @@ def ensure_pgs_ocr_cache(
     auto_download_tessdata: bool,
     tessdata_model: str,
     force_pgs_ocr: bool,
+    progress_callback: Callable[[str, int, int], None] | None = None,
+    cancel_callback: Callable[[], bool] | None = None,
 ) -> None:
     if not pgs_ocr_command and not auto_pgs_ocr:
         return
@@ -3137,29 +3163,11 @@ def ensure_pgs_ocr_cache(
 
     if auto_commentary_ocr:
         for track in subtitles:
-            size_bytes = subtitle_size_bytes(track)
-            max_size = max_sizes.get(base_language_key(track), 0)
-            is_large_pgs = (
-                is_pgs_subtitle(track)
-                and track.analysis
-                and track.analysis.size_class == "large"
-            )
-            is_full_size_extra = (
-                is_large_pgs
-                and max_size
-                and size_bytes is not None
-                and size_bytes / max_size >= FULL_SIZE_DUPLICATE_RATIO
-                and first_full_tracks.get(base_language_key(track)) != track.id
-            )
-            if (
-                is_large_pgs
-                and not has_commentary_flag(track)
-                and not has_forced_flag(track)
-                and (
-                    is_english(track)
-                    or has_sdh_subtitle_hint(track)
-                    or is_full_size_extra
-                )
+            language_key = base_language_key(track)
+            if should_ocr_for_commentary_or_sdh_detection(
+                track,
+                max_sizes.get(language_key),
+                first_full_tracks.get(language_key),
             ):
                 ocr_targets[track.id] = track
 
@@ -3170,7 +3178,15 @@ def ensure_pgs_ocr_cache(
     local_dir = local_tessdata_dir()
     available_languages = available_tesseract_languages(tessdata_dirs + [local_dir])
 
-    for track in sorted(ocr_targets.values(), key=lambda item: item.order):
+    ocr_target_items = sorted(ocr_targets.values(), key=lambda item: item.order)
+    for ocr_index, track in enumerate(ocr_target_items, start=1):
+        ensure_not_cancelled(cancel_callback)
+        if progress_callback:
+            progress_callback(
+                f"OCR PGS track {track.id} ({ocr_index}/{len(ocr_target_items)})",
+                ocr_index,
+                len(ocr_target_items),
+            )
         if track.analysis and (
             track.analysis.size_class == "empty"
             or bool(track.analysis.pgs and track.analysis.pgs.display_events == 0)
@@ -5577,6 +5593,10 @@ def process_file(
     needs_ocr_cache = args.detect_language_variants or args.auto_commentary_ocr or args.prepare_pgs_ocr
     if needs_ocr_cache:
         cache_dir = args.ocr_cache_dir or (input_path.parent / OCR_CACHE_DIR_NAME)
+        def ocr_progress(message: str, index: int, total: int) -> None:
+            step = 30 + int(max(0, index - 1) * 15 / max(1, total))
+            progress(message, min(step, 44))
+
         if args.prepare_pgs_ocr:
             extract_pgs_for_manual_ocr(
                 input_path=input_path,
@@ -5602,6 +5622,8 @@ def process_file(
             auto_download_tessdata=args.auto_download_tessdata,
             tessdata_model=args.tessdata_model,
             force_pgs_ocr=args.force_pgs_ocr,
+            progress_callback=ocr_progress,
+            cancel_callback=cancel_callback,
         )
         attach_cached_ocr_text(input_path, subtitles, cache_dir)
 
@@ -5779,7 +5801,7 @@ def build_parser(config_defaults: dict[str, Any] | None = None) -> argparse.Argu
         smart_sub_detection=default("smart_sub_detection", True),
         detect_language_variants=default("detect_language_variants", True),
         auto_pgs_ocr=default("auto_pgs_ocr", True),
-        auto_commentary_ocr=default("auto_commentary_ocr", True),
+        auto_commentary_ocr=default("auto_commentary_ocr", False),
         batch_language_variant_consensus=default("batch_language_variant_consensus", True),
         drop_empty_subs=default("drop_empty_subs", True),
         auto_download_tessdata=default("auto_download_tessdata", True),
@@ -6047,7 +6069,7 @@ def build_parser(config_defaults: dict[str, Any] | None = None) -> argparse.Argu
         "--auto-commentary-ocr",
         dest="auto_commentary_ocr",
         action="store_true",
-        help="Try automatic OCR on PGS commentary/SDH candidates when language traineddata exists. Enabled by default.",
+        help="Try automatic OCR on extra full-size PGS commentary/SDH candidates when language traineddata exists.",
     )
     parser.add_argument(
         "--no-auto-commentary-ocr",

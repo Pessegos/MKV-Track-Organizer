@@ -645,7 +645,7 @@ class MainWindow(QMainWindow):
         self.drop_empty_check.setToolTip("Exclude subtitles classified as empty")
         self.variant_check.setToolTip("Automatically detect language variants such as es-ES vs es-419")
         self.auto_pgs_ocr_check.setToolTip("Run OCR for PGS subtitles when needed for language detection")
-        self.auto_commentary_ocr_check.setToolTip("Run OCR for likely commentary/SDH PGS subtitles")
+        self.auto_commentary_ocr_check.setToolTip("Optional slow OCR for extra full-size PGS tracks that may be commentary or SDH")
         self.report_check.setToolTip("Write TXT/JSON batch reports")
 
         metadata_label = QLabel("Metadata mode")
