@@ -457,6 +457,7 @@ class MainWindow(QMainWindow):
         self.preview_button = QPushButton("Preview")
         self.run_button = QPushButton("Run")
         self.cancel_button = QPushButton("Cancel")
+        self.reset_all_button: QToolButton | None = None
         self.check_tools_button.setObjectName("secondaryButton")
         self.preview_button.setObjectName("secondaryButton")
         self.run_button.setObjectName("primaryButton")
@@ -499,10 +500,12 @@ class MainWindow(QMainWindow):
         self.makemkv_check_button = QPushButton("Check tools")
         self.makemkv_preview_button = QPushButton("Preview")
         self.makemkv_run_button = QPushButton("Run")
+        self.makemkv_reset_button = QPushButton("Reset")
         self.makemkv_cancel_button = QPushButton("Cancel")
         self.makemkv_check_button.setObjectName("secondaryButton")
         self.makemkv_preview_button.setObjectName("secondaryButton")
         self.makemkv_run_button.setObjectName("primaryButton")
+        self.makemkv_reset_button.setObjectName("secondaryButton")
         self.makemkv_cancel_button.setObjectName("dangerButton")
         self.makemkv_table = QTableWidget(0, len(self.MAKEMKV_COLUMNS))
         self.makemkv_summary_edit = QPlainTextEdit()
@@ -545,6 +548,7 @@ class MainWindow(QMainWindow):
         self.audio_sync_export_button = QPushButton("Export shifted .mka")
         self.audio_sync_select_all_button = QPushButton("Select all")
         self.audio_sync_clear_selection_button = QPushButton("Clear")
+        self.audio_sync_reset_button = QPushButton("Reset")
         self.audio_sync_cancel_button = QPushButton("Cancel")
         self.audio_sync_check_button.setObjectName("secondaryButton")
         self.audio_sync_load_button.setObjectName("secondaryButton")
@@ -553,6 +557,7 @@ class MainWindow(QMainWindow):
         self.audio_sync_export_button.setObjectName("secondaryButton")
         self.audio_sync_select_all_button.setObjectName("secondaryButton")
         self.audio_sync_clear_selection_button.setObjectName("secondaryButton")
+        self.audio_sync_reset_button.setObjectName("secondaryButton")
         self.audio_sync_cancel_button.setObjectName("dangerButton")
         self.audio_sync_tracks_table = QTableWidget(0, len(self.AUDIO_SYNC_COLUMNS))
         self.audio_sync_summary_edit = QPlainTextEdit()
@@ -585,11 +590,11 @@ class MainWindow(QMainWindow):
         input_label = QLabel("Input")
         file_button = self._tool_button(QStyle.SP_FileIcon, "Choose MKV files")
         folder_button = self._tool_button(QStyle.SP_DirOpenIcon, "Choose folder")
-        clear_button = self._tool_button(QStyle.SP_DialogResetButton, "Clear selected inputs")
+        self.reset_all_button = self._tool_button(QStyle.SP_DialogResetButton, "Reset all tabs")
         input_row.addWidget(self.input_edit, 1)
         input_row.addWidget(file_button)
         input_row.addWidget(folder_button)
-        input_row.addWidget(clear_button)
+        input_row.addWidget(self.reset_all_button)
 
         browse_output = self._tool_button(QStyle.SP_DirOpenIcon, "Choose output folder")
         output_row = QHBoxLayout()
@@ -764,7 +769,7 @@ class MainWindow(QMainWindow):
 
         file_button.clicked.connect(self.choose_file)
         folder_button.clicked.connect(self.choose_folder)
-        clear_button.clicked.connect(self.clear_inputs)
+        self.reset_all_button.clicked.connect(lambda: self.reset_all_tabs())
         browse_output.clicked.connect(self.choose_output_folder)
         self.advanced_button.toggled.connect(self.toggle_advanced)
 
@@ -829,6 +834,8 @@ class MainWindow(QMainWindow):
         self.makemkv_preview_button.setToolTip("Show planned MakeMKV commands without writing outputs")
         self.makemkv_run_button.setIcon(style.standardIcon(QStyle.SP_MediaPlay))
         self.makemkv_run_button.setToolTip("Run MakeMKV with the selected settings")
+        self.makemkv_reset_button.setIcon(style.standardIcon(QStyle.SP_DialogResetButton))
+        self.makemkv_reset_button.setToolTip("Reset Organizer, Audio Sync, and MakeMKV tabs")
         self.makemkv_cancel_button.setIcon(style.standardIcon(QStyle.SP_BrowserStop))
         self.makemkv_cancel_button.setToolTip("Cancel the current MakeMKV batch")
         self.makemkv_cancel_button.setEnabled(False)
@@ -836,6 +843,7 @@ class MainWindow(QMainWindow):
         top_bar.addWidget(self.makemkv_check_button)
         top_bar.addWidget(self.makemkv_preview_button)
         top_bar.addWidget(self.makemkv_run_button)
+        top_bar.addWidget(self.makemkv_reset_button)
         top_bar.addWidget(self.makemkv_cancel_button)
         root.addLayout(top_bar)
 
@@ -972,6 +980,8 @@ class MainWindow(QMainWindow):
         self.audio_sync_select_all_button.setEnabled(False)
         self.audio_sync_clear_selection_button.setIcon(style.standardIcon(QStyle.SP_DialogResetButton))
         self.audio_sync_clear_selection_button.setEnabled(False)
+        self.audio_sync_reset_button.setIcon(style.standardIcon(QStyle.SP_DialogResetButton))
+        self.audio_sync_reset_button.setToolTip("Reset Organizer, Audio Sync, and MakeMKV tabs")
         self.audio_sync_cancel_button.setIcon(style.standardIcon(QStyle.SP_BrowserStop))
         self.audio_sync_cancel_button.setEnabled(False)
 
@@ -982,6 +992,7 @@ class MainWindow(QMainWindow):
         top_bar.addWidget(self.audio_sync_analyze_button)
         top_bar.addWidget(self.audio_sync_apply_organizer_button)
         top_bar.addWidget(self.audio_sync_export_button)
+        top_bar.addWidget(self.audio_sync_reset_button)
         top_bar.addWidget(self.audio_sync_cancel_button)
         root.addLayout(top_bar)
 
@@ -1030,6 +1041,7 @@ class MainWindow(QMainWindow):
         self.makemkv_check_button.clicked.connect(self.check_makemkv_tools)
         self.makemkv_preview_button.clicked.connect(self.start_makemkv_preview)
         self.makemkv_run_button.clicked.connect(self.start_makemkv_run)
+        self.makemkv_reset_button.clicked.connect(lambda: self.reset_all_tabs())
         self.makemkv_cancel_button.clicked.connect(self.cancel_makemkv_run)
         self.audio_sync_check_button.clicked.connect(self.check_audio_sync_tools)
         self.audio_sync_load_button.clicked.connect(self.load_audio_sync_streams)
@@ -1038,6 +1050,7 @@ class MainWindow(QMainWindow):
         self.audio_sync_export_button.clicked.connect(self.start_audio_sync_export)
         self.audio_sync_select_all_button.clicked.connect(self.select_all_audio_sync_streams)
         self.audio_sync_clear_selection_button.clicked.connect(self.clear_audio_sync_stream_selection)
+        self.audio_sync_reset_button.clicked.connect(lambda: self.reset_all_tabs())
         self.audio_sync_cancel_button.clicked.connect(self.cancel_audio_sync_task)
         self.audio_sync_reference_edit.textEdited.connect(lambda _text: self._clear_audio_sync_loaded_streams())
         self.audio_sync_source_edit.textEdited.connect(lambda _text: self._clear_audio_sync_loaded_streams())
@@ -1625,6 +1638,100 @@ class MainWindow(QMainWindow):
         self._set_input_text("")
         self._refresh_file_list()
         self.tracks_table.setRowCount(0)
+
+    @Slot()
+    def reset_all_tabs(self, confirm: bool = True) -> None:
+        if self._workflow_is_running():
+            QMessageBox.information(self, "Reset all tabs", "Wait for the current task to finish first.")
+            return
+
+        if confirm:
+            answer = QMessageBox.question(
+                self,
+                "Reset all tabs",
+                "Clear inputs, loaded streams, tables, logs, and results in every tab?\n\n"
+                "Organizer options will return to their configured defaults.",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
+
+        self._reset_organizer_tab()
+        self._reset_audio_sync_tab()
+        self._reset_makemkv_tab()
+        self.progress.setRange(0, 1)
+        self.progress.setValue(0)
+        self._set_progress_label("Idle")
+        self.statusBar().showMessage("All tabs reset")
+        self.tabs.setCurrentIndex(0)
+
+    def _reset_organizer_tab(self) -> None:
+        self.input_paths = []
+        self.current_reports = []
+        self._set_input_text("")
+        self.output_edit.clear()
+        self.files_table.setRowCount(0)
+        self.tracks_table.setRowCount(0)
+        self.summary_edit.clear()
+        self.log_edit.clear()
+        self.output_tabs.setCurrentIndex(0)
+        self._apply_default_args(self.default_args)
+        self.input_paths = []
+        self.current_reports = []
+        self._set_input_text("")
+        self.files_table.setRowCount(0)
+        self.tracks_table.setRowCount(0)
+        self.advanced_button.setChecked(False)
+        self._set_running(False)
+        self.cancel_button.setEnabled(False)
+
+    def _reset_audio_sync_tab(self) -> None:
+        self.audio_sync_reference_edit.clear()
+        self.audio_sync_source_edit.clear()
+        self.audio_sync_output_edit.clear()
+        self.audio_sync_start_edit.setText("00:10:00")
+        self.audio_sync_duration_combo.setCurrentIndex(1)
+        self.audio_sync_spacing_combo.setCurrentIndex(2)
+        self.audio_sync_max_offset_edit.setText("5")
+        self.audio_sync_checkpoints_combo.setCurrentIndex(2)
+        self.audio_sync_custom_duration_seconds = 120.0
+        self.audio_sync_custom_spacing_seconds = 900.0
+        self.audio_sync_custom_checkpoints = 4
+        self.audio_sync_previous_duration_index = self.audio_sync_duration_combo.currentIndex()
+        self.audio_sync_previous_spacing_index = self.audio_sync_spacing_combo.currentIndex()
+        self.audio_sync_previous_checkpoints_index = self.audio_sync_checkpoints_combo.currentIndex()
+        self.audio_sync_summary_edit.clear()
+        self.audio_sync_log_edit.clear()
+        self.audio_sync_output_tabs.setCurrentIndex(0)
+        self._clear_audio_sync_loaded_streams()
+        self._set_audio_sync_running(False)
+        self.audio_sync_cancel_button.setEnabled(False)
+
+    def _reset_makemkv_tab(self) -> None:
+        self.makemkv_path_edit.setText(self._default_makemkv_path_text())
+        self.makemkv_source_edit.clear()
+        self.makemkv_output_edit.clear()
+        self.makemkv_min_length_spin.setValue(makemkv.DEFAULT_MIN_LENGTH_SECONDS)
+        selection_index = self.makemkv_selection_combo.findData("english")
+        if selection_index >= 0:
+            self.makemkv_selection_combo.setCurrentIndex(selection_index)
+        self.makemkv_custom_rule_edit.clear()
+        self.makemkv_pipeline_check.setChecked(False)
+        self.makemkv_reports = []
+        self.makemkv_table.setRowCount(0)
+        self.makemkv_summary_edit.clear()
+        self.makemkv_log_edit.clear()
+        self.makemkv_output_tabs.setCurrentIndex(0)
+        self._makemkv_selection_changed()
+        self._set_makemkv_running(False)
+        self.makemkv_cancel_button.setEnabled(False)
+
+    def _default_makemkv_path_text(self) -> str:
+        try:
+            return str(makemkv.find_makemkv())
+        except makemkv.MakeMkvError:
+            return ""
 
     def add_input_paths(self, paths) -> None:
         added = False
@@ -2846,6 +2953,8 @@ class MainWindow(QMainWindow):
         return f"{delay_ms:+d} ms" if delay_ms else ""
 
     def _set_running(self, running: bool) -> None:
+        if self.reset_all_button:
+            self.reset_all_button.setEnabled(not running)
         self.check_tools_button.setEnabled(not running)
         self.preview_button.setEnabled(not running)
         self.run_button.setEnabled(not running)
@@ -2853,17 +2962,22 @@ class MainWindow(QMainWindow):
         self.makemkv_check_button.setEnabled(not running)
         self.makemkv_preview_button.setEnabled(not running)
         self.makemkv_run_button.setEnabled(not running)
+        self.makemkv_reset_button.setEnabled(not running)
         self.audio_sync_check_button.setEnabled(not running)
         self.audio_sync_load_button.setEnabled(not running)
         self.audio_sync_analyze_button.setEnabled(not running)
+        self.audio_sync_reset_button.setEnabled(not running)
         self.audio_sync_apply_organizer_button.setEnabled(bool(self.audio_sync_result) and not running)
         self.audio_sync_export_button.setEnabled(bool(self.audio_sync_result) and not running)
         self._set_audio_sync_selection_controls_enabled(self.audio_sync_tracks_table.rowCount() > 0 and not running)
 
     def _set_makemkv_running(self, running: bool) -> None:
+        if self.reset_all_button:
+            self.reset_all_button.setEnabled(not running)
         self.makemkv_check_button.setEnabled(not running)
         self.makemkv_preview_button.setEnabled(not running)
         self.makemkv_run_button.setEnabled(not running)
+        self.makemkv_reset_button.setEnabled(not running)
         self.makemkv_cancel_button.setEnabled(running)
         self.check_tools_button.setEnabled(not running)
         self.preview_button.setEnabled(not running)
@@ -2871,14 +2985,18 @@ class MainWindow(QMainWindow):
         self.audio_sync_check_button.setEnabled(not running)
         self.audio_sync_load_button.setEnabled(not running)
         self.audio_sync_analyze_button.setEnabled(not running)
+        self.audio_sync_reset_button.setEnabled(not running)
         self.audio_sync_apply_organizer_button.setEnabled(bool(self.audio_sync_result) and not running)
         self.audio_sync_export_button.setEnabled(bool(self.audio_sync_result) and not running)
         self._set_audio_sync_selection_controls_enabled(self.audio_sync_tracks_table.rowCount() > 0 and not running)
 
     def _set_audio_sync_running(self, running: bool) -> None:
+        if self.reset_all_button:
+            self.reset_all_button.setEnabled(not running)
         self.audio_sync_check_button.setEnabled(not running)
         self.audio_sync_load_button.setEnabled(not running)
         self.audio_sync_analyze_button.setEnabled(not running)
+        self.audio_sync_reset_button.setEnabled(not running)
         self.audio_sync_apply_organizer_button.setEnabled(bool(self.audio_sync_result) and not running)
         self.audio_sync_export_button.setEnabled(bool(self.audio_sync_result) and not running)
         self._set_audio_sync_selection_controls_enabled(self.audio_sync_tracks_table.rowCount() > 0 and not running)
@@ -2889,12 +3007,17 @@ class MainWindow(QMainWindow):
         self.makemkv_check_button.setEnabled(not running)
         self.makemkv_preview_button.setEnabled(not running)
         self.makemkv_run_button.setEnabled(not running)
+        self.makemkv_reset_button.setEnabled(not running)
 
-    def _other_workflow_is_running(self) -> bool:
+    def _workflow_is_running(self) -> bool:
         return bool(
             (self.worker_thread and self.worker_thread.isRunning())
             or (self.makemkv_worker_thread and self.makemkv_worker_thread.isRunning())
+            or (self.audio_sync_worker_thread and self.audio_sync_worker_thread.isRunning())
         )
+
+    def _other_workflow_is_running(self) -> bool:
+        return self._workflow_is_running()
 
     def _paths_from_mime(self, mime_data) -> list[Path]:
         if not mime_data.hasUrls():
