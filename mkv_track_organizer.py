@@ -255,6 +255,14 @@ class BatchRunEvent:
     steps: int | None = None
 
 
+def track_selection_key(source_index: int, track_type: str, track_id: int) -> str:
+    return f"{source_index}:{track_type}:{track_id}"
+
+
+def track_selection_key_for_track(track: TrackInfo) -> str:
+    return track_selection_key(track.source_index, track.type, track.id)
+
+
 CONFIG_PATH_KEYS = {
     "path",
     "mkvmerge",
@@ -4788,12 +4796,15 @@ def apply_default_flags(
     language_order_style: str = "default",
     regional_order: Any = None,
 ) -> None:
-    for index, track in enumerate(videos):
-        track.default = index == 0
+    included_videos = [track for track in videos if not track.drop]
+    default_video = included_videos[0] if included_videos else None
+    for track in videos:
+        track.default = track is default_video
 
-    default_audio = select_default_audio(audio_tracks)
+    included_audio = [track for track in audio_tracks if not track.drop]
+    default_audio = select_default_audio(included_audio)
     for track in audio_tracks:
-        track.default = track is default_audio
+        track.default = track is default_audio and not track.drop
 
     included_subtitles = [track for track in subtitles if not track.drop]
     english_forced = [
@@ -4899,12 +4910,29 @@ def ordered_tracks(
     regional_order: Any = None,
 ) -> list[TrackInfo]:
     included_videos = [track for track in videos if not track.drop]
+    included_audio = [track for track in audio_tracks if not track.drop]
     included_subtitles = [track for track in subtitles if not track.drop]
     return (
         sorted(included_videos, key=lambda item: item.order)
-        + sorted(audio_tracks, key=lambda item: audio_sort_key(item, language_order_style, regional_order))
+        + sorted(included_audio, key=lambda item: audio_sort_key(item, language_order_style, regional_order))
         + sorted(included_subtitles, key=lambda item: subtitle_sort_key(item, language_order_style, regional_order))
     )
+
+
+def apply_track_selection_overrides(
+    videos: list[TrackInfo],
+    audio_tracks: list[TrackInfo],
+    subtitles: list[TrackInfo],
+    selection_overrides: dict[str, Any] | None,
+) -> None:
+    if not selection_overrides:
+        return
+
+    for track in [*videos, *audio_tracks, *subtitles]:
+        selected = selection_overrides.get(track_selection_key_for_track(track))
+        if selected is None:
+            continue
+        track.drop = not bool(selected)
 
 
 def propedit_bool(value: bool) -> str:
@@ -4996,9 +5024,9 @@ def metadata_edit_plan(
     all_tracks = sorted(videos + audio_tracks + subtitles, key=lambda item: item.order)
     desired_tracks = ordered_tracks(videos, audio_tracks, subtitles, language_order_style, regional_order)
 
-    dropped_subtitles = [track for track in subtitles if track.drop]
-    if dropped_subtitles:
-        return MetadataEditPlan(False, "subtitle tracks need to be removed")
+    dropped_tracks = [track for track in all_tracks if track.drop]
+    if dropped_tracks:
+        return MetadataEditPlan(False, "tracks need to be removed")
 
     delayed_tracks = [track for track in audio_tracks + subtitles if track.delay_ms]
     if delayed_tracks:
@@ -5061,6 +5089,7 @@ def build_mkvmerge_command(
         source_audio = [track for track in audio_tracks if track.source_index == source_index]
         source_subtitles = [track for track in subtitles if track.source_index == source_index]
         included_videos = [track for track in source_videos if not track.drop]
+        included_audio = [track for track in source_audio if not track.drop]
         included_subtitles = [track for track in source_subtitles if not track.drop]
 
         if len(input_paths) > 1:
@@ -5068,24 +5097,35 @@ def build_mkvmerge_command(
                 command.extend(["--video-tracks", ",".join(str(track.id) for track in included_videos)])
             else:
                 command.append("--no-video")
-            if source_audio:
-                command.extend(["--audio-tracks", ",".join(str(track.id) for track in source_audio)])
+            if included_audio:
+                command.extend(["--audio-tracks", ",".join(str(track.id) for track in included_audio)])
             else:
                 command.append("--no-audio")
             if included_subtitles:
                 command.extend(["--subtitle-tracks", ",".join(str(track.id) for track in included_subtitles)])
             else:
                 command.append("--no-subtitles")
-        elif any(track.drop for track in source_subtitles):
-            if included_subtitles:
-                command.extend(["--subtitle-tracks", ",".join(str(track.id) for track in included_subtitles)])
-            else:
-                command.append("--no-subtitles")
+        else:
+            if any(track.drop for track in source_videos):
+                if included_videos:
+                    command.extend(["--video-tracks", ",".join(str(track.id) for track in included_videos)])
+                else:
+                    command.append("--no-video")
+            if any(track.drop for track in source_audio):
+                if included_audio:
+                    command.extend(["--audio-tracks", ",".join(str(track.id) for track in included_audio)])
+                else:
+                    command.append("--no-audio")
+            if any(track.drop for track in source_subtitles):
+                if included_subtitles:
+                    command.extend(["--subtitle-tracks", ",".join(str(track.id) for track in included_subtitles)])
+                else:
+                    command.append("--no-subtitles")
 
         for track in included_videos:
             command.extend(["--default-track-flag", f"{track.id}:{'yes' if track.default else 'no'}"])
 
-        for track in source_audio:
+        for track in included_audio:
             command.extend(["--language", f"{track.id}:{language_for_mkvmerge(track.output_language)}"])
             command.extend(["--track-name", f"{track.id}:{track.suggested_name}"])
             command.extend(["--default-track-flag", f"{track.id}:{'yes' if track.default else 'no'}"])
@@ -5141,10 +5181,11 @@ def print_track_plan(
     for track in sorted(audio_tracks, key=lambda item: audio_sort_key(item, language_order_style, regional_order)):
         reason_text = track_note_text(track)
         delay_text = f" | delay={track.delay_ms:+d}ms" if track.delay_ms else ""
+        drop_text = " | DROP" if track.drop else ""
         print(
             f"  audio    {track.id:>3}: {track.language_name} | "
             f"{track.suggested_name} | default={'yes' if track.default else 'no'}"
-            f"{track_source_text(track, show_source)}{delay_text}{reason_text}"
+            f"{track_source_text(track, show_source)}{delay_text}{drop_text}{reason_text}"
         )
 
     for track in sorted(
@@ -5215,6 +5256,7 @@ def track_report_data(track: TrackInfo) -> dict[str, Any]:
     score = track.role_score
     return {
         "id": track.id,
+        "selection_key": track_selection_key_for_track(track),
         "source_index": track.source_index,
         "source_path": track.source_path,
         "source_name": track.source_name,
@@ -6009,8 +6051,7 @@ def process_file(
     apply_subtitle_language_overrides(subtitles, args.subtitle_language_overrides)
     apply_track_delay_overrides(audio_tracks, subtitles, args.audio_delay_overrides, args.subtitle_delay_overrides)
     if args.detect_language_variants:
-        for source_index in range(len(input_files)):
-            apply_default_language_variants(tracks_for_source(subtitles, source_index, "subtitles"))
+        apply_default_language_variants(subtitles)
     audio_name_style = getattr(args, "audio_name_style", "auto")
     language_order_style = getattr(args, "language_order_style", "default")
     regional_order = getattr(args, "regional_order", None)
@@ -6085,6 +6126,12 @@ def process_file(
     apply_audio_names(audio_tracks, audio_name_style)
     if getattr(args, "detect_duplicate_tracks", True):
         detect_duplicate_tracks(input_path, audio_tracks, subtitles)
+    apply_track_selection_overrides(
+        videos,
+        audio_tracks,
+        subtitles,
+        getattr(args, "track_selection_overrides", None),
+    )
     apply_default_flags(videos, audio_tracks, subtitles, language_order_style, regional_order)
 
     progress("Building track plan", 70)
@@ -6372,6 +6419,12 @@ def process_merged_inputs(
     apply_audio_names(audio_tracks, audio_name_style)
     if getattr(args, "detect_duplicate_tracks", True):
         detect_duplicate_tracks(input_files[0], audio_tracks, subtitles)
+    apply_track_selection_overrides(
+        videos,
+        audio_tracks,
+        subtitles,
+        getattr(args, "track_selection_overrides", None),
+    )
     apply_default_flags(videos, audio_tracks, subtitles, language_order_style, regional_order)
 
     progress("Building track plan", 70)
@@ -6492,6 +6545,7 @@ def build_parser(config_defaults: dict[str, Any] | None = None) -> argparse.Argu
         overwrite=default("overwrite", False),
         skip_existing=default("skip_existing", False),
         report=default("report", False),
+        track_selection_overrides={},
     )
     parser.add_argument("path", nargs="?", type=Path, default=default("path"), help="MKV file or folder with MKVs.")
     parser.add_argument("--config", type=Path, default=None, help="JSON config with personal defaults.")

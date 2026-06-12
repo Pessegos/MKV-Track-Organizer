@@ -303,6 +303,7 @@ class MainWindow(QMainWindow):
     AUDIO_SYNC_SAMPLE_RATE = 16_000
     FINALIZATION_PROGRESS_UNITS = 10
     TRACK_COLUMNS = [
+        "Include",
         "ID",
         "Source",
         "Type",
@@ -407,6 +408,8 @@ class MainWindow(QMainWindow):
         self.audio_sync_result: audio_sync.AudioSyncResult | None = None
         self.current_theme = "dark"
         self._syncing_input_edit = False
+        self._syncing_track_checks = False
+        self.manual_track_includes: dict[str, bool] = {}
 
         self.input_edit = QLineEdit()
         self.input_edit.setPlaceholderText("Selected source")
@@ -460,11 +463,19 @@ class MainWindow(QMainWindow):
         self.preview_button = QPushButton("Preview")
         self.run_button = QPushButton("Run")
         self.cancel_button = QPushButton("Cancel")
+        self.track_select_all_button = QPushButton("Select all")
+        self.track_deselect_duplicates_button = QPushButton("Deselect duplicates")
         self.reset_all_button: QToolButton | None = None
         self.check_tools_button.setObjectName("secondaryButton")
         self.preview_button.setObjectName("secondaryButton")
         self.run_button.setObjectName("primaryButton")
         self.cancel_button.setObjectName("dangerButton")
+        self.track_select_all_button.setObjectName("secondaryButton")
+        self.track_deselect_duplicates_button.setObjectName("secondaryButton")
+        self.track_select_all_button.setToolTip("Include every displayed track")
+        self.track_deselect_duplicates_button.setToolTip("Uncheck duplicate-group members and keep each group leader")
+        self.track_select_all_button.setEnabled(False)
+        self.track_deselect_duplicates_button.setEnabled(False)
         self.files_table = QTableWidget(0, len(self.FILE_COLUMNS))
         self.results_table = self.files_table
         self.tracks_table = QTableWidget(0, len(self.TRACK_COLUMNS))
@@ -730,11 +741,16 @@ class MainWindow(QMainWindow):
         tracks_group = QGroupBox("Tracks")
         tracks_layout = QVBoxLayout(tracks_group)
         tracks_layout.setContentsMargins(8, 8, 8, 8)
+        tracks_toolbar = QHBoxLayout()
+        tracks_toolbar.addWidget(self.track_select_all_button)
+        tracks_toolbar.addWidget(self.track_deselect_duplicates_button)
+        tracks_toolbar.addStretch(1)
+        tracks_layout.addLayout(tracks_toolbar)
         self.tracks_table.setHorizontalHeaderLabels(self.TRACK_COLUMNS)
         self.tracks_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.tracks_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.tracks_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.tracks_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.Stretch)
+        self.tracks_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.Stretch)
         self.tracks_table.horizontalHeader().setStretchLastSection(True)
         self.tracks_table.setAlternatingRowColors(True)
         self.tracks_table.setSelectionBehavior(QTableWidget.SelectRows)
@@ -1047,6 +1063,9 @@ class MainWindow(QMainWindow):
         self.preview_button.clicked.connect(self.start_preview)
         self.run_button.clicked.connect(self.start_run)
         self.cancel_button.clicked.connect(self.cancel_run)
+        self.track_select_all_button.clicked.connect(self.select_all_tracks)
+        self.track_deselect_duplicates_button.clicked.connect(self.deselect_duplicate_tracks)
+        self.tracks_table.itemChanged.connect(self._track_item_changed)
         self.makemkv_check_button.clicked.connect(self.check_makemkv_tools)
         self.makemkv_preview_button.clicked.connect(self.start_makemkv_preview)
         self.makemkv_run_button.clicked.connect(self.start_makemkv_run)
@@ -1382,8 +1401,10 @@ class MainWindow(QMainWindow):
         if self.input_paths:
             self.input_paths = []
             self.current_reports = []
+            self.manual_track_includes = {}
             self._refresh_file_list()
             self.tracks_table.setRowCount(0)
+            self._set_track_selection_controls_enabled(False)
 
     @Slot()
     def choose_file(self) -> None:
@@ -1646,9 +1667,11 @@ class MainWindow(QMainWindow):
     def clear_inputs(self) -> None:
         self.input_paths = []
         self.current_reports = []
+        self.manual_track_includes = {}
         self._set_input_text("")
         self._refresh_file_list()
         self.tracks_table.setRowCount(0)
+        self._set_track_selection_controls_enabled(False)
 
     @Slot()
     def reset_all_tabs(self, confirm: bool = True) -> None:
@@ -1680,19 +1703,23 @@ class MainWindow(QMainWindow):
     def _reset_organizer_tab(self) -> None:
         self.input_paths = []
         self.current_reports = []
+        self.manual_track_includes = {}
         self._set_input_text("")
         self.output_edit.clear()
         self.files_table.setRowCount(0)
         self.tracks_table.setRowCount(0)
+        self._set_track_selection_controls_enabled(False)
         self.summary_edit.clear()
         self.log_edit.clear()
         self.output_tabs.setCurrentIndex(0)
         self._apply_default_args(self.default_args)
         self.input_paths = []
         self.current_reports = []
+        self.manual_track_includes = {}
         self._set_input_text("")
         self.files_table.setRowCount(0)
         self.tracks_table.setRowCount(0)
+        self._set_track_selection_controls_enabled(False)
         self.advanced_button.setChecked(False)
         self._set_running(False)
         self.cancel_button.setEnabled(False)
@@ -1761,9 +1788,11 @@ class MainWindow(QMainWindow):
 
         if added:
             self.current_reports = []
+            self.manual_track_includes = {}
             self._sync_input_summary()
             self._refresh_file_list()
             self.tracks_table.setRowCount(0)
+            self._set_track_selection_controls_enabled(False)
 
     def _is_supported_input_path(self, path: Path) -> bool:
         return path.is_dir() or (path.is_file() and path.suffix.lower() == ".mkv")
@@ -2084,6 +2113,7 @@ class MainWindow(QMainWindow):
         self.log_edit.clear()
         self.current_reports = []
         self.tracks_table.setRowCount(0)
+        self._set_track_selection_controls_enabled(False)
         self._refresh_file_list(running=True)
         self.progress.setRange(0, 0)
         self._set_progress_label("Starting")
@@ -2175,6 +2205,7 @@ class MainWindow(QMainWindow):
         args.recursive = self.recursive_check.isChecked()
         args.dry_run = dry_run
         args.merge_inputs = self.merge_inputs_check.isChecked()
+        args.track_selection_overrides = dict(self.manual_track_includes)
         args.smart_sub_detection = self.smart_subs_check.isChecked()
         args.drop_empty_subs = self.drop_empty_check.isChecked()
         args.detect_duplicate_tracks = self.duplicate_check.isChecked()
@@ -2907,14 +2938,22 @@ class MainWindow(QMainWindow):
 
     def _populate_tracks_for_row(self, row: int) -> None:
         if row < 0 or row >= len(self.current_reports):
+            self._syncing_track_checks = True
             self.tracks_table.setRowCount(0)
+            self._syncing_track_checks = False
+            self._set_track_selection_controls_enabled(False)
             return
 
         report = self.current_reports[row]
         tracks = self._report_tracks(report)
+        self._syncing_track_checks = True
         self.tracks_table.setRowCount(len(tracks))
         for track_row, track in enumerate(tracks):
+            selection_key = self._track_selection_key(track)
+            include_track = self.manual_track_includes.get(selection_key, not bool(track.get("drop")))
+            track["drop"] = not include_track
             values = [
+                "",
                 track.get("id", ""),
                 track.get("source_name", ""),
                 self._track_type_label(track.get("type", "")),
@@ -2931,8 +2970,18 @@ class MainWindow(QMainWindow):
             ]
             for column, value in enumerate(values):
                 item = QTableWidgetItem(str(value))
+                if column == 0:
+                    item.setFlags(
+                        (item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                        & ~Qt.ItemIsEditable
+                    )
+                    item.setCheckState(Qt.Checked if include_track else Qt.Unchecked)
+                    item.setData(Qt.UserRole, selection_key)
+                    item.setToolTip("Included in the remux" if include_track else "Excluded from the remux")
+                else:
+                    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                 tooltips = []
-                if column == 6 and track.get("original_name"):
+                if column == 7 and track.get("original_name"):
                     tooltips.append(f"Original: {track['original_name']}")
                 if track.get("duplicate_reason"):
                     tooltips.append(str(track["duplicate_reason"]))
@@ -2940,7 +2989,9 @@ class MainWindow(QMainWindow):
                     item.setToolTip("\n".join(tooltips))
                 self._style_track_item(item, track)
                 self.tracks_table.setItem(track_row, column, item)
+        self._syncing_track_checks = False
         self.tracks_table.resizeColumnsToContents()
+        self._set_track_selection_controls_enabled(bool(tracks))
 
     def _report_tracks(self, report: dict) -> list[dict]:
         tracks = report.get("tracks", {})
@@ -2949,6 +3000,64 @@ class MainWindow(QMainWindow):
             *tracks.get("audio", []),
             *tracks.get("subtitles", []),
         ]
+
+    def _track_selection_key(self, track: dict) -> str:
+        existing_key = str(track.get("selection_key") or "")
+        if existing_key:
+            return existing_key
+        return organizer.track_selection_key(
+            int(track.get("source_index") or 0),
+            str(track.get("type") or ""),
+            int(track.get("id") or 0),
+        )
+
+    def _current_track_rows(self) -> list[dict]:
+        row = self.files_table.currentRow()
+        if row < 0 or row >= len(self.current_reports):
+            return []
+        return self._report_tracks(self.current_reports[row])
+
+    @Slot(QTableWidgetItem)
+    def _track_item_changed(self, item: QTableWidgetItem) -> None:
+        if self._syncing_track_checks or item.column() != 0:
+            return
+        selection_key = str(item.data(Qt.UserRole) or "")
+        if not selection_key:
+            return
+        include_track = item.checkState() == Qt.Checked
+        self.manual_track_includes[selection_key] = include_track
+
+        tracks = self._current_track_rows()
+        if 0 <= item.row() < len(tracks):
+            track = tracks[item.row()]
+            track["drop"] = not include_track
+            drop_item = self.tracks_table.item(item.row(), 10)
+            if drop_item:
+                drop_item.setText(self._yes_no(track.get("drop")))
+            item.setToolTip("Included in the remux" if include_track else "Excluded from the remux")
+
+    @Slot()
+    def select_all_tracks(self) -> None:
+        self._set_displayed_track_checks(Qt.Checked)
+
+    @Slot()
+    def deselect_duplicate_tracks(self) -> None:
+        self._set_displayed_track_checks(Qt.Unchecked, duplicate_members_only=True)
+
+    def _set_displayed_track_checks(self, check_state: Qt.CheckState, duplicate_members_only: bool = False) -> None:
+        tracks = self._current_track_rows()
+        for row, track in enumerate(tracks):
+            if duplicate_members_only and track.get("duplicate_of_id") is None:
+                continue
+            item = self.tracks_table.item(row, 0)
+            if item:
+                item.setCheckState(check_state)
+
+    def _set_track_selection_controls_enabled(self, enabled: bool) -> None:
+        self.track_select_all_button.setEnabled(enabled)
+        self.track_deselect_duplicates_button.setEnabled(
+            enabled and any(track.get("duplicate_of_id") is not None for track in self._current_track_rows())
+        )
 
     def _track_type_label(self, track_type: str) -> str:
         if track_type == "subtitles":
@@ -2965,14 +3074,17 @@ class MainWindow(QMainWindow):
         return ", ".join(score_parts)
 
     def _style_track_item(self, item: QTableWidgetItem, track: dict) -> None:
-        if not track.get("duplicate_group"):
+        if track.get("duplicate_group"):
+            if self.current_theme == "light":
+                item.setBackground(QColor("#ffe4e6"))
+                item.setForeground(QColor("#9f1239"))
+            else:
+                item.setBackground(QColor("#3a1f27"))
+                item.setForeground(QColor("#ffb4bd"))
             return
-        if self.current_theme == "light":
-            item.setBackground(QColor("#ffe4e6"))
-            item.setForeground(QColor("#9f1239"))
-        else:
-            item.setBackground(QColor("#3a1f27"))
-            item.setForeground(QColor("#ffb4bd"))
+
+        if track.get("drop"):
+            item.setForeground(QColor("#64748b") if self.current_theme == "light" else QColor("#94a3b8"))
 
     def _yes_no(self, value) -> str:
         return "Yes" if value else ""
@@ -3002,6 +3114,7 @@ class MainWindow(QMainWindow):
         self.audio_sync_apply_organizer_button.setEnabled(bool(self.audio_sync_result) and not running)
         self.audio_sync_export_button.setEnabled(bool(self.audio_sync_result) and not running)
         self._set_audio_sync_selection_controls_enabled(self.audio_sync_tracks_table.rowCount() > 0 and not running)
+        self._set_track_selection_controls_enabled(self.tracks_table.rowCount() > 0 and not running)
 
     def _set_makemkv_running(self, running: bool) -> None:
         if self.reset_all_button:
@@ -3021,6 +3134,7 @@ class MainWindow(QMainWindow):
         self.audio_sync_apply_organizer_button.setEnabled(bool(self.audio_sync_result) and not running)
         self.audio_sync_export_button.setEnabled(bool(self.audio_sync_result) and not running)
         self._set_audio_sync_selection_controls_enabled(self.audio_sync_tracks_table.rowCount() > 0 and not running)
+        self._set_track_selection_controls_enabled(self.tracks_table.rowCount() > 0 and not running)
 
     def _set_audio_sync_running(self, running: bool) -> None:
         if self.reset_all_button:
@@ -3040,6 +3154,7 @@ class MainWindow(QMainWindow):
         self.makemkv_preview_button.setEnabled(not running)
         self.makemkv_run_button.setEnabled(not running)
         self.makemkv_reset_button.setEnabled(not running)
+        self._set_track_selection_controls_enabled(self.tracks_table.rowCount() > 0 and not running)
 
     def _workflow_is_running(self) -> bool:
         return bool(

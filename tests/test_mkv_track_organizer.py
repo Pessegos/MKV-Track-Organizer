@@ -817,6 +817,47 @@ def test_mkvmerge_command_excludes_dropped_subtitles(tmp_path: Path) -> None:
     assert "2:English" not in command
 
 
+def test_mkvmerge_command_excludes_dropped_audio(tmp_path: Path) -> None:
+    kept = audio_track(1, "eng")
+    dropped = audio_track(2, "por")
+    kept.suggested_name = "English - DTS-HD MA 5.1"
+    dropped.suggested_name = "Portuguese - DTS-HD MA 5.1"
+    dropped.drop = True
+
+    command = m.build_mkvmerge_command(
+        mkvmerge=Path("mkvmerge"),
+        input_path=tmp_path / "in.mkv",
+        output_path=tmp_path / "out.mkv",
+        videos=[video_track(0)],
+        audio_tracks=[kept, dropped],
+        subtitles=[],
+    )
+
+    assert "--audio-tracks" in command
+    assert command[command.index("--audio-tracks") + 1] == "1"
+    assert "2:Portuguese - DTS-HD MA 5.1" not in command
+    assert command[command.index("--track-order") + 1] == "0:0,0:1"
+
+
+def test_track_selection_overrides_can_drop_audio_by_source() -> None:
+    first = audio_track(1, "eng")
+    second = audio_track(1, "por")
+    second.source_index = 1
+
+    m.apply_track_selection_overrides(
+        [],
+        [first, second],
+        [],
+        {
+            m.track_selection_key_for_track(first): True,
+            m.track_selection_key_for_track(second): False,
+        },
+    )
+
+    assert first.drop is False
+    assert second.drop is True
+
+
 def test_parse_track_delay_overrides() -> None:
     assert m.parse_track_delay_overrides("1: 150, 2:-250 3=0", "--audio-delays") == {
         1: 150,
@@ -1045,6 +1086,19 @@ def test_ordered_tracks_puts_default_audio_first() -> None:
     assert [track.id for track in m.ordered_tracks([video], audio_tracks, [])] == [0, 6, 1, 2]
 
 
+def test_default_audio_ignores_dropped_tracks() -> None:
+    video = video_track(0)
+    english = audio_track(1, "eng")
+    portuguese = audio_track(2, "por")
+    english.drop = True
+
+    m.apply_default_flags([video], [english, portuguese], [])
+
+    assert english.default is False
+    assert portuguese.default is True
+    assert [track.id for track in m.ordered_tracks([video], [english, portuguese], [])] == [0, 2]
+
+
 def test_duplicate_audio_detection_marks_source_and_leader() -> None:
     first = audio_track(1, "eng", codec="AC-3", codec_id="A_AC3", channels=6)
     second = audio_track(2, "eng", codec="AC-3", codec_id="A_AC3", channels=6)
@@ -1268,6 +1322,61 @@ def test_run_batch_returns_reports_and_events(tmp_path: Path, monkeypatch) -> No
     ]
     progress_events = [event for event in events if event.kind == "file-progress"]
     assert [(event.step, event.steps) for event in progress_events] == [(5, 100), (100, 100)]
+
+
+def test_process_file_with_language_variants_does_not_need_batch_inputs(tmp_path: Path, monkeypatch) -> None:
+    input_path = tmp_path / "movie.mkv"
+    output_path = tmp_path / "out.mkv"
+    input_path.write_bytes(b"")
+    video = video_track(0)
+    audio = audio_track(1, "eng")
+
+    monkeypatch.setattr(m, "load_metadata", lambda _mkvmerge, _input_path: {})
+    monkeypatch.setattr(m, "build_tracks", lambda _metadata, source_index=0, source_path=None: [video, audio])
+    monkeypatch.setattr(m, "ensure_pgs_ocr_cache", lambda **_kwargs: None)
+    monkeypatch.setattr(m, "attach_cached_ocr_text", lambda *_args: None)
+    monkeypatch.setattr(m, "detect_language_variants", lambda *_args: None)
+
+    args = argparse.Namespace(
+        mkvmerge=Path("mkvmerge"),
+        mkvextract=Path("mkvextract"),
+        subtitle_language_overrides={},
+        audio_delay_overrides={},
+        subtitle_delay_overrides={},
+        detect_language_variants=True,
+        audio_name_style="auto",
+        language_order_style="default",
+        regional_order=None,
+        analyze_sub_sizes=False,
+        smart_sub_detection=True,
+        drop_empty_subs=True,
+        detect_duplicate_tracks=True,
+        auto_commentary_ocr=True,
+        prepare_pgs_ocr=False,
+        ocr_cache_dir=None,
+        pgs_ocr_command=[],
+        auto_pgs_ocr=True,
+        seconv=None,
+        subtitle_edit=None,
+        tesseract=None,
+        tessdata_dirs=[],
+        pgs_ocr_language="auto",
+        pgs_ocr_timeout_seconds=1,
+        allow_subtitle_edit_legacy_ocr=False,
+        auto_download_tessdata=False,
+        tessdata_model="best",
+        force_pgs_ocr=False,
+        explain_track_ids=set(),
+        metadata_edit_mode="off",
+        dry_run=True,
+        overwrite=False,
+        skip_existing=False,
+        track_selection_overrides={},
+    )
+
+    report = m.process_file(input_path, output_path, args, forced_subtitle_ids=set())
+
+    assert report["status"] == "dry-run"
 
 
 def test_run_batch_merge_inputs_uses_single_report(tmp_path: Path, monkeypatch) -> None:
