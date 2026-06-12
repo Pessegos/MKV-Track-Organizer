@@ -1,13 +1,13 @@
 # MKV Track Organizer
 
-MKV Track Organizer is a Python tool for batch-cleaning MKV track metadata and order with MKVToolNix. It can analyze audio, video, and subtitle tracks, rename them consistently, detect common subtitle roles, and write organized outputs without touching the original files by default.
+MKV Track Organizer is a Python tool for batch-cleaning Matroska track metadata and order with MKVToolNix. It can analyze audio, video, and subtitle tracks, rename them consistently, detect common subtitle roles, and write organized outputs without touching the original files by default.
 
 The project currently includes a command-line interface, a desktop UI, an early MakeMKV batch workflow, and an audio sync helper for fixed-delay corrections.
 
 ## Features
 
-- Batch process one MKV file, a folder, or recursive folders.
-- Optionally merge selected MKV sources into one output; the first source with video supplies video while audio/subtitles can come from every source.
+- Batch process one `.mkv`/`.mka` file, a folder, or recursive folders.
+- Optionally merge selected Matroska sources into one output; the first source with video supplies video while audio/subtitles can come from every source.
 - Keep originals safe by writing remuxed files to `_sorted` by default.
 - Preview changes before writing output files.
 - Rename audio tracks by format, language plus format, or keep existing names.

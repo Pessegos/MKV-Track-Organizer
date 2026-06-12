@@ -77,6 +77,7 @@ METADATA_EDIT_MODES = {"off", "auto", "only"}
 AUDIO_NAME_STYLES = {"auto", "format", "language-format", "keep"}
 LANGUAGE_ORDER_STYLES = {"default", "regional"}
 CHINESE_TRADITIONAL_REGIONAL_VARIANTS = {"zh-TW", "zh-HK"}
+MATROSKA_INPUT_SUFFIXES = {".mkv", ".mka"}
 
 
 class OrganizerError(Exception):
@@ -5617,6 +5618,23 @@ def output_name_for(input_path: Path, output_suffix: str | None) -> str:
     return f"{input_path.stem}{suffix}{input_path.suffix}"
 
 
+def is_matroska_input_file(path: Path) -> bool:
+    return path.is_file() and path.suffix.lower() in MATROSKA_INPUT_SUFFIXES
+
+
+def matroska_input_glob_patterns(recursive: bool) -> list[str]:
+    prefix = "**/*" if recursive else "*"
+    return [f"{prefix}{suffix}" for suffix in sorted(MATROSKA_INPUT_SUFFIXES)]
+
+
+def merge_output_extension_for(input_files: list[Path]) -> str:
+    if any(path.suffix.lower() == ".mkv" for path in input_files):
+        return ".mkv"
+    if input_files and input_files[0].suffix.lower() in MATROSKA_INPUT_SUFFIXES:
+        return input_files[0].suffix.lower()
+    return ".mkv"
+
+
 def output_path_for(
     input_path: Path,
     source_root: Path | None,
@@ -5642,9 +5660,9 @@ def merge_output_path_for(
 ) -> Path:
     if not input_files:
         raise OrganizerError("No input files to merge.")
-    primary = input_files[0]
+    primary = next((path for path in input_files if path.suffix.lower() == ".mkv"), input_files[0])
     suffix = output_suffix_text(output_suffix) or ".merged"
-    output_name = f"{primary.stem}{suffix}.mkv"
+    output_name = f"{primary.stem}{suffix}{merge_output_extension_for(input_files)}"
     base_dir = output_dir or (primary.parent / SORTED_DIR_NAME)
     return base_dir / output_name
 
@@ -5660,30 +5678,37 @@ def should_skip_generated_mkv_path(source_root: Path, candidate: Path) -> bool:
 
 def collect_mkv_files(input_path: Path, recursive: bool) -> tuple[list[Path], Path | None]:
     if input_path.is_file():
-        if input_path.suffix.lower() != ".mkv":
-            raise OrganizerError(f"File is not an MKV: {input_path}")
+        if not is_matroska_input_file(input_path):
+            raise OrganizerError(f"File is not a supported Matroska input (.mkv/.mka): {input_path}")
         return [input_path], None
 
     if not input_path.is_dir():
         raise OrganizerError(f"Path not found: {input_path}")
 
-    pattern = "**/*.mkv" if recursive else "*.mkv"
-    files = []
+    files: list[Path] = []
+    seen: set[str] = set()
 
-    for path in sorted(input_path.glob(pattern)):
-        if should_skip_generated_mkv_path(input_path, path):
-            continue
-        files.append(path)
+    for pattern in matroska_input_glob_patterns(recursive):
+        for path in sorted(input_path.glob(pattern)):
+            key = str(path.resolve()).casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            if should_skip_generated_mkv_path(input_path, path):
+                continue
+            files.append(path)
+
+    files.sort()
 
     if not files:
-        raise OrganizerError(f"No MKV files found in: {input_path}")
+        raise OrganizerError(f"No supported Matroska files (.mkv/.mka) found in: {input_path}")
 
     return files, input_path
 
 
 def collect_mkv_files_from_paths(input_paths: list[Path], recursive: bool) -> tuple[list[Path], Path | None]:
     if not input_paths:
-        raise OrganizerError("Provide at least one MKV file or folder.")
+        raise OrganizerError("Provide at least one Matroska file (.mkv/.mka) or folder.")
 
     if len(input_paths) == 1:
         return collect_mkv_files(input_paths[0], recursive)
@@ -5701,7 +5726,7 @@ def collect_mkv_files_from_paths(input_paths: list[Path], recursive: bool) -> tu
             files.append(file_path)
 
     if not files:
-        raise OrganizerError("No MKV files found in the selected inputs.")
+        raise OrganizerError("No supported Matroska files (.mkv/.mka) found in the selected inputs.")
 
     return files, None
 
@@ -5838,22 +5863,24 @@ def collect_sibling_metadata_variant_consensus(
     parent_dirs = sorted({path.parent for path in input_files})
 
     for parent_dir in parent_dirs:
-        for candidate in sorted(parent_dir.glob("*.mkv")):
-            key = str(candidate.resolve()).casefold()
-            if key in seen:
-                continue
-            seen.add(key)
-            context_files.append(candidate)
+        for pattern in matroska_input_glob_patterns(False):
+            for candidate in sorted(parent_dir.glob(pattern)):
+                key = str(candidate.resolve()).casefold()
+                if key in seen:
+                    continue
+                seen.add(key)
+                context_files.append(candidate)
 
     for context_dir in getattr(args, "variant_context_dirs", []) or []:
-        for candidate in sorted(context_dir.rglob("*.mkv")):
-            if should_skip_generated_mkv_path(context_dir, candidate):
-                continue
-            key = str(candidate.resolve()).casefold()
-            if key in seen:
-                continue
-            seen.add(key)
-            context_files.append(candidate)
+        for pattern in matroska_input_glob_patterns(True):
+            for candidate in sorted(context_dir.glob(pattern)):
+                if should_skip_generated_mkv_path(context_dir, candidate):
+                    continue
+                key = str(candidate.resolve()).casefold()
+                if key in seen:
+                    continue
+                seen.add(key)
+                context_files.append(candidate)
 
     if not context_files:
         return {}
@@ -6046,7 +6073,7 @@ def process_file(
     subtitles = [track for track in tracks if track.type == "subtitles"]
 
     if not videos and not audio_tracks and not subtitles:
-        raise OrganizerError("No video/audio/subtitle tracks found in this MKV.")
+        raise OrganizerError("No video/audio/subtitle tracks found in this Matroska file.")
 
     apply_subtitle_language_overrides(subtitles, args.subtitle_language_overrides)
     apply_track_delay_overrides(audio_tracks, subtitles, args.audio_delay_overrides, args.subtitle_delay_overrides)
@@ -6300,7 +6327,7 @@ def process_merged_inputs(
             progress_callback(message, step, steps)
 
     if len(input_files) < 2:
-        raise OrganizerError("Merge mode needs at least two MKV input files.")
+        raise OrganizerError("Merge mode needs at least two Matroska input files.")
 
     print("\n====================================")
     print("Merging sources:")
@@ -6321,7 +6348,7 @@ def process_merged_inputs(
     subtitles = [track for track in all_tracks if track.type == "subtitles"]
 
     if not videos and not audio_tracks and not subtitles:
-        raise OrganizerError("No video/audio/subtitle tracks found in the selected MKVs.")
+        raise OrganizerError("No video/audio/subtitle tracks found in the selected Matroska files.")
 
     primary_video_source_index = next((track.source_index for track in sorted(videos, key=lambda item: item.order)), 0)
     for track in videos:
@@ -6524,7 +6551,7 @@ def build_parser(config_defaults: dict[str, Any] | None = None) -> argparse.Argu
         return config_defaults.get(name, fallback)
 
     parser = argparse.ArgumentParser(
-        description="Organize MKV file tracks in batch using MKVToolNix.",
+        description="Organize Matroska track metadata and order in batch using MKVToolNix.",
     )
     parser.set_defaults(
         smart_sub_detection=default("smart_sub_detection", True),
@@ -6547,17 +6574,17 @@ def build_parser(config_defaults: dict[str, Any] | None = None) -> argparse.Argu
         report=default("report", False),
         track_selection_overrides={},
     )
-    parser.add_argument("path", nargs="?", type=Path, default=default("path"), help="MKV file or folder with MKVs.")
+    parser.add_argument("path", nargs="?", type=Path, default=default("path"), help="Matroska file (.mkv/.mka) or folder.")
     parser.add_argument("--config", type=Path, default=None, help="JSON config with personal defaults.")
     parser.add_argument("--no-config", action="store_true", help="Ignore mkv_track_organizer.config.json.")
-    parser.add_argument("--recursive", action="store_true", help="Search for MKVs inside subfolders.")
+    parser.add_argument("--recursive", action="store_true", help="Search for Matroska files inside subfolders.")
     parser.add_argument("--dry-run", action="store_true", help="Show the plan and command without running the final remux.")
     parser.add_argument(
         "--merge-inputs",
         dest="merge_inputs",
         action="store_true",
         help=(
-            "Merge all discovered/selected MKVs into one output. "
+            "Merge all discovered/selected Matroska inputs into one output. "
             "The first source with video supplies video; audio/subtitle tracks are taken from every source."
         ),
     )
@@ -6571,12 +6598,12 @@ def build_parser(config_defaults: dict[str, Any] | None = None) -> argparse.Argu
         "--output-dir",
         type=Path,
         default=default("output_dir"),
-        help="Alternative output folder. Default: _sorted next to the MKVs.",
+        help="Alternative output folder. Default: _sorted next to the inputs.",
     )
     parser.add_argument(
         "--output-suffix",
         default=default("output_suffix", ""),
-        help='Optional suffix before .mkv. Example: --output-suffix fixed -> movie.fixed.mkv.',
+        help='Optional suffix before the extension. Example: --output-suffix fixed -> movie.fixed.mkv.',
     )
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing outputs.")
     parser.add_argument("--skip-existing", action="store_true", help="Skip files whose output already exists.")
@@ -6641,7 +6668,7 @@ def build_parser(config_defaults: dict[str, Any] | None = None) -> argparse.Argu
         type=Path,
         default=default("variant_context_dirs", []),
         help=(
-            "Extra folder with reference MKVs for language variant consensus. "
+            "Extra folder with reference Matroska files for language variant consensus. "
             "Can be repeated. Useful for isolated specials outside the season folder."
         ),
     )
@@ -6797,7 +6824,7 @@ def build_parser(config_defaults: dict[str, Any] | None = None) -> argparse.Argu
         "--ocr-cache-dir",
         type=Path,
         default=default("ocr_cache_dir"),
-        help="Alternative SRT cache folder. Default: _ocr_cache next to the MKV.",
+        help="Alternative SRT cache folder. Default: _ocr_cache next to the input file.",
     )
     parser.add_argument(
         "--prepare-pgs-ocr",
@@ -6910,7 +6937,7 @@ def prepare_batch_run(args: argparse.Namespace, config_path: Path | None = None)
         if not args.path:
             args.path = args.input_paths[0]
     elif not args.path:
-        raise OrganizerError("Provide an MKV file/folder or define 'path' in the config JSON.")
+        raise OrganizerError("Provide a Matroska file/folder or define 'path' in the config JSON.")
 
     args.path = Path(args.path).resolve()
     args.mkvmerge = resolve_tool_path(
@@ -7032,7 +7059,7 @@ def prepare_batch_run(args: argparse.Namespace, config_path: Path | None = None)
         input_files, source_root = collect_mkv_files(args.path, args.recursive)
 
     if args.merge_inputs and len(input_files) < 2:
-        raise OrganizerError("Merge mode needs at least two MKV files.")
+        raise OrganizerError("Merge mode needs at least two Matroska files.")
 
     return BatchRunContext(
         args=args,
@@ -7056,8 +7083,8 @@ def run_batch(
     total_files = len(input_files)
 
     ensure_not_cancelled(cancel_callback)
-    print(f"MKVs found: {total_files}")
-    emit_batch_event(event_callback, "batch-started", f"MKVs found: {total_files}", total=total_files)
+    print(f"Matroska files found: {total_files}")
+    emit_batch_event(event_callback, "batch-started", f"Matroska files found: {total_files}", total=total_files)
 
     try:
         batch_variant_consensus = collect_batch_language_variant_consensus(input_files, args)

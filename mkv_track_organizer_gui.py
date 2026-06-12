@@ -602,7 +602,7 @@ class MainWindow(QMainWindow):
 
         input_row = QHBoxLayout()
         input_label = QLabel("Input")
-        file_button = self._tool_button(QStyle.SP_FileIcon, "Choose MKV files")
+        file_button = self._tool_button(QStyle.SP_FileIcon, "Choose Matroska files")
         folder_button = self._tool_button(QStyle.SP_DirOpenIcon, "Choose folder")
         self.reset_all_button = self._tool_button(QStyle.SP_DialogResetButton, "Reset all tabs")
         input_row.addWidget(self.input_edit, 1)
@@ -615,7 +615,7 @@ class MainWindow(QMainWindow):
         output_row.addWidget(self.output_edit, 1)
         output_row.addWidget(browse_output)
 
-        self.recursive_check.setToolTip("When the input is a folder, include MKVs inside subfolders")
+        self.recursive_check.setToolTip("When the input is a folder, include .mkv and .mka files inside subfolders")
         source_grid.addWidget(input_label, 0, 0)
         source_grid.addLayout(input_row, 0, 1)
         source_grid.addWidget(QLabel("Output"), 1, 0)
@@ -651,7 +651,7 @@ class MainWindow(QMainWindow):
         advanced_layout.setColumnStretch(1, 1)
         advanced_layout.setColumnStretch(3, 1)
 
-        self.suffix_edit.setToolTip("Optional suffix before .mkv, for example movie.fixed.mkv")
+        self.suffix_edit.setToolTip("Optional suffix before the extension, for example movie.fixed.mkv")
         self._apply_combo_help(self.metadata_combo, self.METADATA_MODE_HELP)
         self._apply_combo_help(self.audio_name_style_combo, self.AUDIO_NAME_STYLE_HELP)
         self._apply_combo_help(self.language_order_style_combo, self.LANGUAGE_ORDER_STYLE_HELP)
@@ -661,7 +661,7 @@ class MainWindow(QMainWindow):
         self.audio_delays_edit.setToolTip("Manual audio delays in milliseconds. Example: 1:150, 2:-250")
         self.subtitle_delays_edit.setToolTip("Manual subtitle delays in milliseconds. Example: 5:-250")
         self.merge_inputs_check.setToolTip(
-            "Mux selected MKVs into one output. The first source with video supplies video; audio/subtitles come from all sources."
+            "Mux selected Matroska inputs into one output. The first source with video supplies video; audio/subtitles come from all sources."
         )
         self.smart_subs_check.setToolTip("Automatically classify forced, empty, commentary, and SDH subtitles")
         self.drop_empty_check.setToolTip("Exclude subtitles classified as empty")
@@ -1408,7 +1408,12 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def choose_file(self) -> None:
-        paths, _filter = QFileDialog.getOpenFileNames(self, "Choose MKV files", "", "Matroska video (*.mkv)")
+        paths, _filter = QFileDialog.getOpenFileNames(
+            self,
+            "Choose Matroska files",
+            "",
+            "Matroska files (*.mkv *.mka);;Matroska video (*.mkv);;Matroska audio (*.mka)",
+        )
         self.add_input_paths(Path(path) for path in paths)
 
     @Slot()
@@ -1533,8 +1538,8 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Invalid Audio Sync settings", str(error))
             return
 
-        if not source_path.is_file() or source_path.suffix.lower() != ".mkv":
-            QMessageBox.information(self, "Audio Sync", "The Organizer workflow needs an MKV source file.")
+        if not organizer.is_matroska_input_file(source_path):
+            QMessageBox.information(self, "Audio Sync", "The Organizer workflow needs a .mkv or .mka source file.")
             return
 
         delay_ms = int(round(self.audio_sync_result.timeline_shift_seconds * 1000))
@@ -1795,7 +1800,7 @@ class MainWindow(QMainWindow):
             self._set_track_selection_controls_enabled(False)
 
     def _is_supported_input_path(self, path: Path) -> bool:
-        return path.is_dir() or (path.is_file() and path.suffix.lower() == ".mkv")
+        return path.is_dir() or organizer.is_matroska_input_file(path)
 
     def _sync_input_summary(self) -> None:
         if not self.input_paths:
@@ -1828,10 +1833,10 @@ class MainWindow(QMainWindow):
         self.append_summary_line("Organizer check passed.")
         if context:
             args = context.args
-            self.append_summary_line(f"MKVs found: {len(context.input_files)}")
+            self.append_summary_line(f"Matroska files found: {len(context.input_files)}")
         else:
             self.append_summary_line("Input: not selected yet")
-            self.append_summary_line("Choose an MKV file/folder to check file discovery and track IDs.")
+            self.append_summary_line("Choose a Matroska file/folder to check file discovery and track IDs.")
         self.append_summary_line(f"mkvmerge: {args.mkvmerge}")
         self.append_summary_line(f"mkvextract: {args.mkvextract}")
         if args.mkvpropedit:
@@ -1839,12 +1844,12 @@ class MainWindow(QMainWindow):
         self.append_summary_line()
         self.statusBar().showMessage("Organizer check passed")
         if context:
-            QMessageBox.information(self, "Organizer check", f"Ready. MKVs found: {len(context.input_files)}")
+            QMessageBox.information(self, "Organizer check", f"Ready. Matroska files found: {len(context.input_files)}")
         else:
             QMessageBox.information(
                 self,
                 "Organizer check",
-                "Tools look ready. Choose an input MKV file/folder to check files and track IDs.",
+                "Tools look ready. Choose an input Matroska file/folder to check files and track IDs.",
             )
 
     @Slot()
