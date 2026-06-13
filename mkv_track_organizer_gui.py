@@ -12,6 +12,7 @@ try:
     from PySide6.QtGui import QColor, QCloseEvent, QDragEnterEvent, QDropEvent, QTextCursor
     from PySide6.QtWidgets import (
         QApplication,
+        QAbstractItemView,
         QCheckBox,
         QComboBox,
         QFileDialog,
@@ -66,6 +67,52 @@ class SignalTextStream(io.TextIOBase):
 
     def flush(self) -> None:
         return None
+
+
+class TrackTableWidget(QTableWidget):
+    rows_reordered = Signal()
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        if event.source() is not self:
+            super().dropEvent(event)
+            return
+
+        selected_rows = sorted({index.row() for index in self.selectedIndexes()})
+        if not selected_rows:
+            super().dropEvent(event)
+            return
+
+        position = event.position().toPoint() if hasattr(event, "position") else event.pos()
+        target_row = self.rowAt(position.y())
+        if target_row < 0:
+            target_row = self.rowCount()
+
+        signals_were_blocked = self.blockSignals(True)
+        try:
+            row_items: list[list[QTableWidgetItem | None]] = []
+            for row in selected_rows:
+                row_items.append([self.takeItem(row, column) for column in range(self.columnCount())])
+
+            for row in reversed(selected_rows):
+                self.removeRow(row)
+                if row < target_row:
+                    target_row -= 1
+
+            target_row = max(0, min(target_row, self.rowCount()))
+            for offset, items in enumerate(row_items):
+                insert_row = target_row + offset
+                self.insertRow(insert_row)
+                for column, item in enumerate(items):
+                    self.setItem(insert_row, column, item)
+
+            self.clearSelection()
+            for row in range(target_row, target_row + len(row_items)):
+                self.selectRow(row)
+        finally:
+            self.blockSignals(signals_were_blocked)
+
+        event.acceptProposedAction()
+        self.rows_reordered.emit()
 
 
 class OrganizerWorker(QObject):
@@ -410,6 +457,7 @@ class MainWindow(QMainWindow):
         self._syncing_input_edit = False
         self._syncing_track_checks = False
         self.manual_track_includes: dict[str, bool] = {}
+        self.manual_track_order: list[str] = []
 
         self.input_edit = QLineEdit()
         self.input_edit.setPlaceholderText("Selected source")
@@ -465,7 +513,8 @@ class MainWindow(QMainWindow):
         self.cancel_button = QPushButton("Cancel")
         self.track_select_all_button = QPushButton("Select all")
         self.track_deselect_duplicates_button = QPushButton("Deselect duplicates")
-        self.reset_all_button: QToolButton | None = None
+        self.organizer_clear_button: QToolButton | None = None
+        self.organizer_reset_button: QToolButton | None = None
         self.check_tools_button.setObjectName("secondaryButton")
         self.preview_button.setObjectName("secondaryButton")
         self.run_button.setObjectName("primaryButton")
@@ -478,7 +527,7 @@ class MainWindow(QMainWindow):
         self.track_deselect_duplicates_button.setEnabled(False)
         self.files_table = QTableWidget(0, len(self.FILE_COLUMNS))
         self.results_table = self.files_table
-        self.tracks_table = QTableWidget(0, len(self.TRACK_COLUMNS))
+        self.tracks_table = TrackTableWidget(0, len(self.TRACK_COLUMNS))
         self.summary_edit = QPlainTextEdit()
         self.log_edit = QPlainTextEdit()
         self.output_tabs = QTabWidget()
@@ -514,11 +563,13 @@ class MainWindow(QMainWindow):
         self.makemkv_check_button = QPushButton("Check tools")
         self.makemkv_preview_button = QPushButton("Preview")
         self.makemkv_run_button = QPushButton("Run")
+        self.makemkv_clear_button = QPushButton("Clear")
         self.makemkv_reset_button = QPushButton("Reset")
         self.makemkv_cancel_button = QPushButton("Cancel")
         self.makemkv_check_button.setObjectName("secondaryButton")
         self.makemkv_preview_button.setObjectName("secondaryButton")
         self.makemkv_run_button.setObjectName("primaryButton")
+        self.makemkv_clear_button.setObjectName("secondaryButton")
         self.makemkv_reset_button.setObjectName("secondaryButton")
         self.makemkv_cancel_button.setObjectName("dangerButton")
         self.makemkv_table = QTableWidget(0, len(self.MAKEMKV_COLUMNS))
@@ -561,7 +612,8 @@ class MainWindow(QMainWindow):
         self.audio_sync_apply_organizer_button = QPushButton("Apply delay in Organizer")
         self.audio_sync_export_button = QPushButton("Export shifted .mka")
         self.audio_sync_select_all_button = QPushButton("Select all")
-        self.audio_sync_clear_selection_button = QPushButton("Clear")
+        self.audio_sync_clear_selection_button = QPushButton("Clear selection")
+        self.audio_sync_clear_button = QPushButton("Clear")
         self.audio_sync_reset_button = QPushButton("Reset")
         self.audio_sync_cancel_button = QPushButton("Cancel")
         self.audio_sync_check_button.setObjectName("secondaryButton")
@@ -571,6 +623,7 @@ class MainWindow(QMainWindow):
         self.audio_sync_export_button.setObjectName("secondaryButton")
         self.audio_sync_select_all_button.setObjectName("secondaryButton")
         self.audio_sync_clear_selection_button.setObjectName("secondaryButton")
+        self.audio_sync_clear_button.setObjectName("secondaryButton")
         self.audio_sync_reset_button.setObjectName("secondaryButton")
         self.audio_sync_cancel_button.setObjectName("dangerButton")
         self.audio_sync_tracks_table = QTableWidget(0, len(self.AUDIO_SYNC_COLUMNS))
@@ -604,11 +657,13 @@ class MainWindow(QMainWindow):
         input_label = QLabel("Input")
         file_button = self._tool_button(QStyle.SP_FileIcon, "Choose Matroska files")
         folder_button = self._tool_button(QStyle.SP_DirOpenIcon, "Choose folder")
-        self.reset_all_button = self._tool_button(QStyle.SP_DialogResetButton, "Reset all tabs")
+        self.organizer_clear_button = self._tool_button(QStyle.SP_DialogResetButton, "Clear Organizer inputs")
+        self.organizer_reset_button = self._tool_button(QStyle.SP_BrowserReload, "Reset Organizer tab")
         input_row.addWidget(self.input_edit, 1)
         input_row.addWidget(file_button)
         input_row.addWidget(folder_button)
-        input_row.addWidget(self.reset_all_button)
+        input_row.addWidget(self.organizer_clear_button)
+        input_row.addWidget(self.organizer_reset_button)
 
         browse_output = self._tool_button(QStyle.SP_DirOpenIcon, "Choose output folder")
         output_row = QHBoxLayout()
@@ -754,10 +809,17 @@ class MainWindow(QMainWindow):
         self.tracks_table.horizontalHeader().setStretchLastSection(True)
         self.tracks_table.setAlternatingRowColors(True)
         self.tracks_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.tracks_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.tracks_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.tracks_table.setDragEnabled(True)
+        self.tracks_table.setAcceptDrops(True)
+        self.tracks_table.setDragDropMode(QAbstractItemView.InternalMove)
+        self.tracks_table.setDefaultDropAction(Qt.MoveAction)
+        self.tracks_table.setDragDropOverwriteMode(False)
+        self.tracks_table.setDropIndicatorShown(True)
+        self.tracks_table.setToolTip("Drag rows to change the remux track order")
         self.tracks_table.verticalHeader().setVisible(False)
         self.tracks_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.tracks_table.setAcceptDrops(True)
         self.tracks_table.installEventFilter(self)
         tracks_layout.addWidget(self.tracks_table)
 
@@ -794,7 +856,10 @@ class MainWindow(QMainWindow):
 
         file_button.clicked.connect(self.choose_file)
         folder_button.clicked.connect(self.choose_folder)
-        self.reset_all_button.clicked.connect(lambda: self.reset_all_tabs())
+        if self.organizer_clear_button:
+            self.organizer_clear_button.clicked.connect(self.clear_inputs)
+        if self.organizer_reset_button:
+            self.organizer_reset_button.clicked.connect(self.reset_organizer_tab)
         browse_output.clicked.connect(self.choose_output_folder)
         self.advanced_button.toggled.connect(self.toggle_advanced)
 
@@ -859,8 +924,10 @@ class MainWindow(QMainWindow):
         self.makemkv_preview_button.setToolTip("Show planned MakeMKV commands without writing outputs")
         self.makemkv_run_button.setIcon(style.standardIcon(QStyle.SP_MediaPlay))
         self.makemkv_run_button.setToolTip("Run MakeMKV with the selected settings")
+        self.makemkv_clear_button.setIcon(style.standardIcon(QStyle.SP_DialogResetButton))
+        self.makemkv_clear_button.setToolTip("Clear MakeMKV input folder")
         self.makemkv_reset_button.setIcon(style.standardIcon(QStyle.SP_DialogResetButton))
-        self.makemkv_reset_button.setToolTip("Reset Organizer, Audio Sync, and MakeMKV tabs")
+        self.makemkv_reset_button.setToolTip("Reset MakeMKV tab")
         self.makemkv_cancel_button.setIcon(style.standardIcon(QStyle.SP_BrowserStop))
         self.makemkv_cancel_button.setToolTip("Cancel the current MakeMKV batch")
         self.makemkv_cancel_button.setEnabled(False)
@@ -868,6 +935,7 @@ class MainWindow(QMainWindow):
         top_bar.addWidget(self.makemkv_check_button)
         top_bar.addWidget(self.makemkv_preview_button)
         top_bar.addWidget(self.makemkv_run_button)
+        top_bar.addWidget(self.makemkv_clear_button)
         top_bar.addWidget(self.makemkv_reset_button)
         top_bar.addWidget(self.makemkv_cancel_button)
         root.addLayout(top_bar)
@@ -1002,11 +1070,15 @@ class MainWindow(QMainWindow):
         )
         self.audio_sync_export_button.setEnabled(False)
         self.audio_sync_select_all_button.setIcon(style.standardIcon(QStyle.SP_DialogApplyButton))
+        self.audio_sync_select_all_button.setToolTip("Select every loaded source audio track for .mka export")
         self.audio_sync_select_all_button.setEnabled(False)
         self.audio_sync_clear_selection_button.setIcon(style.standardIcon(QStyle.SP_DialogResetButton))
+        self.audio_sync_clear_selection_button.setToolTip("Uncheck every loaded source audio track")
         self.audio_sync_clear_selection_button.setEnabled(False)
+        self.audio_sync_clear_button.setIcon(style.standardIcon(QStyle.SP_DialogResetButton))
+        self.audio_sync_clear_button.setToolTip("Clear Audio Sync reference and source paths")
         self.audio_sync_reset_button.setIcon(style.standardIcon(QStyle.SP_DialogResetButton))
-        self.audio_sync_reset_button.setToolTip("Reset Organizer, Audio Sync, and MakeMKV tabs")
+        self.audio_sync_reset_button.setToolTip("Reset Audio Sync tab")
         self.audio_sync_cancel_button.setIcon(style.standardIcon(QStyle.SP_BrowserStop))
         self.audio_sync_cancel_button.setEnabled(False)
 
@@ -1017,6 +1089,7 @@ class MainWindow(QMainWindow):
         top_bar.addWidget(self.audio_sync_analyze_button)
         top_bar.addWidget(self.audio_sync_apply_organizer_button)
         top_bar.addWidget(self.audio_sync_export_button)
+        top_bar.addWidget(self.audio_sync_clear_button)
         top_bar.addWidget(self.audio_sync_reset_button)
         top_bar.addWidget(self.audio_sync_cancel_button)
         root.addLayout(top_bar)
@@ -1066,10 +1139,12 @@ class MainWindow(QMainWindow):
         self.track_select_all_button.clicked.connect(self.select_all_tracks)
         self.track_deselect_duplicates_button.clicked.connect(self.deselect_duplicate_tracks)
         self.tracks_table.itemChanged.connect(self._track_item_changed)
+        self.tracks_table.rows_reordered.connect(self._track_rows_reordered)
         self.makemkv_check_button.clicked.connect(self.check_makemkv_tools)
         self.makemkv_preview_button.clicked.connect(self.start_makemkv_preview)
         self.makemkv_run_button.clicked.connect(self.start_makemkv_run)
-        self.makemkv_reset_button.clicked.connect(lambda: self.reset_all_tabs())
+        self.makemkv_clear_button.clicked.connect(self.clear_makemkv_inputs)
+        self.makemkv_reset_button.clicked.connect(self.reset_makemkv_tab)
         self.makemkv_cancel_button.clicked.connect(self.cancel_makemkv_run)
         self.audio_sync_check_button.clicked.connect(self.check_audio_sync_tools)
         self.audio_sync_load_button.clicked.connect(self.load_audio_sync_streams)
@@ -1078,7 +1153,8 @@ class MainWindow(QMainWindow):
         self.audio_sync_export_button.clicked.connect(self.start_audio_sync_export)
         self.audio_sync_select_all_button.clicked.connect(self.select_all_audio_sync_streams)
         self.audio_sync_clear_selection_button.clicked.connect(self.clear_audio_sync_stream_selection)
-        self.audio_sync_reset_button.clicked.connect(lambda: self.reset_all_tabs())
+        self.audio_sync_clear_button.clicked.connect(self.clear_audio_sync_inputs)
+        self.audio_sync_reset_button.clicked.connect(self.reset_audio_sync_tab)
         self.audio_sync_cancel_button.clicked.connect(self.cancel_audio_sync_task)
         self.audio_sync_reference_edit.textEdited.connect(lambda _text: self._clear_audio_sync_loaded_streams())
         self.audio_sync_source_edit.textEdited.connect(lambda _text: self._clear_audio_sync_loaded_streams())
@@ -1402,6 +1478,7 @@ class MainWindow(QMainWindow):
             self.input_paths = []
             self.current_reports = []
             self.manual_track_includes = {}
+            self.manual_track_order = []
             self._refresh_file_list()
             self.tracks_table.setRowCount(0)
             self._set_track_selection_controls_enabled(False)
@@ -1670,13 +1747,71 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def clear_inputs(self) -> None:
+        if self._reset_or_clear_blocked("Clear Organizer inputs"):
+            return
         self.input_paths = []
         self.current_reports = []
         self.manual_track_includes = {}
+        self.manual_track_order = []
         self._set_input_text("")
         self._refresh_file_list()
         self.tracks_table.setRowCount(0)
         self._set_track_selection_controls_enabled(False)
+        self.statusBar().showMessage("Organizer inputs cleared")
+
+    @Slot()
+    def reset_organizer_tab(self) -> None:
+        if self._reset_or_clear_blocked("Reset Organizer tab"):
+            return
+        self._reset_organizer_tab()
+        self.progress.setRange(0, 1)
+        self.progress.setValue(0)
+        self._set_progress_label("Idle")
+        self.statusBar().showMessage("Organizer tab reset")
+
+    @Slot()
+    def clear_audio_sync_inputs(self) -> None:
+        if self._reset_or_clear_blocked("Clear Audio Sync inputs"):
+            return
+        self.audio_sync_reference_edit.clear()
+        self.audio_sync_source_edit.clear()
+        self._clear_audio_sync_loaded_streams()
+        self.statusBar().showMessage("Audio Sync inputs cleared")
+
+    @Slot()
+    def reset_audio_sync_tab(self) -> None:
+        if self._reset_or_clear_blocked("Reset Audio Sync tab"):
+            return
+        self._reset_audio_sync_tab()
+        self.progress.setRange(0, 1)
+        self.progress.setValue(0)
+        self._set_progress_label("Idle")
+        self.statusBar().showMessage("Audio Sync tab reset")
+
+    @Slot()
+    def clear_makemkv_inputs(self) -> None:
+        if self._reset_or_clear_blocked("Clear MakeMKV inputs"):
+            return
+        self.makemkv_source_edit.clear()
+        self.makemkv_reports = []
+        self.makemkv_table.setRowCount(0)
+        self.statusBar().showMessage("MakeMKV inputs cleared")
+
+    @Slot()
+    def reset_makemkv_tab(self) -> None:
+        if self._reset_or_clear_blocked("Reset MakeMKV tab"):
+            return
+        self._reset_makemkv_tab()
+        self.progress.setRange(0, 1)
+        self.progress.setValue(0)
+        self._set_progress_label("Idle")
+        self.statusBar().showMessage("MakeMKV tab reset")
+
+    def _reset_or_clear_blocked(self, title: str) -> bool:
+        if not self._workflow_is_running():
+            return False
+        QMessageBox.information(self, title, "Wait for the current task to finish first.")
+        return True
 
     @Slot()
     def reset_all_tabs(self, confirm: bool = True) -> None:
@@ -1709,6 +1844,7 @@ class MainWindow(QMainWindow):
         self.input_paths = []
         self.current_reports = []
         self.manual_track_includes = {}
+        self.manual_track_order = []
         self._set_input_text("")
         self.output_edit.clear()
         self.files_table.setRowCount(0)
@@ -1721,6 +1857,7 @@ class MainWindow(QMainWindow):
         self.input_paths = []
         self.current_reports = []
         self.manual_track_includes = {}
+        self.manual_track_order = []
         self._set_input_text("")
         self.files_table.setRowCount(0)
         self.tracks_table.setRowCount(0)
@@ -1794,6 +1931,7 @@ class MainWindow(QMainWindow):
         if added:
             self.current_reports = []
             self.manual_track_includes = {}
+            self.manual_track_order = []
             self._sync_input_summary()
             self._refresh_file_list()
             self.tracks_table.setRowCount(0)
@@ -2210,7 +2348,10 @@ class MainWindow(QMainWindow):
         args.recursive = self.recursive_check.isChecked()
         args.dry_run = dry_run
         args.merge_inputs = self.merge_inputs_check.isChecked()
+        if self.tracks_table.rowCount():
+            self._sync_track_order_from_table()
         args.track_selection_overrides = dict(self.manual_track_includes)
+        args.track_order_overrides = list(self.manual_track_order)
         args.smart_sub_detection = self.smart_subs_check.isChecked()
         args.drop_empty_subs = self.drop_empty_check.isChecked()
         args.detect_duplicate_tracks = self.duplicate_check.isChecked()
@@ -3000,11 +3141,24 @@ class MainWindow(QMainWindow):
 
     def _report_tracks(self, report: dict) -> list[dict]:
         tracks = report.get("tracks", {})
-        return [
+        report_tracks = [
             *tracks.get("video", []),
             *tracks.get("audio", []),
             *tracks.get("subtitles", []),
         ]
+        if not self.manual_track_order:
+            return report_tracks
+
+        manual_rank = {selection_key: index for index, selection_key in enumerate(self.manual_track_order)}
+
+        def sort_key(item: tuple[int, dict]) -> tuple[int, int]:
+            index, track = item
+            selection_key = self._track_selection_key(track)
+            if selection_key in manual_rank:
+                return (0, manual_rank[selection_key])
+            return (1, index)
+
+        return [track for _index, track in sorted(enumerate(report_tracks), key=sort_key)]
 
     def _track_selection_key(self, track: dict) -> str:
         existing_key = str(track.get("selection_key") or "")
@@ -3040,6 +3194,20 @@ class MainWindow(QMainWindow):
             if drop_item:
                 drop_item.setText(self._yes_no(track.get("drop")))
             item.setToolTip("Included in the remux" if include_track else "Excluded from the remux")
+
+    @Slot()
+    def _track_rows_reordered(self) -> None:
+        self._sync_track_order_from_table()
+        self.statusBar().showMessage("Track order updated")
+
+    def _sync_track_order_from_table(self) -> None:
+        ordered_keys: list[str] = []
+        for row in range(self.tracks_table.rowCount()):
+            item = self.tracks_table.item(row, 0)
+            selection_key = str(item.data(Qt.UserRole) or "") if item else ""
+            if selection_key:
+                ordered_keys.append(selection_key)
+        self.manual_track_order = ordered_keys
 
     @Slot()
     def select_all_tracks(self) -> None:
@@ -3102,8 +3270,10 @@ class MainWindow(QMainWindow):
         return f"{delay_ms:+d} ms" if delay_ms else ""
 
     def _set_running(self, running: bool) -> None:
-        if self.reset_all_button:
-            self.reset_all_button.setEnabled(not running)
+        if self.organizer_clear_button:
+            self.organizer_clear_button.setEnabled(not running)
+        if self.organizer_reset_button:
+            self.organizer_reset_button.setEnabled(not running)
         self.check_tools_button.setEnabled(not running)
         self.preview_button.setEnabled(not running)
         self.run_button.setEnabled(not running)
@@ -3111,10 +3281,12 @@ class MainWindow(QMainWindow):
         self.makemkv_check_button.setEnabled(not running)
         self.makemkv_preview_button.setEnabled(not running)
         self.makemkv_run_button.setEnabled(not running)
+        self.makemkv_clear_button.setEnabled(not running)
         self.makemkv_reset_button.setEnabled(not running)
         self.audio_sync_check_button.setEnabled(not running)
         self.audio_sync_load_button.setEnabled(not running)
         self.audio_sync_analyze_button.setEnabled(not running)
+        self.audio_sync_clear_button.setEnabled(not running)
         self.audio_sync_reset_button.setEnabled(not running)
         self.audio_sync_apply_organizer_button.setEnabled(bool(self.audio_sync_result) and not running)
         self.audio_sync_export_button.setEnabled(bool(self.audio_sync_result) and not running)
@@ -3122,11 +3294,14 @@ class MainWindow(QMainWindow):
         self._set_track_selection_controls_enabled(self.tracks_table.rowCount() > 0 and not running)
 
     def _set_makemkv_running(self, running: bool) -> None:
-        if self.reset_all_button:
-            self.reset_all_button.setEnabled(not running)
+        if self.organizer_clear_button:
+            self.organizer_clear_button.setEnabled(not running)
+        if self.organizer_reset_button:
+            self.organizer_reset_button.setEnabled(not running)
         self.makemkv_check_button.setEnabled(not running)
         self.makemkv_preview_button.setEnabled(not running)
         self.makemkv_run_button.setEnabled(not running)
+        self.makemkv_clear_button.setEnabled(not running)
         self.makemkv_reset_button.setEnabled(not running)
         self.makemkv_cancel_button.setEnabled(running)
         self.check_tools_button.setEnabled(not running)
@@ -3135,6 +3310,7 @@ class MainWindow(QMainWindow):
         self.audio_sync_check_button.setEnabled(not running)
         self.audio_sync_load_button.setEnabled(not running)
         self.audio_sync_analyze_button.setEnabled(not running)
+        self.audio_sync_clear_button.setEnabled(not running)
         self.audio_sync_reset_button.setEnabled(not running)
         self.audio_sync_apply_organizer_button.setEnabled(bool(self.audio_sync_result) and not running)
         self.audio_sync_export_button.setEnabled(bool(self.audio_sync_result) and not running)
@@ -3142,11 +3318,14 @@ class MainWindow(QMainWindow):
         self._set_track_selection_controls_enabled(self.tracks_table.rowCount() > 0 and not running)
 
     def _set_audio_sync_running(self, running: bool) -> None:
-        if self.reset_all_button:
-            self.reset_all_button.setEnabled(not running)
+        if self.organizer_clear_button:
+            self.organizer_clear_button.setEnabled(not running)
+        if self.organizer_reset_button:
+            self.organizer_reset_button.setEnabled(not running)
         self.audio_sync_check_button.setEnabled(not running)
         self.audio_sync_load_button.setEnabled(not running)
         self.audio_sync_analyze_button.setEnabled(not running)
+        self.audio_sync_clear_button.setEnabled(not running)
         self.audio_sync_reset_button.setEnabled(not running)
         self.audio_sync_apply_organizer_button.setEnabled(bool(self.audio_sync_result) and not running)
         self.audio_sync_export_button.setEnabled(bool(self.audio_sync_result) and not running)
@@ -3158,6 +3337,7 @@ class MainWindow(QMainWindow):
         self.makemkv_check_button.setEnabled(not running)
         self.makemkv_preview_button.setEnabled(not running)
         self.makemkv_run_button.setEnabled(not running)
+        self.makemkv_clear_button.setEnabled(not running)
         self.makemkv_reset_button.setEnabled(not running)
         self._set_track_selection_controls_enabled(self.tracks_table.rowCount() > 0 and not running)
 

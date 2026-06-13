@@ -992,6 +992,66 @@ def test_mkvmerge_command_can_merge_multiple_sources(tmp_path: Path) -> None:
     assert command[command.index("--track-order") + 1] == "0:0,0:1,1:1"
 
 
+def test_ordered_tracks_respects_manual_track_order() -> None:
+    video = video_track(0)
+    english = audio_track(1, "eng")
+    portuguese = audio_track(2, "por")
+    subtitle = subtitle_track(3, "eng")
+
+    manual_order = [
+        m.track_selection_key_for_track(subtitle),
+        m.track_selection_key_for_track(video),
+        m.track_selection_key_for_track(portuguese),
+        m.track_selection_key_for_track(english),
+    ]
+
+    ordered = m.ordered_tracks(
+        [video],
+        [english, portuguese],
+        [subtitle],
+        track_order_overrides=manual_order,
+    )
+
+    assert [(track.type, track.id) for track in ordered] == [
+        ("subtitles", 3),
+        ("video", 0),
+        ("audio", 2),
+        ("audio", 1),
+    ]
+
+
+def test_mkvmerge_command_uses_manual_track_order_across_sources(tmp_path: Path) -> None:
+    first_input = tmp_path / "main.mkv"
+    second_input = tmp_path / "extra.mka"
+    main_video = video_track(0)
+    main_audio = audio_track(1, "eng")
+    extra_audio = audio_track(1, "por")
+
+    for track in [main_video, main_audio]:
+        track.source_index = 0
+        track.source_name = first_input.name
+    extra_audio.source_index = 1
+    extra_audio.source_name = second_input.name
+    main_audio.suggested_name = "English - DTS-HD MA 5.1"
+    extra_audio.suggested_name = "Portuguese - DTS-HD MA 5.1"
+
+    command = m.build_mkvmerge_command(
+        mkvmerge=Path("mkvmerge"),
+        input_path=[first_input, second_input],
+        output_path=tmp_path / "out.mkv",
+        videos=[main_video],
+        audio_tracks=[main_audio, extra_audio],
+        subtitles=[],
+        track_order_overrides=[
+            m.track_selection_key_for_track(extra_audio),
+            m.track_selection_key_for_track(main_video),
+            m.track_selection_key_for_track(main_audio),
+        ],
+    )
+
+    assert command[command.index("--track-order") + 1] == "1:1,0:0,0:1"
+
+
 def test_track_delay_overrides_validate_track_type() -> None:
     audio = audio_track(1)
     subtitle = subtitle_track(2)

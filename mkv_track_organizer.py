@@ -4949,14 +4949,30 @@ def ordered_tracks(
     subtitles: list[TrackInfo],
     language_order_style: str = "default",
     regional_order: Any = None,
+    track_order_overrides: list[str] | None = None,
 ) -> list[TrackInfo]:
     included_videos = [track for track in videos if not track.drop]
     included_audio = [track for track in audio_tracks if not track.drop]
     included_subtitles = [track for track in subtitles if not track.drop]
-    return (
+    auto_ordered = (
         sorted(included_videos, key=lambda item: item.order)
         + sorted(included_audio, key=lambda item: audio_sort_key(item, language_order_style, regional_order))
         + sorted(included_subtitles, key=lambda item: subtitle_sort_key(item, language_order_style, regional_order))
+    )
+
+    if not track_order_overrides:
+        return auto_ordered
+
+    manual_rank = {selection_key: index for index, selection_key in enumerate(track_order_overrides)}
+    auto_rank = {id(track): index for index, track in enumerate(auto_ordered)}
+    return sorted(
+        auto_ordered,
+        key=lambda track: (
+            0,
+            manual_rank[track_selection_key_for_track(track)],
+        )
+        if track_selection_key_for_track(track) in manual_rank
+        else (1, auto_rank[id(track)]),
     )
 
 
@@ -5061,9 +5077,17 @@ def metadata_edit_plan(
     subtitles: list[TrackInfo],
     language_order_style: str = "default",
     regional_order: Any = None,
+    track_order_overrides: list[str] | None = None,
 ) -> MetadataEditPlan:
     all_tracks = sorted(videos + audio_tracks + subtitles, key=lambda item: item.order)
-    desired_tracks = ordered_tracks(videos, audio_tracks, subtitles, language_order_style, regional_order)
+    desired_tracks = ordered_tracks(
+        videos,
+        audio_tracks,
+        subtitles,
+        language_order_style,
+        regional_order,
+        track_order_overrides,
+    )
 
     dropped_tracks = [track for track in all_tracks if track.drop]
     if dropped_tracks:
@@ -5121,6 +5145,7 @@ def build_mkvmerge_command(
     subtitles: list[TrackInfo],
     language_order_style: str = "default",
     regional_order: Any = None,
+    track_order_overrides: list[str] | None = None,
 ) -> list[str]:
     command = command_with_mkvtoolnix_ui_language([str(mkvmerge), "--output", str(output_path)])
     input_paths = [input_path] if isinstance(input_path, Path) else list(input_path)
@@ -5186,7 +5211,7 @@ def build_mkvmerge_command(
 
         command.append(str(source_path))
 
-    ordered = ordered_tracks(videos, audio_tracks, subtitles, language_order_style, regional_order)
+    ordered = ordered_tracks(videos, audio_tracks, subtitles, language_order_style, regional_order, track_order_overrides)
     if ordered:
         command.extend(["--track-order", ",".join(f"{track.source_index}:{track.id}" for track in ordered)])
 
@@ -5301,6 +5326,7 @@ def track_report_data(track: TrackInfo) -> dict[str, Any]:
         "source_index": track.source_index,
         "source_path": track.source_path,
         "source_name": track.source_name,
+        "order": track.order,
         "type": track.type,
         "codec": track.codec,
         "input_language": track.language,
@@ -6122,6 +6148,7 @@ def process_file(
     audio_name_style = getattr(args, "audio_name_style", "auto")
     language_order_style = getattr(args, "language_order_style", "default")
     regional_order = getattr(args, "regional_order", None)
+    track_order_overrides = getattr(args, "track_order_overrides", None)
     apply_audio_names(audio_tracks, audio_name_style)
 
     progress("Analyzing subtitle sizes", 15)
@@ -6210,7 +6237,14 @@ def process_file(
     print_track_plan(videos, audio_tracks, subtitles, language_order_style, regional_order)
     print_track_explanations(subtitles, args.explain_track_ids)
 
-    metadata_plan = metadata_edit_plan(videos, audio_tracks, subtitles, language_order_style, regional_order)
+    metadata_plan = metadata_edit_plan(
+        videos,
+        audio_tracks,
+        subtitles,
+        language_order_style,
+        regional_order,
+        track_order_overrides,
+    )
     metadata_mode = getattr(args, "metadata_edit_mode", "off")
     if metadata_mode in {"auto", "only"}:
         print(f"\nMetadata-only plan: {'yes' if metadata_plan.can_edit else 'no'} ({metadata_plan.reason})")
@@ -6298,6 +6332,7 @@ def process_file(
         subtitles=subtitles,
         language_order_style=language_order_style,
         regional_order=regional_order,
+        track_order_overrides=track_order_overrides,
     )
 
     print("\nmkvmerge command:")
@@ -6402,6 +6437,7 @@ def process_merged_inputs(
     audio_name_style = getattr(args, "audio_name_style", "auto")
     language_order_style = getattr(args, "language_order_style", "default")
     regional_order = getattr(args, "regional_order", None)
+    track_order_overrides = getattr(args, "track_order_overrides", None)
     apply_audio_names(audio_tracks, audio_name_style)
 
     progress("Analyzing subtitle sizes", 15)
@@ -6533,6 +6569,7 @@ def process_merged_inputs(
         subtitles=subtitles,
         language_order_style=language_order_style,
         regional_order=regional_order,
+        track_order_overrides=track_order_overrides,
     )
 
     print("\nmkvmerge command:")
@@ -6613,6 +6650,7 @@ def build_parser(config_defaults: dict[str, Any] | None = None) -> argparse.Argu
         skip_existing=default("skip_existing", False),
         report=default("report", False),
         track_selection_overrides={},
+        track_order_overrides=[],
     )
     parser.add_argument("path", nargs="?", type=Path, default=default("path"), help="Matroska file (.mkv/.mka) or folder.")
     parser.add_argument("--config", type=Path, default=None, help="JSON config with personal defaults.")
