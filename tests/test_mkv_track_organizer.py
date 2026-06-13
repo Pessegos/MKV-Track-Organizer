@@ -119,6 +119,11 @@ def test_language_names_and_aliases() -> None:
     assert m.language_display_name("msa") == "Malay"
     assert m.normalize_language_from_properties("und", "Malay") == "may"
     assert m.ietf_language_for_mkvpropedit("may") == "ms"
+    assert m.normalize_language_code("nl-BE") == "nl-BE"
+    assert m.normalize_language_code("vls") == "nl-BE"
+    assert m.language_display_name("nl-BE") == "Dutch (Flemish)"
+    assert m.legacy_language_for_mkvpropedit("nl-BE") == "dut"
+    assert m.ietf_language_for_mkvpropedit("nl-BE") == "nl-BE"
 
 
 def test_language_hints_fix_wrong_metadata_language() -> None:
@@ -130,6 +135,7 @@ def test_language_hints_fix_wrong_metadata_language() -> None:
     assert m.normalize_language_from_properties("por", "European (Forced)") == "pt-PT"
     assert m.normalize_language_from_properties("spa", "European") == "es-ES"
     assert m.normalize_language_from_properties("fre", "European") == "fr-FR"
+    assert m.normalize_language_from_properties("dut", "Flemish") == "nl-BE"
 
 
 def test_audio_name_auto_keeps_format_only_for_single_language() -> None:
@@ -167,6 +173,7 @@ def test_variant_classifiers() -> None:
     assert m.classify_spanish_variant("Vale, vosotros podéis coger el coche.")["code"] == "es-ES"
     assert m.classify_spanish_variant("Ustedes pueden manejar el carro hasta el departamento.")["code"] == "es-419"
     assert m.classify_french_variant("Mon char est au stationnement près du dépanneur.")["code"] == "fr-CA"
+    assert m.classify_dutch_variant("Amai, dat is plezant. Ik heb goesting in frieten.")["code"] == "nl-BE"
     assert m.classify_chinese_variant("我們這個電話聲音還在門後。")["code"] == "zh-Hant"
 
 
@@ -439,6 +446,16 @@ def test_spanish_ocr_with_no_variant_markers_downgrades_explicit_variant() -> No
     m.apply_language_variant_result(spanish, result)
 
     assert spanish.output_language == "spa"
+
+
+def test_forced_spanish_name_variant_survives_no_marker_text() -> None:
+    spanish = subtitle_track(1, "es-419", "small")
+    spanish.original_name = "es-419--forced--"
+    result = m.classify_spanish_variant("Atlantis.")
+
+    m.apply_language_variant_result(spanish, result)
+
+    assert spanish.output_language == "es-419"
 
 
 def test_strong_spanish_ocr_overrides_explicit_variant(tmp_path: Path) -> None:
@@ -1160,6 +1177,20 @@ def test_duplicate_subtitle_detection_keeps_forced_separate() -> None:
     assert second.duplicate_of_id == first.id
     assert "source-b.mkv" in first.duplicate_reason
     assert not forced.duplicate_group
+
+
+def test_duplicate_subtitle_detection_keeps_language_variants_separate() -> None:
+    castilian = subtitle_track(35, "es-ES", "small")
+    latin_american = subtitle_track(36, "es-419", "small")
+    for track in [castilian, latin_american]:
+        track.role = "forced"
+        track.forced = True
+        track.output_language = "spa"
+
+    m.detect_duplicate_tracks(Path("atlantis.mkv"), [], [castilian, latin_american])
+
+    assert not castilian.duplicate_group
+    assert not latin_american.duplicate_group
 
 
 def test_ordered_tracks_can_group_audio_by_region() -> None:

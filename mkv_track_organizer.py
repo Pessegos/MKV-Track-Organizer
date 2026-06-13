@@ -382,8 +382,10 @@ LANGUAGE_ALIASES = {
     "zh-cn": "zh-Hans",
     "zh-sg": "zh-Hans",
     "nl": "dut",
+    "nl-be": "nl-BE",
     "nld": "dut",
     "dut": "dut",
+    "vls": "nl-BE",
     "sv": "swe",
     "swe": "swe",
     "da": "dan",
@@ -547,6 +549,7 @@ LANGUAGE_NAMES = {
     "zh-TW": "Chinese (Taiwan)",
     "zh-HK": "Chinese (Hong Kong)",
     "dut": "Dutch",
+    "nl-BE": "Dutch (Flemish)",
     "swe": "Swedish",
     "dan": "Danish",
     "nor": "Norwegian",
@@ -627,6 +630,7 @@ TESSERACT_LANGUAGE_ALIASES = {
     "es-ES": "spa",
     "es-419": "spa",
     "dut": "nld",
+    "nl-BE": "nld",
     "swe": "swe",
     "dan": "dan",
     "nor": "nor",
@@ -691,6 +695,7 @@ LANGUAGE_VARIANT_BASES = {
     "de-AT": "ger",
     "de-CH": "ger",
     "it-IT": "ita",
+    "nl-BE": "dut",
     "zh-Hant": "chi",
     "zh-Hans": "chi",
     "zh-TW": "chi",
@@ -707,7 +712,7 @@ REGIONAL_LANGUAGE_GROUPS = (
         "europe",
         (
             "eng", "en-GB", "por", "pt-PT", "spa", "es-ES", "cat", "fre", "fr-FR", "fr-BE", "fr-CH",
-            "ger", "de-DE", "de-AT", "de-CH", "ita", "it-IT", "dut", "swe", "dan", "nor", "nob",
+            "ger", "de-DE", "de-AT", "de-CH", "ita", "it-IT", "dut", "nl-BE", "swe", "dan", "nor", "nob",
             "nno", "fin", "ice", "pol", "cze", "sk", "hun", "rum", "gre", "rus", "ukr", "bul",
             "hrv", "mk", "slv", "srp", "lav", "lit", "est", "tur",
         ),
@@ -788,6 +793,9 @@ LANGUAGE_VARIANT_HINTS = {
         ("de-AT", ("de-at", "austrian", "osterreich", "österreich")),
         ("de-CH", ("de-ch", "swiss", "schweiz")),
     ),
+    "dut": (
+        ("nl-BE", ("nl-be", "flemish", "vlaams", "belgian dutch", "dutch flemish", "flamand")),
+    ),
 }
 
 
@@ -804,6 +812,7 @@ LANGUAGE_NAME_HINTS = (
     ("zh-Hans", ("zh-hans", "chinese simplified", "simplified chinese")),
     ("cmn", ("mandarin chinese", "mandarin", "taiwanese mandarin")),
     ("yue", ("cantonese", "yue chinese")),
+    ("nl-BE", ("flemish", "vlaams", "belgian dutch", "dutch flemish", "flamand")),
     ("may", ("malay", "bahasa malaysia", "bahasa melayu")),
 )
 
@@ -1492,6 +1501,24 @@ def classify_french_variant_from_srt(srt_path: Path) -> dict[str, Any]:
     return classify_french_variant(raw_text)
 
 
+def classify_dutch_variant(raw_subtitle_text: str) -> dict[str, Any]:
+    features_by_code = {
+        "nl-BE": [
+            (r"\bamai\b|\ballee\b|\ballee zeg\b", 9, "Flemish interjections"),
+            (r"\bgoesting\b|\bplezant\b|\bambetant\b|\bseffens\b|\bsebiet\b", 9, "Flemish vocabulary"),
+            (r"\bkuisen\b|\bkuis\b|\bproper\b|\bzetel\b|\bfrigo\b|\bconfituur\b", 7, "Belgian Dutch everyday terms"),
+            (r"\bkot\b|\bkoten\b|\bkleedje\b|\bnonkel\b|\btanteke\b", 7, "Flemish nouns"),
+            (r"\bgij\b|\bge\b|\buwe?\b|\buw\b", 5, "Flemish pronouns"),
+        ],
+    }
+    return classify_variant_by_features(raw_subtitle_text, "dut", features_by_code)
+
+
+def classify_dutch_variant_from_srt(srt_path: Path) -> dict[str, Any]:
+    raw_text = srt_path.read_text(encoding="utf-8", errors="replace")
+    return classify_dutch_variant(raw_text)
+
+
 def classify_chinese_variant(raw_subtitle_text: str) -> dict[str, Any]:
     cleaned = clean_subtitle_text(raw_subtitle_text)
     traditional_chars = "個們這來時會說國過對還後麼開關門電話聲氣車無為見聽學體樂頭"
@@ -1557,6 +1584,7 @@ LANGUAGE_VARIANT_CLASSIFIERS = {
     "por": classify_portuguese_variant,
     "spa": classify_spanish_variant,
     "fre": classify_french_variant,
+    "dut": classify_dutch_variant,
     "chi": classify_chinese_variant,
 }
 
@@ -1565,6 +1593,7 @@ LANGUAGE_VARIANT_FILE_CLASSIFIERS = {
     "por": classify_portuguese_variant_from_srt,
     "spa": classify_spanish_variant_from_srt,
     "fre": classify_french_variant_from_srt,
+    "dut": classify_dutch_variant_from_srt,
     "chi": classify_chinese_variant_from_srt,
 }
 
@@ -3725,6 +3754,9 @@ def apply_language_variant_result(track: TrackInfo, result: dict[str, Any]) -> N
         and track.output_language in LANGUAGE_VARIANT_BASES
     ):
         if base_code in OCR_VALIDATED_VARIANT_LANGUAGES and variant_total_score(result) == 0:
+            explicit_code = explicit_variant_hint_for_track(track, base_code)
+            if explicit_code == track.output_language and subtitle_looks_forced_sidecar(track):
+                return
             track.output_language = base_code
             track.language_name = language_display_name(base_code)
         return
@@ -4662,8 +4694,16 @@ def duplicate_track_label(track: TrackInfo, fallback_input_path: Path | None = N
 
 
 def duplicate_language_key(track: TrackInfo) -> str:
-    language_code = track_language_code(track)
-    if language_code in {"", "und", "zxx", "mul"}:
+    output_language = normalize_language_code(track.output_language or "")
+    input_language = normalize_language_code(track.language or "")
+    generic_codes = {"", "und", "zxx", "mul"}
+    language_code = input_language if output_language in generic_codes else output_language
+    if (
+        input_language in LANGUAGE_VARIANT_BASES
+        and output_language == LANGUAGE_VARIANT_BASES[input_language]
+    ):
+        language_code = input_language
+    if language_code in generic_codes:
         return ""
     return language_code
 
