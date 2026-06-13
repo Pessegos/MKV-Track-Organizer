@@ -2007,7 +2007,15 @@ def track_matches_preferred_language(track: TrackInfo, preferred_language: str |
     if language_code == preferred:
         return True
 
-    return "-" not in preferred and base_language_code(language_code) == preferred
+    if "-" not in preferred:
+        return base_language_code(language_code) == preferred
+
+    preferred_base = LANGUAGE_VARIANT_BASES.get(preferred)
+    if preferred_base and language_code == preferred_base:
+        hinted_variant = explicit_variant_hint_for_track(track, preferred_base)
+        return hinted_variant in {None, preferred}
+
+    return False
 
 
 def normalize_region_name(raw_name: str) -> str:

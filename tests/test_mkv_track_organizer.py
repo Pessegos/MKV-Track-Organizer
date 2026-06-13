@@ -1235,12 +1235,16 @@ def test_preferred_audio_can_be_first_without_being_default() -> None:
     assert [track.id for track in ordered] == [0, 2, 1]
 
 
-def test_preferred_language_variant_matching_is_strict() -> None:
+def test_preferred_language_variant_matches_generic_but_not_conflicting_variant() -> None:
     iberian = audio_track(1, "pt-PT")
     brazilian = audio_track(2, "pt-BR")
+    generic = audio_track(3, "por")
+    generic_brazilian_name = audio_track(4, "por", original_name="Portuguese (Brazilian)")
 
     assert m.track_matches_preferred_language(iberian, "pt-PT")
     assert not m.track_matches_preferred_language(brazilian, "pt-PT")
+    assert m.track_matches_preferred_language(generic, "pt-PT")
+    assert not m.track_matches_preferred_language(generic_brazilian_name, "pt-PT")
     assert m.track_matches_preferred_language(iberian, "por")
     assert m.track_matches_preferred_language(brazilian, "por")
 
