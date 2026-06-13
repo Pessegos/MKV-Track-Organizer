@@ -70,14 +70,16 @@ class SignalTextStream(io.TextIOBase):
 
 
 class TrackTableWidget(QTableWidget):
-    rows_reordered = Signal()
+    rows_reordered = Signal(list, int)
 
     def dropEvent(self, event: QDropEvent) -> None:
         if event.source() is not self:
             super().dropEvent(event)
             return
 
-        selected_rows = sorted({index.row() for index in self.selectedIndexes()})
+        selected_rows = sorted({index.row() for index in self.selectionModel().selectedRows()})
+        if not selected_rows:
+            selected_rows = sorted({index.row() for index in self.selectedIndexes()})
         if not selected_rows:
             super().dropEvent(event)
             return
@@ -86,33 +88,10 @@ class TrackTableWidget(QTableWidget):
         target_row = self.rowAt(position.y())
         if target_row < 0:
             target_row = self.rowCount()
-
-        signals_were_blocked = self.blockSignals(True)
-        try:
-            row_items: list[list[QTableWidgetItem | None]] = []
-            for row in selected_rows:
-                row_items.append([self.takeItem(row, column) for column in range(self.columnCount())])
-
-            for row in reversed(selected_rows):
-                self.removeRow(row)
-                if row < target_row:
-                    target_row -= 1
-
-            target_row = max(0, min(target_row, self.rowCount()))
-            for offset, items in enumerate(row_items):
-                insert_row = target_row + offset
-                self.insertRow(insert_row)
-                for column, item in enumerate(items):
-                    self.setItem(insert_row, column, item)
-
-            self.clearSelection()
-            for row in range(target_row, target_row + len(row_items)):
-                self.selectRow(row)
-        finally:
-            self.blockSignals(signals_were_blocked)
+        target_row = max(0, min(target_row, self.rowCount()))
 
         event.acceptProposedAction()
-        self.rows_reordered.emit()
+        self.rows_reordered.emit(selected_rows, target_row)
 
 
 class OrganizerWorker(QObject):
@@ -3194,19 +3173,41 @@ class MainWindow(QMainWindow):
                 drop_item.setText(self._yes_no(track.get("drop")))
             item.setToolTip("Included in the remux" if include_track else "Excluded from the remux")
 
-    @Slot()
-    def _track_rows_reordered(self) -> None:
-        self._sync_track_order_from_table()
+    @Slot(list, int)
+    def _track_rows_reordered(self, selected_rows: list[int], target_row: int) -> None:
+        current_order = self._track_order_keys_from_table()
+        if not current_order:
+            return
+
+        valid_rows = sorted({row for row in selected_rows if 0 <= row < len(current_order)})
+        if not valid_rows:
+            return
+
+        moving = [current_order[row] for row in valid_rows]
+        moving_row_set = set(valid_rows)
+        remaining = [key for row, key in enumerate(current_order) if row not in moving_row_set]
+        insert_row = target_row - sum(1 for row in valid_rows if row < target_row)
+        insert_row = max(0, min(insert_row, len(remaining)))
+        self.manual_track_order = remaining[:insert_row] + moving + remaining[insert_row:]
+
+        current_file_row = self.files_table.currentRow()
+        self._populate_tracks_for_row(current_file_row)
+        self.tracks_table.clearSelection()
+        for row in range(insert_row, min(insert_row + len(moving), self.tracks_table.rowCount())):
+            self.tracks_table.selectRow(row)
         self.statusBar().showMessage("Track order updated")
 
     def _sync_track_order_from_table(self) -> None:
+        self.manual_track_order = self._track_order_keys_from_table()
+
+    def _track_order_keys_from_table(self) -> list[str]:
         ordered_keys: list[str] = []
         for row in range(self.tracks_table.rowCount()):
             item = self.tracks_table.item(row, 0)
             selection_key = str(item.data(Qt.UserRole) or "") if item else ""
             if selection_key:
                 ordered_keys.append(selection_key)
-        self.manual_track_order = ordered_keys
+        return ordered_keys
 
     @Slot()
     def select_all_tracks(self) -> None:
