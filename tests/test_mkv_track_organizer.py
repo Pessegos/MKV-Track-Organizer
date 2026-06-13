@@ -1209,6 +1209,90 @@ def test_default_audio_ignores_dropped_tracks() -> None:
     assert [track.id for track in m.ordered_tracks([video], [english, portuguese], [])] == [0, 2]
 
 
+def test_preferred_audio_can_be_first_without_being_default() -> None:
+    video = video_track(0)
+    english = audio_track(1, "eng")
+    portuguese = audio_track(2, "pt-PT")
+
+    m.apply_default_flags(
+        [video],
+        [english, portuguese],
+        [],
+        preferred_language="pt-PT",
+        preferred_audio_default=False,
+    )
+
+    ordered = m.ordered_tracks(
+        [video],
+        [english, portuguese],
+        [],
+        preferred_language="pt-PT",
+        preferred_audio_first=True,
+    )
+
+    assert english.default is True
+    assert portuguese.default is False
+    assert [track.id for track in ordered] == [0, 2, 1]
+
+
+def test_preferred_language_variant_matching_is_strict() -> None:
+    iberian = audio_track(1, "pt-PT")
+    brazilian = audio_track(2, "pt-BR")
+
+    assert m.track_matches_preferred_language(iberian, "pt-PT")
+    assert not m.track_matches_preferred_language(brazilian, "pt-PT")
+    assert m.track_matches_preferred_language(iberian, "por")
+    assert m.track_matches_preferred_language(brazilian, "por")
+
+
+def test_preferred_audio_can_be_default_when_requested() -> None:
+    english = audio_track(1, "eng")
+    portuguese = audio_track(2, "pt-PT")
+
+    m.apply_default_flags(
+        [video_track(0)],
+        [english, portuguese],
+        [],
+        preferred_language="pt-PT",
+        preferred_audio_default=True,
+    )
+
+    assert english.default is False
+    assert portuguese.default is True
+
+
+def test_preferred_forced_subtitle_is_first_and_default() -> None:
+    english_forced = subtitle_track(1, "eng")
+    portuguese_forced = subtitle_track(2, "pt-PT")
+    english_normal = subtitle_track(3, "eng")
+    for track in [english_forced, portuguese_forced]:
+        track.role = "forced"
+        track.forced = True
+
+    subtitles = [english_forced, portuguese_forced, english_normal]
+
+    m.apply_default_flags(
+        [],
+        [],
+        subtitles,
+        preferred_language="pt-PT",
+        preferred_forced_subtitle_default=True,
+    )
+
+    ordered = sorted(
+        subtitles,
+        key=lambda track: m.subtitle_sort_key(
+            track,
+            preferred_language="pt-PT",
+            preferred_forced_subtitle_default=True,
+        ),
+    )
+
+    assert ordered[0] is portuguese_forced
+    assert portuguese_forced.default is True
+    assert english_forced.default is False
+
+
 def test_duplicate_audio_detection_marks_source_and_leader() -> None:
     first = audio_track(1, "eng", codec="AC-3", codec_id="A_AC3", channels=6)
     second = audio_track(2, "eng", codec="AC-3", codec_id="A_AC3", channels=6)

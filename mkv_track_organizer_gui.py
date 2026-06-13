@@ -451,6 +451,8 @@ class MainWindow(QMainWindow):
         self.audio_delays_edit.setPlaceholderText("1:150, 2:-250")
         self.subtitle_delays_edit = QLineEdit()
         self.subtitle_delays_edit.setPlaceholderText("5:-250")
+        self.preferred_language_edit = QLineEdit()
+        self.preferred_language_edit.setPlaceholderText("pt-PT")
 
         self.recursive_check = QCheckBox("Recursive")
         self.merge_inputs_check = QCheckBox("Merge selected sources")
@@ -461,6 +463,9 @@ class MainWindow(QMainWindow):
         self.auto_pgs_ocr_check = QCheckBox("Auto PGS OCR")
         self.auto_commentary_ocr_check = QCheckBox("Commentary/SDH OCR")
         self.report_check = QCheckBox("Write report")
+        self.preferred_audio_first_check = QCheckBox("Audio first")
+        self.preferred_audio_default_check = QCheckBox("Audio default")
+        self.preferred_forced_subtitle_default_check = QCheckBox("Forced subs default")
 
         self.metadata_combo = QComboBox()
         self.metadata_combo.addItems(["off", "auto", "only"])
@@ -690,6 +695,7 @@ class MainWindow(QMainWindow):
         self.forced_ids_edit.setToolTip("Manual forced-subtitle override, for example 5,8,12")
         self.audio_delays_edit.setToolTip("Manual audio delays in milliseconds. Example: 1:150, 2:-250")
         self.subtitle_delays_edit.setToolTip("Manual subtitle delays in milliseconds. Example: 5:-250")
+        self.preferred_language_edit.setToolTip("Language code used by the optional preferred-language rules, for example pt-PT")
         self.merge_inputs_check.setToolTip(
             "Mux selected Matroska inputs into one output. The first source with video supplies video; audio/subtitles come from all sources."
         )
@@ -700,6 +706,11 @@ class MainWindow(QMainWindow):
         self.auto_pgs_ocr_check.setToolTip("Run OCR for PGS subtitles when needed for language detection")
         self.auto_commentary_ocr_check.setToolTip("OCR extra full-size PGS tracks that may be commentary or SDH; normal and named SDH tracks are skipped")
         self.report_check.setToolTip("Write TXT/JSON batch reports")
+        self.preferred_audio_first_check.setToolTip("Move preferred-language main audio before other main audio")
+        self.preferred_audio_default_check.setToolTip("Make preferred-language audio default when available")
+        self.preferred_forced_subtitle_default_check.setToolTip(
+            "Move preferred-language forced subtitles before other subtitles and make the first one default"
+        )
 
         metadata_label = QLabel("Metadata mode")
         metadata_label.setToolTip(
@@ -711,6 +722,8 @@ class MainWindow(QMainWindow):
         language_order_label.setToolTip("Controls how languages are sorted in the output.")
         regional_order_label = QLabel("Region order")
         regional_order_label.setToolTip("Controls region priority when Language order is Regional.")
+        preferred_language_label = QLabel("Preferred language")
+        preferred_language_label.setToolTip("Optional language code used by preferred-language rules.")
 
         advanced_layout.addWidget(QLabel("Output suffix"), 0, 0)
         advanced_layout.addWidget(self.suffix_edit, 0, 1)
@@ -732,6 +745,18 @@ class MainWindow(QMainWindow):
         advanced_layout.addWidget(self.audio_delays_edit, 4, 1)
         advanced_layout.addWidget(QLabel("Subtitle delays"), 4, 2)
         advanced_layout.addWidget(self.subtitle_delays_edit, 4, 3)
+        advanced_layout.addWidget(preferred_language_label, 5, 0)
+        advanced_layout.addWidget(self.preferred_language_edit, 5, 1)
+
+        preferred_toggles = QHBoxLayout()
+        for checkbox in [
+            self.preferred_audio_first_check,
+            self.preferred_audio_default_check,
+            self.preferred_forced_subtitle_default_check,
+        ]:
+            preferred_toggles.addWidget(checkbox)
+        preferred_toggles.addStretch(1)
+        advanced_layout.addLayout(preferred_toggles, 5, 2, 1, 2)
 
         advanced_toggles = QHBoxLayout()
         for checkbox in [
@@ -746,7 +771,7 @@ class MainWindow(QMainWindow):
         ]:
             advanced_toggles.addWidget(checkbox)
         advanced_toggles.addStretch(1)
-        advanced_layout.addLayout(advanced_toggles, 5, 0, 1, 4)
+        advanced_layout.addLayout(advanced_toggles, 6, 0, 1, 4)
         self.advanced_panel.setVisible(False)
         root.addWidget(self.advanced_panel)
 
@@ -1416,6 +1441,7 @@ class MainWindow(QMainWindow):
         self.subtitle_language_edit.setText("; ".join(args.subtitle_language_ids or []))
         self.audio_delays_edit.setText(getattr(args, "audio_delays", "") or "")
         self.subtitle_delays_edit.setText(getattr(args, "subtitle_delays", "") or "")
+        self.preferred_language_edit.setText(getattr(args, "preferred_language", "") or "")
 
         self.recursive_check.setChecked(bool(args.recursive))
         self.merge_inputs_check.setChecked(bool(getattr(args, "merge_inputs", False)))
@@ -1426,6 +1452,11 @@ class MainWindow(QMainWindow):
         self.auto_pgs_ocr_check.setChecked(bool(args.auto_pgs_ocr))
         self.auto_commentary_ocr_check.setChecked(bool(args.auto_commentary_ocr))
         self.report_check.setChecked(bool(args.report))
+        self.preferred_audio_first_check.setChecked(bool(getattr(args, "preferred_audio_first", False)))
+        self.preferred_audio_default_check.setChecked(bool(getattr(args, "preferred_audio_default", False)))
+        self.preferred_forced_subtitle_default_check.setChecked(
+            bool(getattr(args, "preferred_forced_subtitle_default", False))
+        )
 
         self.metadata_combo.setCurrentText(args.metadata_edit_mode)
         audio_style_index = self.audio_name_style_combo.findData(getattr(args, "audio_name_style", "auto"))
@@ -2322,6 +2353,7 @@ class MainWindow(QMainWindow):
             for item in self.subtitle_language_edit.text().split(";")
             if item.strip()
         ]
+        args.preferred_language = self.preferred_language_edit.text().strip()
 
         args.recursive = self.recursive_check.isChecked()
         args.dry_run = dry_run
@@ -2337,6 +2369,9 @@ class MainWindow(QMainWindow):
         args.auto_pgs_ocr = self.auto_pgs_ocr_check.isChecked()
         args.auto_commentary_ocr = self.auto_commentary_ocr_check.isChecked()
         args.report = self.report_check.isChecked()
+        args.preferred_audio_first = self.preferred_audio_first_check.isChecked()
+        args.preferred_audio_default = self.preferred_audio_default_check.isChecked()
+        args.preferred_forced_subtitle_default = self.preferred_forced_subtitle_default_check.isChecked()
         args.metadata_edit_mode = self.metadata_combo.currentText()
         args.audio_name_style = self.audio_name_style_combo.currentData() or "auto"
         args.language_order_style = self.language_order_style_combo.currentData() or "default"
@@ -2549,6 +2584,18 @@ class MainWindow(QMainWindow):
             allowed = ", ".join(sorted(organizer.LANGUAGE_ORDER_STYLES))
             raise organizer.OrganizerError(f"--language-order-style must be one of these values: {allowed}.")
         args.regional_order = organizer.parse_regional_order(getattr(args, "regional_order", None))
+        args.preferred_language = organizer.normalize_preferred_language(getattr(args, "preferred_language", ""))
+        if (
+            not args.preferred_language
+            and (
+                getattr(args, "preferred_audio_first", False)
+                or getattr(args, "preferred_audio_default", False)
+                or getattr(args, "preferred_forced_subtitle_default", False)
+            )
+        ):
+            raise organizer.OrganizerError(
+                "--preferred-language is required when preferred language rules are enabled."
+            )
 
         organizer.require_tool(args.mkvmerge, "mkvmerge")
         if args.metadata_edit_mode == "only":
