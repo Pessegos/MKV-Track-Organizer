@@ -347,6 +347,7 @@ class MainWindow(QMainWindow):
     PROFILE_NONE_LABEL = "Custom"
     PROFILE_STORE_VERSION = 1
     PROFILE_FIELDS = (
+        "output_suffix",
         "metadata_edit_mode",
         "audio_name_style",
         "language_order_style",
@@ -1612,6 +1613,7 @@ class MainWindow(QMainWindow):
 
     def _profile_payload_from_ui(self) -> dict:
         return {
+            "output_suffix": self.suffix_edit.text().strip(),
             "metadata_edit_mode": self.metadata_combo.currentText(),
             "audio_name_style": self.audio_name_style_combo.currentData() or "auto",
             "language_order_style": self.language_order_style_combo.currentData() or "default",
@@ -1633,6 +1635,8 @@ class MainWindow(QMainWindow):
         }
 
     def _apply_profile_payload(self, payload: dict) -> None:
+        if "output_suffix" in payload:
+            self.suffix_edit.setText(str(payload["output_suffix"] or ""))
         if "metadata_edit_mode" in payload:
             self.metadata_combo.setCurrentText(str(payload["metadata_edit_mode"]))
         if "audio_name_style" in payload:
