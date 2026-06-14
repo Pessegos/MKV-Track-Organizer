@@ -2,6 +2,9 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .history/
+build/
+dist/
+*.spec
 
 _ocr_cache/
 _sorted/

@@ -21,6 +21,7 @@ The project currently includes a command-line interface, a desktop UI, an early 
 - Generate TXT/JSON reports for batch runs.
 - Use `mkvpropedit` for metadata-only updates when enabled.
 - Desktop UI with organizer and MakeMKV batch tabs, dark/light theme selector, clearer status colors, preview, run, cancel, summaries, raw logs, and progress.
+- Saved Organizer option profiles for reusable language/order preferences.
 - Validate configured tools and source/output paths before starting a run.
 - Batch convert MakeMKV disc backup folders into MKVs.
 - Optionally run MKV Track Organizer automatically after a MakeMKV batch finishes.
@@ -48,6 +49,22 @@ For tests, install pytest if needed:
 python -m pip install pytest
 ```
 
+## Windows EXE
+
+You can build a local Windows executable with PyInstaller:
+
+```powershell
+.\build_exe.ps1
+```
+
+The default build creates:
+
+```text
+dist\MKV Track Organizer\MKV Track Organizer.exe
+```
+
+Use `-OneFile` for a single-file executable. External tools such as MKVToolNix, FFmpeg, MakeMKV, Tesseract, and Subtitle Edit are still discovered separately and are not bundled into the app.
+
 ## Desktop UI
 
 Run:
@@ -61,6 +78,8 @@ Use **Check tools** to validate paths and external tools before a run. Use **Pre
 The lower panel separates the readable **Summary** from the full **Raw log**, so normal runs are easier to scan while still keeping the diagnostic output available.
 
 The desktop UI opens in dark mode by default. Use the theme selector in the status bar to switch between **Dark** and **Light**.
+
+The Organizer **Advanced** panel has saved profiles. Profiles store reusable Organizer preferences such as metadata mode, audio naming, language/region order, preferred language rules, role detection toggles, OCR toggles, and report settings. They do not store file inputs, output paths, manual track selections, manual track order, delays, or forced IDs. Profiles are saved under the current Windows user profile, so they remain available after closing the app.
 
 The **MakeMKV Batch** tab can convert one disc backup folder or a folder containing multiple disc backup folders. Its selection modes cover English audio, all audio, all tracks, or a custom MakeMKV selection string. Enable **Run Organizer after MakeMKV** to feed the MakeMKV output folder into the Organizer tab settings automatically. MakeMKV runs in robot mode so progress is used when the console output exposes it.
 

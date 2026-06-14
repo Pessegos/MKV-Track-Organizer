@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
+import os
 import sys
 import threading
 import traceback
@@ -50,6 +52,12 @@ except ModuleNotFoundError as error:
 import mkv_track_organizer as organizer
 import makemkv_batch as makemkv
 import audio_sync
+
+
+def gui_profile_store_path() -> Path:
+    appdata = os.environ.get("APPDATA")
+    base_dir = Path(appdata) if appdata else Path.home() / ".config"
+    return base_dir / "MKV Track Organizer" / "profiles.json"
 
 
 class SignalTextStream(io.TextIOBase):
@@ -336,6 +344,27 @@ class AudioSyncExportWorker(QObject):
 
 
 class MainWindow(QMainWindow):
+    PROFILE_NONE_LABEL = "Custom"
+    PROFILE_STORE_VERSION = 1
+    PROFILE_FIELDS = (
+        "metadata_edit_mode",
+        "audio_name_style",
+        "language_order_style",
+        "regional_order",
+        "report_format",
+        "smart_sub_detection",
+        "drop_empty_subs",
+        "detect_duplicate_tracks",
+        "detect_language_variants",
+        "auto_pgs_ocr",
+        "auto_commentary_ocr",
+        "report",
+        "preferred_language",
+        "preferred_audio_first",
+        "preferred_audio_default",
+        "preferred_subtitle_first",
+        "preferred_forced_subtitle_default",
+    )
     FILE_COLUMNS = ["Status", "Input", "Output", "Message"]
     MAKEMKV_COLUMNS = ["Status", "Source", "Output", "Message"]
     AUDIO_SYNC_COLUMNS = ["Export", "Type", "Index", "Codec", "Language", "Title"]
@@ -463,6 +492,9 @@ class MainWindow(QMainWindow):
         self.audio_sync_worker_thread: QThread | None = None
         self.audio_sync_worker: AudioSyncWorker | AudioSyncExportWorker | None = None
         self.default_args, self.default_config_path = self._load_default_args()
+        self.profile_store_path = gui_profile_store_path()
+        self.profiles: dict[str, dict] = {}
+        self.last_profile_name = ""
         self.input_paths: list[Path] = []
         self.current_reports: list[dict] = []
         self.makemkv_reports: list[dict] = []
@@ -504,6 +536,15 @@ class MainWindow(QMainWindow):
         self.preferred_audio_default_check = QCheckBox("Audio default")
         self.preferred_subtitle_first_check = QCheckBox("Subtitles first")
         self.preferred_forced_subtitle_default_check = QCheckBox("Forced subs default")
+
+        self.profile_combo = QComboBox()
+        self.profile_combo.setToolTip("Saved Organizer option profile")
+        self.save_profile_button = QPushButton("Save")
+        self.delete_profile_button = QPushButton("Delete")
+        self.save_profile_button.setObjectName("secondaryButton")
+        self.delete_profile_button.setObjectName("secondaryButton")
+        self.save_profile_button.setToolTip("Save the current Organizer options as a reusable profile")
+        self.delete_profile_button.setToolTip("Delete the selected saved profile")
 
         self.metadata_combo = QComboBox()
         self.metadata_combo.addItems(["off", "auto", "only"])
@@ -652,6 +693,10 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._apply_theme()
         self._apply_default_args(self.default_args)
+        self._load_profile_store()
+        self._refresh_profile_combo(self.last_profile_name)
+        if self.last_profile_name in self.profiles:
+            self._apply_profile_payload(self.profiles[self.last_profile_name])
         self._connect_signals()
         self._refresh_file_list()
 
@@ -757,6 +802,8 @@ class MainWindow(QMainWindow):
         metadata_label.setToolTip(
             "Controls whether the app can update track metadata directly with mkvpropedit instead of remuxing."
         )
+        profile_label = QLabel("Profile")
+        profile_label.setToolTip("Saved Organizer option profile.")
         audio_names_label = QLabel("Audio names")
         audio_names_label.setToolTip("Controls how audio track names are written.")
         language_order_label = QLabel("Language order")
@@ -766,28 +813,36 @@ class MainWindow(QMainWindow):
         preferred_language_label = QLabel("Preferred language")
         preferred_language_label.setToolTip("Optional language code used by preferred-language rules.")
 
-        advanced_layout.addWidget(QLabel("Output suffix"), 0, 0)
-        advanced_layout.addWidget(self.suffix_edit, 0, 1)
-        advanced_layout.addWidget(metadata_label, 0, 2)
-        advanced_layout.addWidget(self.metadata_combo, 0, 3)
-        advanced_layout.addWidget(audio_names_label, 1, 0)
-        advanced_layout.addWidget(self.audio_name_style_combo, 1, 1)
-        advanced_layout.addWidget(QLabel("Report format"), 1, 2)
-        advanced_layout.addWidget(self.report_format_combo, 1, 3)
-        advanced_layout.addWidget(language_order_label, 2, 0)
-        advanced_layout.addWidget(self.language_order_style_combo, 2, 1)
-        advanced_layout.addWidget(regional_order_label, 2, 2)
-        advanced_layout.addWidget(self.regional_order_combo, 2, 3)
-        advanced_layout.addWidget(QLabel("Language overrides"), 3, 0)
-        advanced_layout.addWidget(self.subtitle_language_edit, 3, 1)
-        advanced_layout.addWidget(QLabel("Forced IDs"), 3, 2)
-        advanced_layout.addWidget(self.forced_ids_edit, 3, 3)
-        advanced_layout.addWidget(QLabel("Audio delays"), 4, 0)
-        advanced_layout.addWidget(self.audio_delays_edit, 4, 1)
-        advanced_layout.addWidget(QLabel("Subtitle delays"), 4, 2)
-        advanced_layout.addWidget(self.subtitle_delays_edit, 4, 3)
-        advanced_layout.addWidget(preferred_language_label, 5, 0)
-        advanced_layout.addWidget(self.preferred_language_edit, 5, 1)
+        profile_actions = QHBoxLayout()
+        profile_actions.addWidget(self.save_profile_button)
+        profile_actions.addWidget(self.delete_profile_button)
+        profile_actions.addStretch(1)
+
+        advanced_layout.addWidget(profile_label, 0, 0)
+        advanced_layout.addWidget(self.profile_combo, 0, 1)
+        advanced_layout.addLayout(profile_actions, 0, 2, 1, 2)
+        advanced_layout.addWidget(QLabel("Output suffix"), 1, 0)
+        advanced_layout.addWidget(self.suffix_edit, 1, 1)
+        advanced_layout.addWidget(metadata_label, 1, 2)
+        advanced_layout.addWidget(self.metadata_combo, 1, 3)
+        advanced_layout.addWidget(audio_names_label, 2, 0)
+        advanced_layout.addWidget(self.audio_name_style_combo, 2, 1)
+        advanced_layout.addWidget(QLabel("Report format"), 2, 2)
+        advanced_layout.addWidget(self.report_format_combo, 2, 3)
+        advanced_layout.addWidget(language_order_label, 3, 0)
+        advanced_layout.addWidget(self.language_order_style_combo, 3, 1)
+        advanced_layout.addWidget(regional_order_label, 3, 2)
+        advanced_layout.addWidget(self.regional_order_combo, 3, 3)
+        advanced_layout.addWidget(QLabel("Language overrides"), 4, 0)
+        advanced_layout.addWidget(self.subtitle_language_edit, 4, 1)
+        advanced_layout.addWidget(QLabel("Forced IDs"), 4, 2)
+        advanced_layout.addWidget(self.forced_ids_edit, 4, 3)
+        advanced_layout.addWidget(QLabel("Audio delays"), 5, 0)
+        advanced_layout.addWidget(self.audio_delays_edit, 5, 1)
+        advanced_layout.addWidget(QLabel("Subtitle delays"), 5, 2)
+        advanced_layout.addWidget(self.subtitle_delays_edit, 5, 3)
+        advanced_layout.addWidget(preferred_language_label, 6, 0)
+        advanced_layout.addWidget(self.preferred_language_edit, 6, 1)
 
         preferred_toggles = QHBoxLayout()
         for checkbox in [
@@ -798,7 +853,7 @@ class MainWindow(QMainWindow):
         ]:
             preferred_toggles.addWidget(checkbox)
         preferred_toggles.addStretch(1)
-        advanced_layout.addLayout(preferred_toggles, 5, 2, 1, 2)
+        advanced_layout.addLayout(preferred_toggles, 6, 2, 1, 2)
 
         advanced_toggles = QHBoxLayout()
         for checkbox in [
@@ -813,7 +868,7 @@ class MainWindow(QMainWindow):
         ]:
             advanced_toggles.addWidget(checkbox)
         advanced_toggles.addStretch(1)
-        advanced_layout.addLayout(advanced_toggles, 6, 0, 1, 4)
+        advanced_layout.addLayout(advanced_toggles, 7, 0, 1, 4)
         self.advanced_panel.setVisible(False)
         root.addWidget(self.advanced_panel)
 
@@ -1208,6 +1263,9 @@ class MainWindow(QMainWindow):
         self.audio_sync_checkpoints_combo.activated.connect(self._audio_sync_checkpoints_preset_activated)
         self.input_edit.textEdited.connect(self._manual_input_changed)
         self.files_table.itemSelectionChanged.connect(self._populate_tracks_for_selection)
+        self.profile_combo.currentIndexChanged.connect(self._profile_combo_changed)
+        self.save_profile_button.clicked.connect(self.save_current_profile)
+        self.delete_profile_button.clicked.connect(self.delete_current_profile)
         self.metadata_combo.currentIndexChanged.connect(
             lambda _index: self._sync_combo_tooltip(self.metadata_combo, self.METADATA_MODE_HELP)
         )
@@ -1472,6 +1530,206 @@ class MainWindow(QMainWindow):
         config_defaults, config_path = organizer.config_defaults_from_argv([])
         parser = organizer.build_parser(config_defaults)
         return parser.parse_args([]), config_path
+
+    def _load_profile_store(self) -> None:
+        self.profiles = {}
+        self.last_profile_name = ""
+        if not self.profile_store_path.exists():
+            return
+
+        try:
+            raw_store = json.loads(self.profile_store_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            self.append_summary_line(f"Profile store ignored: {error}")
+            return
+
+        raw_profiles = raw_store.get("profiles", {}) if isinstance(raw_store, dict) else {}
+        if isinstance(raw_profiles, dict):
+            for raw_name, raw_payload in raw_profiles.items():
+                name = str(raw_name).strip()
+                if not name or not isinstance(raw_payload, dict):
+                    continue
+                payload = {
+                    key: raw_payload[key]
+                    for key in self.PROFILE_FIELDS
+                    if key in raw_payload
+                }
+                if payload:
+                    self.profiles[name] = payload
+
+        raw_last_profile = raw_store.get("last_profile", "") if isinstance(raw_store, dict) else ""
+        if str(raw_last_profile) in self.profiles:
+            self.last_profile_name = str(raw_last_profile)
+
+    def _write_profile_store(self) -> None:
+        selected_profile = self._current_profile_name()
+        self.last_profile_name = selected_profile
+        payload = {
+            "version": self.PROFILE_STORE_VERSION,
+            "last_profile": selected_profile,
+            "profiles": {
+                name: self.profiles[name]
+                for name in sorted(self.profiles, key=str.casefold)
+            },
+        }
+        try:
+            self.profile_store_path.parent.mkdir(parents=True, exist_ok=True)
+            self.profile_store_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        except OSError as error:
+            self.append_summary_line(f"Could not save profiles: {error}")
+
+    def _refresh_profile_combo(self, selected_name: str = "") -> None:
+        previous_block_state = self.profile_combo.blockSignals(True)
+        try:
+            self.profile_combo.clear()
+            self.profile_combo.addItem(self.PROFILE_NONE_LABEL, "")
+            for name in sorted(self.profiles, key=str.casefold):
+                self.profile_combo.addItem(name, name)
+            selected_index = self.profile_combo.findData(selected_name)
+            self.profile_combo.setCurrentIndex(selected_index if selected_index >= 0 else 0)
+            self._update_profile_buttons()
+        finally:
+            self.profile_combo.blockSignals(previous_block_state)
+
+    def _current_profile_name(self) -> str:
+        return str(self.profile_combo.currentData() or "")
+
+    def _update_profile_buttons(self) -> None:
+        self.delete_profile_button.setEnabled(bool(self._current_profile_name()))
+
+    def _profile_payload_from_ui(self) -> dict:
+        return {
+            "metadata_edit_mode": self.metadata_combo.currentText(),
+            "audio_name_style": self.audio_name_style_combo.currentData() or "auto",
+            "language_order_style": self.language_order_style_combo.currentData() or "default",
+            "regional_order": self.regional_order_combo.currentData() or "",
+            "report_format": self.report_format_combo.currentText(),
+            "smart_sub_detection": self.smart_subs_check.isChecked(),
+            "drop_empty_subs": self.drop_empty_check.isChecked(),
+            "detect_duplicate_tracks": self.duplicate_check.isChecked(),
+            "detect_language_variants": self.variant_check.isChecked(),
+            "auto_pgs_ocr": self.auto_pgs_ocr_check.isChecked(),
+            "auto_commentary_ocr": self.auto_commentary_ocr_check.isChecked(),
+            "report": self.report_check.isChecked(),
+            "preferred_language": self.preferred_language_edit.text().strip(),
+            "preferred_audio_first": self.preferred_audio_first_check.isChecked(),
+            "preferred_audio_default": self.preferred_audio_default_check.isChecked(),
+            "preferred_subtitle_first": self.preferred_subtitle_first_check.isChecked(),
+            "preferred_forced_subtitle_default": self.preferred_forced_subtitle_default_check.isChecked(),
+        }
+
+    def _apply_profile_payload(self, payload: dict) -> None:
+        if "metadata_edit_mode" in payload:
+            self.metadata_combo.setCurrentText(str(payload["metadata_edit_mode"]))
+        if "audio_name_style" in payload:
+            index = self.audio_name_style_combo.findData(str(payload["audio_name_style"]))
+            if index >= 0:
+                self.audio_name_style_combo.setCurrentIndex(index)
+        if "language_order_style" in payload:
+            index = self.language_order_style_combo.findData(str(payload["language_order_style"]))
+            if index >= 0:
+                self.language_order_style_combo.setCurrentIndex(index)
+        if "regional_order" in payload:
+            index = self.regional_order_combo.findData(str(payload["regional_order"]))
+            if index >= 0:
+                self.regional_order_combo.setCurrentIndex(index)
+        if "report_format" in payload:
+            self.report_format_combo.setCurrentText(str(payload["report_format"]))
+
+        self.smart_subs_check.setChecked(bool(payload.get("smart_sub_detection", self.smart_subs_check.isChecked())))
+        self.drop_empty_check.setChecked(bool(payload.get("drop_empty_subs", self.drop_empty_check.isChecked())))
+        self.duplicate_check.setChecked(bool(payload.get("detect_duplicate_tracks", self.duplicate_check.isChecked())))
+        self.variant_check.setChecked(bool(payload.get("detect_language_variants", self.variant_check.isChecked())))
+        self.auto_pgs_ocr_check.setChecked(bool(payload.get("auto_pgs_ocr", self.auto_pgs_ocr_check.isChecked())))
+        self.auto_commentary_ocr_check.setChecked(
+            bool(payload.get("auto_commentary_ocr", self.auto_commentary_ocr_check.isChecked()))
+        )
+        self.report_check.setChecked(bool(payload.get("report", self.report_check.isChecked())))
+        self.preferred_language_edit.setText(str(payload.get("preferred_language", self.preferred_language_edit.text())))
+        self.preferred_audio_first_check.setChecked(
+            bool(payload.get("preferred_audio_first", self.preferred_audio_first_check.isChecked()))
+        )
+        self.preferred_audio_default_check.setChecked(
+            bool(payload.get("preferred_audio_default", self.preferred_audio_default_check.isChecked()))
+        )
+        self.preferred_subtitle_first_check.setChecked(
+            bool(payload.get("preferred_subtitle_first", self.preferred_subtitle_first_check.isChecked()))
+        )
+        self.preferred_forced_subtitle_default_check.setChecked(
+            bool(
+                payload.get(
+                    "preferred_forced_subtitle_default",
+                    self.preferred_forced_subtitle_default_check.isChecked(),
+                )
+            )
+        )
+        self._sync_combo_tooltip(self.metadata_combo, self.METADATA_MODE_HELP)
+        self._sync_combo_tooltip(self.audio_name_style_combo, self.AUDIO_NAME_STYLE_HELP)
+        self._language_order_style_changed()
+
+    def _apply_current_profile(self) -> None:
+        profile_name = self._current_profile_name()
+        if profile_name:
+            self._apply_profile_payload(self.profiles.get(profile_name, {}))
+
+    @Slot()
+    def _profile_combo_changed(self) -> None:
+        self._apply_current_profile()
+        self._update_profile_buttons()
+        self._write_profile_store()
+        profile_name = self._current_profile_name()
+        self.statusBar().showMessage(f"Profile loaded: {profile_name}" if profile_name else "Custom profile")
+
+    @Slot()
+    def save_current_profile(self) -> None:
+        current_name = self._current_profile_name()
+        name, accepted = QInputDialog.getText(self, "Save profile", "Profile name:", text=current_name)
+        if not accepted:
+            return
+        name = name.strip()
+        if not name:
+            QMessageBox.warning(self, "Save profile", "Choose a profile name.")
+            return
+        if name.casefold() == self.PROFILE_NONE_LABEL.casefold():
+            QMessageBox.warning(self, "Save profile", f"'{self.PROFILE_NONE_LABEL}' is reserved.")
+            return
+
+        existing_name = next((profile for profile in self.profiles if profile.casefold() == name.casefold()), "")
+        if existing_name and existing_name != current_name:
+            answer = QMessageBox.question(
+                self,
+                "Save profile",
+                f"Overwrite the existing profile '{existing_name}'?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
+            name = existing_name
+
+        self.profiles[name] = self._profile_payload_from_ui()
+        self._refresh_profile_combo(name)
+        self._write_profile_store()
+        self.statusBar().showMessage(f"Profile saved: {name}")
+
+    @Slot()
+    def delete_current_profile(self) -> None:
+        profile_name = self._current_profile_name()
+        if not profile_name:
+            return
+        answer = QMessageBox.question(
+            self,
+            "Delete profile",
+            f"Delete profile '{profile_name}'?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        self.profiles.pop(profile_name, None)
+        self._refresh_profile_combo("")
+        self._write_profile_store()
+        self.statusBar().showMessage(f"Profile deleted: {profile_name}")
 
     def _apply_default_args(self, args) -> None:
         if args.path:
@@ -1906,6 +2164,7 @@ class MainWindow(QMainWindow):
         self.log_edit.clear()
         self.output_tabs.setCurrentIndex(0)
         self._apply_default_args(self.default_args)
+        self._apply_current_profile()
         self.input_paths = []
         self.current_reports = []
         self.manual_track_includes = {}
@@ -3550,6 +3809,7 @@ class MainWindow(QMainWindow):
             if answer != QMessageBox.Yes:
                 event.ignore()
                 return
+        self._write_profile_store()
         event.accept()
 
 
