@@ -2,6 +2,8 @@ name: Release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*"
 
@@ -15,6 +17,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -31,24 +35,58 @@ jobs:
         shell: pwsh
         run: .\build_exe.ps1 -SkipInstall
 
+      - name: Set release metadata
+        shell: pwsh
+        run: |
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $releaseTag = "${{ github.ref_name }}"
+            $releaseTitle = "MKV Track Organizer $releaseTag"
+            $releasePrerelease = "false"
+            $releaseAsset = "dist\MKV Track Organizer-$releaseTag-win-x64.zip"
+            $releaseNotes = ""
+          } else {
+            $releaseTag = "latest-dev"
+            $releaseTitle = "MKV Track Organizer latest dev"
+            $releasePrerelease = "true"
+            $releaseAsset = "dist\MKV Track Organizer-latest-dev-win-x64.zip"
+            $releaseNotes = "Automatic development build from commit ${{ github.sha }}."
+          }
+
+          echo "RELEASE_TAG=$releaseTag" >> $env:GITHUB_ENV
+          echo "RELEASE_TITLE=$releaseTitle" >> $env:GITHUB_ENV
+          echo "RELEASE_PRERELEASE=$releasePrerelease" >> $env:GITHUB_ENV
+          echo "RELEASE_ASSET=$releaseAsset" >> $env:GITHUB_ENV
+          echo "RELEASE_NOTES=$releaseNotes" >> $env:GITHUB_ENV
+
       - name: Package executable folder
         shell: pwsh
         run: |
-          $asset = "dist\MKV Track Organizer-${{ github.ref_name }}-win-x64.zip"
-          Compress-Archive -Path "dist\MKV Track Organizer\*" -DestinationPath $asset -Force
-          echo "RELEASE_ASSET=$asset" >> $env:GITHUB_ENV
+          Compress-Archive -Path "dist\MKV Track Organizer\*" -DestinationPath "$env:RELEASE_ASSET" -Force
 
       - name: Publish GitHub release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = "${{ github.ref_name }}"
-          gh release view $tag *> $null
+          if ($env:RELEASE_TAG -eq "latest-dev") {
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -f latest-dev "${{ github.sha }}"
+            git push origin refs/tags/latest-dev --force
+          }
+
+          gh release view $env:RELEASE_TAG *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag "$env:RELEASE_ASSET" --clobber
+            gh release upload $env:RELEASE_TAG "$env:RELEASE_ASSET" --clobber
+            if ($env:RELEASE_PRERELEASE -eq "true") {
+              gh release edit $env:RELEASE_TAG --title "$env:RELEASE_TITLE" --notes "$env:RELEASE_NOTES" --prerelease
+            }
           } else {
-            gh release create $tag "$env:RELEASE_ASSET" --title "MKV Track Organizer $tag" --generate-notes
+            if ($env:RELEASE_PRERELEASE -eq "true") {
+              gh release create $env:RELEASE_TAG "$env:RELEASE_ASSET" --title "$env:RELEASE_TITLE" --notes "$env:RELEASE_NOTES" --prerelease --latest=false --target "${{ github.sha }}"
+            } else {
+              gh release create $env:RELEASE_TAG "$env:RELEASE_ASSET" --title "$env:RELEASE_TITLE" --generate-notes
+            }
           }
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE

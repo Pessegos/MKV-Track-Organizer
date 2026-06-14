@@ -68,13 +68,20 @@ dist\MKV Track Organizer\MKV Track Organizer.exe
 
 Use `.\build_exe.ps1 -OneFile` for a single-file executable. Use `-SkipInstall` after the first successful build if you do not want the script to reinstall/check Python packages each time. External tools such as MKVToolNix, FFmpeg, MakeMKV, Tesseract, and Subtitle Edit are still discovered separately and are not bundled into the app.
 
-To publish a GitHub release from your PC, install GitHub CLI, run `gh auth login`, then:
+Every push to `main` builds a fresh Windows ZIP automatically and uploads it to the rolling prerelease `latest-dev`. This is the easiest way to grab the newest build after normal development commits.
+
+Pushing a tag named `v*` creates a stable numbered release:
+
+```powershell
+git tag v0.1.1
+git push origin v0.1.1
+```
+
+To publish a GitHub release from your PC instead, install GitHub CLI, run `gh auth login`, then:
 
 ```powershell
 .\publish_exe.ps1 -Version v0.1.0
 ```
-
-Pushing a tag named `v*` also triggers the GitHub Actions release workflow, which builds the Windows executable and uploads a zipped app folder to the release.
 
 ## Desktop UI
 
