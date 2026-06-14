@@ -614,6 +614,27 @@ LANGUAGE_SUBTAG_NAMES = {
 }
 
 
+LANGUAGE_SUBTAG_HINTS = {
+    "US": ("united states", "usa", "u s", "american"),
+    "GB": ("great britain", "britain", "british", "united kingdom", "uk"),
+    "CA": ("canada", "canadian"),
+    "AU": ("australia", "australian"),
+    "PT": ("portugal", "iberian"),
+    "BR": ("brazil", "brazilian", "brasil", "brasileiro", "brasileira"),
+    "ES": ("spain", "castilian", "castellano", "espanha"),
+    "419": ("latin america", "latin american", "latam", "latinoamerican", "latinoamericano", "america latina"),
+    "FR": ("france", "parisian", "parisien", "parisienne"),
+    "BE": ("belgium", "belgian", "belgique", "belge"),
+    "CH": ("switzerland", "swiss", "suisse", "schweiz"),
+    "AT": ("austria", "austrian", "osterreich", "österreich"),
+    "DE": ("germany", "deutschland"),
+    "Hant": ("traditional", "traditionnel", "tradicional", "繁體", "正體"),
+    "Hans": ("simplified", "simplifie", "simplified chinese", "简体", "簡体"),
+    "TW": ("taiwan", "taiwanese"),
+    "HK": ("hong kong", "hongkong"),
+}
+
+
 TESSERACT_LANGUAGE_ALIASES = {
     "eng": "eng",
     "en-US": "eng",
@@ -1661,6 +1682,26 @@ def language_hint_search_text(*texts: str | None) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def language_variant_hint_texts(variant_code: str, custom_hints: Iterable[str]) -> tuple[str, ...]:
+    hints = list(custom_hints)
+    canonical_variant = canonicalize_ietf_code(variant_code)
+    hints.append(canonical_variant)
+
+    for subtag in canonical_variant.split("-")[1:]:
+        hints.append(subtag)
+        hints.extend(LANGUAGE_SUBTAG_HINTS.get(subtag, ()))
+
+    return tuple(dict.fromkeys(hints))
+
+
+def language_hint_matches_text(normalized_hint: str, text: str) -> bool:
+    if not normalized_hint:
+        return False
+
+    pattern = re.escape(normalized_hint).replace(r"\ ", r"\s+")
+    return re.search(rf"(?<!\w){pattern}(?!\w)", text) is not None
+
+
 def language_variant_from_hints(base_code: str, *texts: str | None) -> str | None:
     hints = LANGUAGE_VARIANT_HINTS.get(base_code)
     if not hints:
@@ -1671,9 +1712,9 @@ def language_variant_from_hints(base_code: str, *texts: str | None) -> str | Non
         return None
 
     for variant_code, variant_hints in hints:
-        for hint in variant_hints:
+        for hint in language_variant_hint_texts(variant_code, variant_hints):
             normalized_hint = language_hint_search_text(hint)
-            if normalized_hint and normalized_hint in text:
+            if language_hint_matches_text(normalized_hint, text):
                 return variant_code
 
     return None
@@ -1687,7 +1728,7 @@ def language_from_track_name_hint(track_name: str | None) -> str | None:
     for language_code, hints in LANGUAGE_NAME_HINTS:
         for hint in hints:
             normalized_hint = language_hint_search_text(hint)
-            if normalized_hint and normalized_hint in text:
+            if language_hint_matches_text(normalized_hint, text):
                 return language_code
 
     return None
@@ -1700,7 +1741,7 @@ def normalize_language_from_properties(raw_code: str | None, track_name: str | N
         return explicit_language
 
     base_code = base_language_code(language)
-    hinted_variant = language_variant_from_hints(base_code, raw_code, track_name)
+    hinted_variant = language_variant_from_hints(base_code, track_name)
     return hinted_variant or language
 
 

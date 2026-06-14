@@ -138,6 +138,35 @@ def test_language_hints_fix_wrong_metadata_language() -> None:
     assert m.normalize_language_from_properties("dut", "Flemish") == "nl-BE"
 
 
+def test_language_variant_region_hints_are_generic() -> None:
+    assert m.normalize_language_from_properties("fr", "French (Canada)") == "fr-CA"
+    assert m.normalize_language_from_properties("es", "Spanish (Latin America)") == "es-419"
+    assert m.normalize_language_from_properties("pt", "Portuguese (Brazil)") == "pt-BR"
+    assert m.normalize_language_from_properties("pt", "Portuguese (Portugal)") == "pt-PT"
+    assert m.normalize_language_from_properties("nl", "Dutch (Belgium)") == "nl-BE"
+    assert m.normalize_language_from_properties("en", "English (Australia)") == "en-AU"
+    assert m.normalize_language_from_properties("de", "German (Austria)") == "de-AT"
+    assert m.normalize_language_from_properties("zh", "Chinese (Taiwan)") == "zh-TW"
+    assert m.normalize_language_from_properties("zh", "cmn-TW--forced--") == "zh-TW"
+
+
+def test_duplicate_detection_respects_language_variants_from_track_names() -> None:
+    french = audio_track(8, "fr", codec="E-AC-3", codec_id="A_EAC3", channels=6, original_name="French")
+    canadian = audio_track(9, "fr", codec="E-AC-3", codec_id="A_EAC3", channels=6, original_name="French (Canada)")
+    for track in [french, canadian]:
+        language = m.normalize_language_from_properties(track.language, track.original_name)
+        track.language = language
+        track.output_language = language
+        track.language_name = m.language_display_name(language)
+
+    m.detect_duplicate_tracks(Path("mulanv2-tagless.mka"), [french, canadian], [])
+
+    assert french.output_language == "fre"
+    assert canadian.output_language == "fr-CA"
+    assert not french.duplicate_group
+    assert not canadian.duplicate_group
+
+
 def test_audio_name_auto_keeps_format_only_for_single_language() -> None:
     english_main = audio_track(1, "eng", channels=6)
     english_commentary = audio_track(2, "eng", codec="AC-3", codec_id="A_AC3", channels=2)
