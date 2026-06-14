@@ -306,6 +306,7 @@ CONFIG_BOOL_KEYS = {
     "overwrite",
     "skip_existing",
     "report",
+    "preserve_commentary_names",
     "preferred_audio_first",
     "preferred_audio_default",
     "preferred_subtitle_first",
@@ -1943,6 +1944,22 @@ def audio_track_name(track: TrackInfo, style: str = "format") -> str:
     if style == "language-format":
         return audio_track_language_format_name(track)
     return audio_track_format_name(track)
+
+
+def should_preserve_commentary_name(track: TrackInfo) -> bool:
+    if not str(track.original_name or "").strip():
+        return False
+    if track.type == "audio":
+        return detect_audio_role(track) == "Commentary"
+    if track.type == "subtitles":
+        return track.role == "commentary" or has_commentary_flag(track)
+    return False
+
+
+def apply_preserved_commentary_names(tracks: Iterable[TrackInfo]) -> None:
+    for track in tracks:
+        if should_preserve_commentary_name(track):
+            track.suggested_name = str(track.original_name).strip()
 
 
 def resolve_audio_name_style(audio_tracks: list[TrackInfo], style: str) -> str:
@@ -6337,6 +6354,7 @@ def process_file(
     preferred_audio_default = bool(getattr(args, "preferred_audio_default", False))
     preferred_subtitle_first = bool(getattr(args, "preferred_subtitle_first", False))
     preferred_forced_subtitle_default = bool(getattr(args, "preferred_forced_subtitle_default", False))
+    preserve_commentary_names = bool(getattr(args, "preserve_commentary_names", False))
     apply_audio_names(audio_tracks, audio_name_style)
 
     progress("Analyzing subtitle sizes", 15)
@@ -6406,6 +6424,8 @@ def process_file(
     )
     infer_audio_commentary_from_subtitles(audio_tracks, subtitles)
     apply_audio_names(audio_tracks, audio_name_style)
+    if preserve_commentary_names:
+        apply_preserved_commentary_names([*audio_tracks, *subtitles])
     if getattr(args, "detect_duplicate_tracks", True):
         detect_duplicate_tracks(input_path, audio_tracks, subtitles)
     apply_track_selection_overrides(
@@ -6658,6 +6678,7 @@ def process_merged_inputs(
     preferred_audio_default = bool(getattr(args, "preferred_audio_default", False))
     preferred_subtitle_first = bool(getattr(args, "preferred_subtitle_first", False))
     preferred_forced_subtitle_default = bool(getattr(args, "preferred_forced_subtitle_default", False))
+    preserve_commentary_names = bool(getattr(args, "preserve_commentary_names", False))
     apply_audio_names(audio_tracks, audio_name_style)
 
     progress("Analyzing subtitle sizes", 15)
@@ -6740,6 +6761,8 @@ def process_merged_inputs(
         )
     infer_audio_commentary_from_subtitles(audio_tracks, subtitles)
     apply_audio_names(audio_tracks, audio_name_style)
+    if preserve_commentary_names:
+        apply_preserved_commentary_names([*audio_tracks, *subtitles])
     if getattr(args, "detect_duplicate_tracks", True):
         detect_duplicate_tracks(input_files[0], audio_tracks, subtitles)
     apply_track_selection_overrides(
@@ -6892,6 +6915,7 @@ def build_parser(config_defaults: dict[str, Any] | None = None) -> argparse.Argu
         overwrite=default("overwrite", False),
         skip_existing=default("skip_existing", False),
         report=default("report", False),
+        preserve_commentary_names=default("preserve_commentary_names", False),
         preferred_audio_first=default("preferred_audio_first", False),
         preferred_audio_default=default("preferred_audio_default", False),
         preferred_subtitle_first=default("preferred_subtitle_first", False),
@@ -6968,6 +6992,19 @@ def build_parser(config_defaults: dict[str, Any] | None = None) -> argparse.Argu
             "format=codec/channels only, language-format=language + codec/channels, keep=preserve existing names. "
             "Default: auto."
         ),
+    )
+    parser.add_argument(
+        "--preserve-commentary-names",
+        dest="preserve_commentary_names",
+        action="store_true",
+        default=default("preserve_commentary_names", False),
+        help="Keep existing names for audio/subtitle commentary tracks when they already have one.",
+    )
+    parser.add_argument(
+        "--no-preserve-commentary-names",
+        dest="preserve_commentary_names",
+        action="store_false",
+        help="Allow Organizer to rewrite commentary track names.",
     )
     parser.add_argument(
         "--language-order-style",

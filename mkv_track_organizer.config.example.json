@@ -11,6 +11,7 @@
   "report_dir": null,
   "metadata_edit_mode": "off",
   "audio_name_style": "auto",
+  "preserve_commentary_names": false,
   "language_order_style": "default",
   "regional_order": [],
   "preferred_language": "",

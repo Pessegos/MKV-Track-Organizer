@@ -167,6 +167,28 @@ def test_audio_name_style_keep_preserves_original_name() -> None:
     assert track.suggested_name == "VFQ 5.1"
 
 
+def test_preserve_commentary_names_keeps_existing_audio_commentary_name() -> None:
+    track = audio_track(1, "eng", codec="AC-3", codec_id="A_AC3", channels=2, original_name="Commentary by Producer X")
+
+    m.apply_audio_names([track], "auto")
+    assert track.suggested_name == "AC-3 2.0 Commentary"
+
+    m.apply_preserved_commentary_names([track])
+
+    assert track.suggested_name == "Commentary by Producer X"
+
+
+def test_preserve_commentary_names_keeps_existing_subtitle_commentary_name() -> None:
+    track = subtitle_track(2, "eng")
+    track.original_name = "Commentary by Producer X"
+    track.role = "commentary"
+    track.suggested_name = m.subtitle_track_name(track)
+
+    m.apply_preserved_commentary_names([track])
+
+    assert track.suggested_name == "Commentary by Producer X"
+
+
 def test_variant_classifiers() -> None:
     assert m.classify_portuguese_variant("Onde está o telemóvel? Despacha-te.")["code"] == "pt-PT"
     assert m.classify_portuguese_variant("Cadê meu celular? Estou falando com você.")["code"] == "pt-BR"
@@ -1431,7 +1453,8 @@ def test_config_defaults(tmp_path: Path) -> None:
         (
             '{"recursive": true, "output_suffix": "fixed", "detect_language_variants": false, '
             '"metadata_edit_mode": true, "audio_name_style": "language-format", '
-            '"language_order_style": "regional", "regional_order": "asia;americas"}'
+            '"language_order_style": "regional", "regional_order": "asia;americas", '
+            '"preserve_commentary_names": true}'
         ),
         encoding="utf-8",
     )
@@ -1443,6 +1466,7 @@ def test_config_defaults(tmp_path: Path) -> None:
     assert defaults["audio_name_style"] == "language-format"
     assert defaults["language_order_style"] == "regional"
     assert defaults["regional_order"] == ["asia", "americas"]
+    assert defaults["preserve_commentary_names"] is True
 
 
 def test_parser_defaults_keep_commentary_ocr_enabled() -> None:
@@ -1451,6 +1475,7 @@ def test_parser_defaults_keep_commentary_ocr_enabled() -> None:
 
     assert args.auto_pgs_ocr is True
     assert args.auto_commentary_ocr is True
+    assert args.preserve_commentary_names is False
     assert not hasattr(args, "validate_explicit_variant_ocr")
 
 

@@ -15,6 +15,7 @@ The project currently includes a command-line interface, a desktop UI, an early 
 - Apply manual audio/subtitle delays by track ID when a source needs sync correction.
 - Estimate fixed audio delay between a reference file and a source file, then apply it in Organizer or export shifted audio tracks.
 - Detect forced, empty, commentary, and SDH subtitle tracks.
+- Preserve existing commentary track names when releases already identify them well.
 - Highlight likely duplicate audio/subtitle tracks in the Organizer preview without dropping them automatically.
 - Detect regional language variants such as Portuguese, Spanish, French, and Chinese variants.
 - Use OCR for PGS subtitles when text is needed for language or role detection.
@@ -67,6 +68,14 @@ dist\MKV Track Organizer\MKV Track Organizer.exe
 
 Use `.\build_exe.ps1 -OneFile` for a single-file executable. Use `-SkipInstall` after the first successful build if you do not want the script to reinstall/check Python packages each time. External tools such as MKVToolNix, FFmpeg, MakeMKV, Tesseract, and Subtitle Edit are still discovered separately and are not bundled into the app.
 
+To publish a GitHub release from your PC, install GitHub CLI, run `gh auth login`, then:
+
+```powershell
+.\publish_exe.ps1 -Version v0.1.0
+```
+
+Pushing a tag named `v*` also triggers the GitHub Actions release workflow, which builds the Windows executable and uploads a zipped app folder to the release.
+
 ## Desktop UI
 
 Run:
@@ -81,7 +90,7 @@ The lower panel separates the readable **Summary** from the full **Raw log**, so
 
 The desktop UI opens in dark mode by default. Use the theme selector in the status bar to switch between **Dark** and **Light**.
 
-The Organizer **Advanced** panel has saved profiles. Profiles store reusable Organizer preferences such as metadata mode, audio naming, language/region order, preferred language rules, role detection toggles, OCR toggles, and report settings. They do not store file inputs, output paths, manual track selections, manual track order, delays, or forced IDs. Profiles are saved under the current Windows user profile, so they remain available after closing the app.
+The Organizer **Advanced** panel has saved profiles. Profiles store reusable Organizer preferences such as metadata mode, audio naming, commentary-name preservation, language/region order, preferred language rules, role detection toggles, OCR toggles, and report settings. They do not store file inputs, output paths, manual track selections, manual track order, delays, or forced IDs. Profiles are saved under the current Windows user profile, so they remain available after closing the app. Use **Update** to edit the selected profile, **Save as** to create or rename one, and **Delete** to remove it.
 
 The **MakeMKV Batch** tab can convert one disc backup folder or a folder containing multiple disc backup folders. Its selection modes cover English audio, all audio, all tracks, or a custom MakeMKV selection string. Enable **Run Organizer after MakeMKV** to feed the MakeMKV output folder into the Organizer tab settings automatically. MakeMKV runs in robot mode so progress is used when the console output exposes it.
 

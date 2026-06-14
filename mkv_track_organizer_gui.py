@@ -359,6 +359,7 @@ class MainWindow(QMainWindow):
         "auto_pgs_ocr",
         "auto_commentary_ocr",
         "report",
+        "preserve_commentary_names",
         "preferred_language",
         "preferred_audio_first",
         "preferred_audio_default",
@@ -532,6 +533,7 @@ class MainWindow(QMainWindow):
         self.auto_pgs_ocr_check = QCheckBox("Auto PGS OCR")
         self.auto_commentary_ocr_check = QCheckBox("Commentary/SDH OCR")
         self.report_check = QCheckBox("Write report")
+        self.preserve_commentary_names_check = QCheckBox("Keep commentary names")
         self.preferred_audio_first_check = QCheckBox("Audio first")
         self.preferred_audio_default_check = QCheckBox("Audio default")
         self.preferred_subtitle_first_check = QCheckBox("Subtitles first")
@@ -539,11 +541,14 @@ class MainWindow(QMainWindow):
 
         self.profile_combo = QComboBox()
         self.profile_combo.setToolTip("Saved Organizer option profile")
-        self.save_profile_button = QPushButton("Save")
+        self.update_profile_button = QPushButton("Update")
+        self.save_profile_button = QPushButton("Save as")
         self.delete_profile_button = QPushButton("Delete")
+        self.update_profile_button.setObjectName("secondaryButton")
         self.save_profile_button.setObjectName("secondaryButton")
         self.delete_profile_button.setObjectName("secondaryButton")
-        self.save_profile_button.setToolTip("Save the current Organizer options as a reusable profile")
+        self.update_profile_button.setToolTip("Update the selected profile with the current Organizer options")
+        self.save_profile_button.setToolTip("Save the current Organizer options as a new or renamed profile")
         self.delete_profile_button.setToolTip("Delete the selected saved profile")
 
         self.metadata_combo = QComboBox()
@@ -789,6 +794,9 @@ class MainWindow(QMainWindow):
         self.auto_pgs_ocr_check.setToolTip("Run OCR for PGS subtitles when needed for language detection")
         self.auto_commentary_ocr_check.setToolTip("OCR extra full-size PGS tracks that may be commentary or SDH; normal and named SDH tracks are skipped")
         self.report_check.setToolTip("Write TXT/JSON batch reports")
+        self.preserve_commentary_names_check.setToolTip(
+            "Keep existing audio/subtitle commentary names, for example 'Commentary by Producer X', instead of rewriting them"
+        )
         self.preferred_audio_first_check.setToolTip("Move preferred-language main audio before other main audio")
         self.preferred_audio_default_check.setToolTip("Make preferred-language audio default when available")
         self.preferred_subtitle_first_check.setToolTip(
@@ -814,6 +822,7 @@ class MainWindow(QMainWindow):
         preferred_language_label.setToolTip("Optional language code used by preferred-language rules.")
 
         profile_actions = QHBoxLayout()
+        profile_actions.addWidget(self.update_profile_button)
         profile_actions.addWidget(self.save_profile_button)
         profile_actions.addWidget(self.delete_profile_button)
         profile_actions.addStretch(1)
@@ -864,6 +873,7 @@ class MainWindow(QMainWindow):
             self.variant_check,
             self.auto_pgs_ocr_check,
             self.auto_commentary_ocr_check,
+            self.preserve_commentary_names_check,
             self.report_check,
         ]:
             advanced_toggles.addWidget(checkbox)
@@ -1264,6 +1274,7 @@ class MainWindow(QMainWindow):
         self.input_edit.textEdited.connect(self._manual_input_changed)
         self.files_table.itemSelectionChanged.connect(self._populate_tracks_for_selection)
         self.profile_combo.currentIndexChanged.connect(self._profile_combo_changed)
+        self.update_profile_button.clicked.connect(self.update_current_profile)
         self.save_profile_button.clicked.connect(self.save_current_profile)
         self.delete_profile_button.clicked.connect(self.delete_current_profile)
         self.metadata_combo.currentIndexChanged.connect(
@@ -1595,7 +1606,9 @@ class MainWindow(QMainWindow):
         return str(self.profile_combo.currentData() or "")
 
     def _update_profile_buttons(self) -> None:
-        self.delete_profile_button.setEnabled(bool(self._current_profile_name()))
+        has_profile = bool(self._current_profile_name())
+        self.update_profile_button.setEnabled(has_profile)
+        self.delete_profile_button.setEnabled(has_profile)
 
     def _profile_payload_from_ui(self) -> dict:
         return {
@@ -1611,6 +1624,7 @@ class MainWindow(QMainWindow):
             "auto_pgs_ocr": self.auto_pgs_ocr_check.isChecked(),
             "auto_commentary_ocr": self.auto_commentary_ocr_check.isChecked(),
             "report": self.report_check.isChecked(),
+            "preserve_commentary_names": self.preserve_commentary_names_check.isChecked(),
             "preferred_language": self.preferred_language_edit.text().strip(),
             "preferred_audio_first": self.preferred_audio_first_check.isChecked(),
             "preferred_audio_default": self.preferred_audio_default_check.isChecked(),
@@ -1645,6 +1659,9 @@ class MainWindow(QMainWindow):
             bool(payload.get("auto_commentary_ocr", self.auto_commentary_ocr_check.isChecked()))
         )
         self.report_check.setChecked(bool(payload.get("report", self.report_check.isChecked())))
+        self.preserve_commentary_names_check.setChecked(
+            bool(payload.get("preserve_commentary_names", self.preserve_commentary_names_check.isChecked()))
+        )
         self.preferred_language_edit.setText(str(payload.get("preferred_language", self.preferred_language_edit.text())))
         self.preferred_audio_first_check.setChecked(
             bool(payload.get("preferred_audio_first", self.preferred_audio_first_check.isChecked()))
@@ -1681,24 +1698,35 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Profile loaded: {profile_name}" if profile_name else "Custom profile")
 
     @Slot()
+    def update_current_profile(self) -> None:
+        profile_name = self._current_profile_name()
+        if not profile_name:
+            QMessageBox.information(self, "Update profile", "Choose a saved profile first, or use Save as.")
+            return
+
+        self.profiles[profile_name] = self._profile_payload_from_ui()
+        self._write_profile_store()
+        self.statusBar().showMessage(f"Profile updated: {profile_name}")
+
+    @Slot()
     def save_current_profile(self) -> None:
         current_name = self._current_profile_name()
-        name, accepted = QInputDialog.getText(self, "Save profile", "Profile name:", text=current_name)
+        name, accepted = QInputDialog.getText(self, "Save profile as", "Profile name:", text=current_name)
         if not accepted:
             return
         name = name.strip()
         if not name:
-            QMessageBox.warning(self, "Save profile", "Choose a profile name.")
+            QMessageBox.warning(self, "Save profile as", "Choose a profile name.")
             return
         if name.casefold() == self.PROFILE_NONE_LABEL.casefold():
-            QMessageBox.warning(self, "Save profile", f"'{self.PROFILE_NONE_LABEL}' is reserved.")
+            QMessageBox.warning(self, "Save profile as", f"'{self.PROFILE_NONE_LABEL}' is reserved.")
             return
 
         existing_name = next((profile for profile in self.profiles if profile.casefold() == name.casefold()), "")
         if existing_name and existing_name != current_name:
             answer = QMessageBox.question(
                 self,
-                "Save profile",
+                "Save profile as",
                 f"Overwrite the existing profile '{existing_name}'?",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No,
@@ -1752,6 +1780,7 @@ class MainWindow(QMainWindow):
         self.auto_pgs_ocr_check.setChecked(bool(args.auto_pgs_ocr))
         self.auto_commentary_ocr_check.setChecked(bool(args.auto_commentary_ocr))
         self.report_check.setChecked(bool(args.report))
+        self.preserve_commentary_names_check.setChecked(bool(getattr(args, "preserve_commentary_names", False)))
         self.preferred_audio_first_check.setChecked(bool(getattr(args, "preferred_audio_first", False)))
         self.preferred_audio_default_check.setChecked(bool(getattr(args, "preferred_audio_default", False)))
         self.preferred_subtitle_first_check.setChecked(bool(getattr(args, "preferred_subtitle_first", False)))
@@ -2671,6 +2700,7 @@ class MainWindow(QMainWindow):
         args.auto_pgs_ocr = self.auto_pgs_ocr_check.isChecked()
         args.auto_commentary_ocr = self.auto_commentary_ocr_check.isChecked()
         args.report = self.report_check.isChecked()
+        args.preserve_commentary_names = self.preserve_commentary_names_check.isChecked()
         args.preferred_audio_first = self.preferred_audio_first_check.isChecked()
         args.preferred_audio_default = self.preferred_audio_default_check.isChecked()
         args.preferred_subtitle_first = self.preferred_subtitle_first_check.isChecked()
