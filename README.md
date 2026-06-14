@@ -57,13 +57,15 @@ You can build a local Windows executable with PyInstaller:
 .\build_exe.ps1
 ```
 
+The script prefers Python 3.12, then 3.11, then a supported 3.10.x. Python 3.10.0 is skipped because it can break PyInstaller analysis on this project.
+
 The default build creates:
 
 ```text
 dist\MKV Track Organizer\MKV Track Organizer.exe
 ```
 
-Use `-OneFile` for a single-file executable. External tools such as MKVToolNix, FFmpeg, MakeMKV, Tesseract, and Subtitle Edit are still discovered separately and are not bundled into the app.
+Use `.\build_exe.ps1 -OneFile` for a single-file executable. Use `-SkipInstall` after the first successful build if you do not want the script to reinstall/check Python packages each time. External tools such as MKVToolNix, FFmpeg, MakeMKV, Tesseract, and Subtitle Edit are still discovered separately and are not bundled into the app.
 
 ## Desktop UI
 
