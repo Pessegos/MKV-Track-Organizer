@@ -508,6 +508,7 @@ class MainWindow(QMainWindow):
         self._syncing_track_checks = False
         self.manual_track_includes: dict[str, bool] = {}
         self.manual_track_order: list[str] = []
+        self.manual_track_order_active = False
 
         self.input_edit = QLineEdit()
         self.input_edit.setPlaceholderText("Selected source")
@@ -1288,7 +1289,7 @@ class MainWindow(QMainWindow):
             lambda _index: self._language_order_style_changed()
         )
         self.regional_order_combo.currentIndexChanged.connect(
-            lambda _index: self._sync_combo_tooltip(self.regional_order_combo, self.REGIONAL_ORDER_HELP)
+            lambda _index: self._regional_order_changed()
         )
         self.theme_combo.currentIndexChanged.connect(self.change_theme)
 
@@ -1513,8 +1514,13 @@ class MainWindow(QMainWindow):
         combo.setToolTip(help_by_key.get(str(key), ""))
 
     def _language_order_style_changed(self) -> None:
+        self._clear_manual_track_order()
         self._sync_combo_tooltip(self.language_order_style_combo, self.LANGUAGE_ORDER_STYLE_HELP)
         self.regional_order_combo.setEnabled(self.language_order_style_combo.currentData() == "regional")
+        self._sync_combo_tooltip(self.regional_order_combo, self.REGIONAL_ORDER_HELP)
+
+    def _regional_order_changed(self) -> None:
+        self._clear_manual_track_order()
         self._sync_combo_tooltip(self.regional_order_combo, self.REGIONAL_ORDER_HELP)
 
     def _append_text(self, edit: QPlainTextEdit, text: str) -> None:
@@ -1695,6 +1701,7 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _profile_combo_changed(self) -> None:
+        self._clear_manual_track_order()
         self._apply_current_profile()
         self._update_profile_buttons()
         self._write_profile_store()
@@ -1813,6 +1820,10 @@ class MainWindow(QMainWindow):
         self.input_edit.setText(text)
         self._syncing_input_edit = False
 
+    def _clear_manual_track_order(self) -> None:
+        self.manual_track_order = []
+        self.manual_track_order_active = False
+
     @Slot(str)
     def _manual_input_changed(self, _text: str) -> None:
         if self._syncing_input_edit:
@@ -1821,7 +1832,7 @@ class MainWindow(QMainWindow):
             self.input_paths = []
             self.current_reports = []
             self.manual_track_includes = {}
-            self.manual_track_order = []
+            self._clear_manual_track_order()
             self._refresh_file_list()
             self.tracks_table.setRowCount(0)
             self._set_track_selection_controls_enabled(False)
@@ -2095,7 +2106,7 @@ class MainWindow(QMainWindow):
         self.input_paths = []
         self.current_reports = []
         self.manual_track_includes = {}
-        self.manual_track_order = []
+        self._clear_manual_track_order()
         self._set_input_text("")
         self._refresh_file_list()
         self.tracks_table.setRowCount(0)
@@ -2187,7 +2198,7 @@ class MainWindow(QMainWindow):
         self.input_paths = []
         self.current_reports = []
         self.manual_track_includes = {}
-        self.manual_track_order = []
+        self._clear_manual_track_order()
         self._set_input_text("")
         self.output_edit.clear()
         self.files_table.setRowCount(0)
@@ -2201,7 +2212,7 @@ class MainWindow(QMainWindow):
         self.input_paths = []
         self.current_reports = []
         self.manual_track_includes = {}
-        self.manual_track_order = []
+        self._clear_manual_track_order()
         self._set_input_text("")
         self.files_table.setRowCount(0)
         self.tracks_table.setRowCount(0)
@@ -2275,7 +2286,7 @@ class MainWindow(QMainWindow):
         if added:
             self.current_reports = []
             self.manual_track_includes = {}
-            self.manual_track_order = []
+            self._clear_manual_track_order()
             self._sync_input_summary()
             self._refresh_file_list()
             self.tracks_table.setRowCount(0)
@@ -2693,10 +2704,10 @@ class MainWindow(QMainWindow):
         args.recursive = self.recursive_check.isChecked()
         args.dry_run = dry_run
         args.merge_inputs = self.merge_inputs_check.isChecked()
-        if self.tracks_table.rowCount():
+        if self.tracks_table.rowCount() and self.manual_track_order_active:
             self._sync_track_order_from_table()
         args.track_selection_overrides = dict(self.manual_track_includes)
-        args.track_order_overrides = list(self.manual_track_order)
+        args.track_order_overrides = list(self.manual_track_order) if self.manual_track_order_active else []
         args.smart_sub_detection = self.smart_subs_check.isChecked()
         args.drop_empty_subs = self.drop_empty_check.isChecked()
         args.detect_duplicate_tracks = self.duplicate_check.isChecked()
@@ -3509,7 +3520,7 @@ class MainWindow(QMainWindow):
             *tracks.get("audio", []),
             *tracks.get("subtitles", []),
         ]
-        if not self.manual_track_order:
+        if not self.manual_track_order_active or not self.manual_track_order:
             return report_tracks
 
         manual_rank = {selection_key: index for index, selection_key in enumerate(self.manual_track_order)}
@@ -3574,6 +3585,7 @@ class MainWindow(QMainWindow):
         insert_row = target_row - sum(1 for row in valid_rows if row < target_row)
         insert_row = max(0, min(insert_row, len(remaining)))
         self.manual_track_order = remaining[:insert_row] + moving + remaining[insert_row:]
+        self.manual_track_order_active = True
 
         current_file_row = self.files_table.currentRow()
         self._populate_tracks_for_row(current_file_row)
@@ -3583,6 +3595,8 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Track order updated")
 
     def _sync_track_order_from_table(self) -> None:
+        if not self.manual_track_order_active:
+            return
         self.manual_track_order = self._track_order_keys_from_table()
 
     def _track_order_keys_from_table(self) -> list[str]:
