@@ -72,26 +72,63 @@ class SignalTextStream(io.TextIOBase):
 class TrackTableWidget(QTableWidget):
     rows_reordered = Signal(list, int)
 
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._drag_rows: list[int] = []
+        self._pending_drop_row: int | None = None
+
+    def startDrag(self, supported_actions) -> None:
+        self._drag_rows = self._selected_row_numbers()
+        self._pending_drop_row = None
+        super().startDrag(supported_actions)
+
+    def dragMoveEvent(self, event) -> None:
+        super().dragMoveEvent(event)
+        if event.source() is self:
+            self._pending_drop_row = self._drop_target_row(event)
+
     def dropEvent(self, event: QDropEvent) -> None:
         if event.source() is not self:
             super().dropEvent(event)
             return
 
-        selected_rows = sorted({index.row() for index in self.selectionModel().selectedRows()})
-        if not selected_rows:
-            selected_rows = sorted({index.row() for index in self.selectedIndexes()})
+        selected_rows = self._drag_rows or self._selected_row_numbers()
         if not selected_rows:
             super().dropEvent(event)
             return
 
-        position = event.position().toPoint() if hasattr(event, "position") else event.pos()
-        target_row = self.rowAt(position.y())
-        if target_row < 0:
-            target_row = self.rowCount()
+        target_row = self._pending_drop_row
+        if target_row is None:
+            target_row = self._drop_target_row(event)
         target_row = max(0, min(target_row, self.rowCount()))
+        self._drag_rows = []
+        self._pending_drop_row = None
 
         event.acceptProposedAction()
         self.rows_reordered.emit(selected_rows, target_row)
+
+    def _selected_row_numbers(self) -> list[int]:
+        selected_rows = sorted({index.row() for index in self.selectionModel().selectedRows()})
+        if selected_rows:
+            return selected_rows
+        return sorted({index.row() for index in self.selectedIndexes()})
+
+    def _drop_target_row(self, event) -> int:
+        position = event.position().toPoint() if hasattr(event, "position") else event.pos()
+        index = self.indexAt(position)
+        if not index.isValid():
+            return self.rowCount()
+
+        indicator = self.dropIndicatorPosition()
+        if indicator == QAbstractItemView.DropIndicatorPosition.AboveItem:
+            return index.row()
+        if indicator == QAbstractItemView.DropIndicatorPosition.BelowItem:
+            return index.row() + 1
+        if indicator == QAbstractItemView.DropIndicatorPosition.OnViewport:
+            return self.rowCount()
+
+        row_rect = self.visualRect(index)
+        return index.row() + (1 if position.y() > row_rect.center().y() else 0)
 
 
 class OrganizerWorker(QObject):
@@ -465,6 +502,7 @@ class MainWindow(QMainWindow):
         self.report_check = QCheckBox("Write report")
         self.preferred_audio_first_check = QCheckBox("Audio first")
         self.preferred_audio_default_check = QCheckBox("Audio default")
+        self.preferred_subtitle_first_check = QCheckBox("Subtitles first")
         self.preferred_forced_subtitle_default_check = QCheckBox("Forced subs default")
 
         self.metadata_combo = QComboBox()
@@ -708,6 +746,9 @@ class MainWindow(QMainWindow):
         self.report_check.setToolTip("Write TXT/JSON batch reports")
         self.preferred_audio_first_check.setToolTip("Move preferred-language main audio before other main audio")
         self.preferred_audio_default_check.setToolTip("Make preferred-language audio default when available")
+        self.preferred_subtitle_first_check.setToolTip(
+            "Move preferred-language normal subtitles before other normal subtitles"
+        )
         self.preferred_forced_subtitle_default_check.setToolTip(
             "Move preferred-language forced subtitles before other subtitles and make the first one default"
         )
@@ -752,6 +793,7 @@ class MainWindow(QMainWindow):
         for checkbox in [
             self.preferred_audio_first_check,
             self.preferred_audio_default_check,
+            self.preferred_subtitle_first_check,
             self.preferred_forced_subtitle_default_check,
         ]:
             preferred_toggles.addWidget(checkbox)
@@ -1454,6 +1496,7 @@ class MainWindow(QMainWindow):
         self.report_check.setChecked(bool(args.report))
         self.preferred_audio_first_check.setChecked(bool(getattr(args, "preferred_audio_first", False)))
         self.preferred_audio_default_check.setChecked(bool(getattr(args, "preferred_audio_default", False)))
+        self.preferred_subtitle_first_check.setChecked(bool(getattr(args, "preferred_subtitle_first", False)))
         self.preferred_forced_subtitle_default_check.setChecked(
             bool(getattr(args, "preferred_forced_subtitle_default", False))
         )
@@ -2371,6 +2414,7 @@ class MainWindow(QMainWindow):
         args.report = self.report_check.isChecked()
         args.preferred_audio_first = self.preferred_audio_first_check.isChecked()
         args.preferred_audio_default = self.preferred_audio_default_check.isChecked()
+        args.preferred_subtitle_first = self.preferred_subtitle_first_check.isChecked()
         args.preferred_forced_subtitle_default = self.preferred_forced_subtitle_default_check.isChecked()
         args.metadata_edit_mode = self.metadata_combo.currentText()
         args.audio_name_style = self.audio_name_style_combo.currentData() or "auto"
@@ -2590,6 +2634,7 @@ class MainWindow(QMainWindow):
             and (
                 getattr(args, "preferred_audio_first", False)
                 or getattr(args, "preferred_audio_default", False)
+                or getattr(args, "preferred_subtitle_first", False)
                 or getattr(args, "preferred_forced_subtitle_default", False)
             )
         ):

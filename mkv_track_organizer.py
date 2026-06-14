@@ -308,6 +308,7 @@ CONFIG_BOOL_KEYS = {
     "report",
     "preferred_audio_first",
     "preferred_audio_default",
+    "preferred_subtitle_first",
     "preferred_forced_subtitle_default",
 }
 
@@ -5010,6 +5011,7 @@ def subtitle_sort_key(
     language_order_style: str = "default",
     regional_order: Any = None,
     preferred_language: str | None = None,
+    preferred_subtitle_first: bool = False,
     preferred_forced_subtitle_default: bool = False,
 ) -> tuple[Any, ...]:
     if (
@@ -5030,10 +5032,25 @@ def subtitle_sort_key(
     else:
         role_group = 0
 
+    language_key = subtitle_language_sort_key(track, language_order_style, regional_order)
+    if role_group == 0 and preferred_subtitle_first and normalize_preferred_language(preferred_language):
+        preferred_group = 0 if track_matches_preferred_language(track, preferred_language) else 1
+        if is_english(track):
+            return (primary_group, role_group, preferred_group, 0, english_normal_subtitle_rank(track), track.order)
+        return (
+            primary_group,
+            role_group,
+            preferred_group,
+            1,
+            *language_key,
+            track.role == "sdh",
+            subtitle_format_rank(track),
+            track.order,
+        )
+
     if role_group == 0 and is_english(track):
         return (primary_group, role_group, 0, english_normal_subtitle_rank(track), track.order)
 
-    language_key = subtitle_language_sort_key(track, language_order_style, regional_order)
     if role_group == 0:
         return (primary_group, role_group, 1, *language_key, track.role == "sdh", subtitle_format_rank(track), track.order)
 
@@ -5049,6 +5066,7 @@ def ordered_tracks(
     track_order_overrides: list[str] | None = None,
     preferred_language: str | None = None,
     preferred_audio_first: bool = False,
+    preferred_subtitle_first: bool = False,
     preferred_forced_subtitle_default: bool = False,
 ) -> list[TrackInfo]:
     included_videos = [track for track in videos if not track.drop]
@@ -5073,6 +5091,7 @@ def ordered_tracks(
                 language_order_style,
                 regional_order,
                 preferred_language,
+                preferred_subtitle_first,
                 preferred_forced_subtitle_default,
             ),
         )
@@ -5198,6 +5217,7 @@ def metadata_edit_plan(
     track_order_overrides: list[str] | None = None,
     preferred_language: str | None = None,
     preferred_audio_first: bool = False,
+    preferred_subtitle_first: bool = False,
     preferred_forced_subtitle_default: bool = False,
 ) -> MetadataEditPlan:
     all_tracks = sorted(videos + audio_tracks + subtitles, key=lambda item: item.order)
@@ -5210,6 +5230,7 @@ def metadata_edit_plan(
         track_order_overrides,
         preferred_language,
         preferred_audio_first,
+        preferred_subtitle_first,
         preferred_forced_subtitle_default,
     )
 
@@ -5272,6 +5293,7 @@ def build_mkvmerge_command(
     track_order_overrides: list[str] | None = None,
     preferred_language: str | None = None,
     preferred_audio_first: bool = False,
+    preferred_subtitle_first: bool = False,
     preferred_forced_subtitle_default: bool = False,
 ) -> list[str]:
     command = command_with_mkvtoolnix_ui_language([str(mkvmerge), "--output", str(output_path)])
@@ -5347,6 +5369,7 @@ def build_mkvmerge_command(
         track_order_overrides,
         preferred_language,
         preferred_audio_first,
+        preferred_subtitle_first,
         preferred_forced_subtitle_default,
     )
     if ordered:
@@ -5372,6 +5395,7 @@ def print_track_plan(
     regional_order: Any = None,
     preferred_language: str | None = None,
     preferred_audio_first: bool = False,
+    preferred_subtitle_first: bool = False,
     preferred_forced_subtitle_default: bool = False,
 ) -> None:
     print("\nTrack plan:")
@@ -5412,6 +5436,7 @@ def print_track_plan(
                 language_order_style,
                 regional_order,
                 preferred_language,
+                preferred_subtitle_first,
                 preferred_forced_subtitle_default,
             ),
         ),
@@ -6310,6 +6335,7 @@ def process_file(
     preferred_language = getattr(args, "preferred_language", "")
     preferred_audio_first = bool(getattr(args, "preferred_audio_first", False))
     preferred_audio_default = bool(getattr(args, "preferred_audio_default", False))
+    preferred_subtitle_first = bool(getattr(args, "preferred_subtitle_first", False))
     preferred_forced_subtitle_default = bool(getattr(args, "preferred_forced_subtitle_default", False))
     apply_audio_names(audio_tracks, audio_name_style)
 
@@ -6413,6 +6439,7 @@ def process_file(
         regional_order,
         preferred_language,
         preferred_audio_first,
+        preferred_subtitle_first,
         preferred_forced_subtitle_default,
     )
     print_track_explanations(subtitles, args.explain_track_ids)
@@ -6426,6 +6453,7 @@ def process_file(
         track_order_overrides,
         preferred_language,
         preferred_audio_first,
+        preferred_subtitle_first,
         preferred_forced_subtitle_default,
     )
     metadata_mode = getattr(args, "metadata_edit_mode", "off")
@@ -6518,6 +6546,7 @@ def process_file(
         track_order_overrides=track_order_overrides,
         preferred_language=preferred_language,
         preferred_audio_first=preferred_audio_first,
+        preferred_subtitle_first=preferred_subtitle_first,
         preferred_forced_subtitle_default=preferred_forced_subtitle_default,
     )
 
@@ -6627,6 +6656,7 @@ def process_merged_inputs(
     preferred_language = getattr(args, "preferred_language", "")
     preferred_audio_first = bool(getattr(args, "preferred_audio_first", False))
     preferred_audio_default = bool(getattr(args, "preferred_audio_default", False))
+    preferred_subtitle_first = bool(getattr(args, "preferred_subtitle_first", False))
     preferred_forced_subtitle_default = bool(getattr(args, "preferred_forced_subtitle_default", False))
     apply_audio_names(audio_tracks, audio_name_style)
 
@@ -6742,6 +6772,7 @@ def process_merged_inputs(
         regional_order,
         preferred_language,
         preferred_audio_first,
+        preferred_subtitle_first,
         preferred_forced_subtitle_default,
     )
     print_track_explanations(subtitles, args.explain_track_ids)
@@ -6780,6 +6811,7 @@ def process_merged_inputs(
         track_order_overrides=track_order_overrides,
         preferred_language=preferred_language,
         preferred_audio_first=preferred_audio_first,
+        preferred_subtitle_first=preferred_subtitle_first,
         preferred_forced_subtitle_default=preferred_forced_subtitle_default,
     )
 
@@ -6862,6 +6894,7 @@ def build_parser(config_defaults: dict[str, Any] | None = None) -> argparse.Argu
         report=default("report", False),
         preferred_audio_first=default("preferred_audio_first", False),
         preferred_audio_default=default("preferred_audio_default", False),
+        preferred_subtitle_first=default("preferred_subtitle_first", False),
         preferred_forced_subtitle_default=default("preferred_forced_subtitle_default", False),
         track_selection_overrides={},
         track_order_overrides=[],
@@ -6982,6 +7015,18 @@ def build_parser(config_defaults: dict[str, Any] | None = None) -> argparse.Argu
         dest="preferred_audio_default",
         action="store_false",
         help="Keep the normal audio default selection.",
+    )
+    parser.add_argument(
+        "--preferred-subtitle-first",
+        dest="preferred_subtitle_first",
+        action="store_true",
+        help="Place preferred-language normal subtitles before other normal subtitles.",
+    )
+    parser.add_argument(
+        "--no-preferred-subtitle-first",
+        dest="preferred_subtitle_first",
+        action="store_false",
+        help="Do not prioritize preferred-language normal subtitle order.",
     )
     parser.add_argument(
         "--preferred-forced-subtitle-default",
@@ -7371,6 +7416,7 @@ def prepare_batch_run(args: argparse.Namespace, config_path: Path | None = None)
         and (
             getattr(args, "preferred_audio_first", False)
             or getattr(args, "preferred_audio_default", False)
+            or getattr(args, "preferred_subtitle_first", False)
             or getattr(args, "preferred_forced_subtitle_default", False)
         )
     ):

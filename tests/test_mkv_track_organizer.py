@@ -1297,6 +1297,27 @@ def test_preferred_forced_subtitle_is_first_and_default() -> None:
     assert english_forced.default is False
 
 
+def test_preferred_subtitles_can_be_first_without_changing_default() -> None:
+    video = video_track(0)
+    english_audio = audio_track(1, "eng")
+    english_subtitle = subtitle_track(2, "eng")
+    portuguese_subtitle = subtitle_track(3, "por")
+
+    m.apply_default_flags([video], [english_audio], [english_subtitle, portuguese_subtitle])
+
+    ordered = m.ordered_tracks(
+        [video],
+        [english_audio],
+        [english_subtitle, portuguese_subtitle],
+        preferred_language="pt-PT",
+        preferred_subtitle_first=True,
+    )
+
+    assert [track.id for track in ordered] == [0, 1, 3, 2]
+    assert english_subtitle.default is False
+    assert portuguese_subtitle.default is False
+
+
 def test_duplicate_audio_detection_marks_source_and_leader() -> None:
     first = audio_track(1, "eng", codec="AC-3", codec_id="A_AC3", channels=6)
     second = audio_track(2, "eng", codec="AC-3", codec_id="A_AC3", channels=6)
