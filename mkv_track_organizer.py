@@ -22,6 +22,7 @@ from typing import Any, Callable, Iterable
 
 APP_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG_PATH = APP_DIR / "mkv_track_organizer.config.json"
+DEFAULT_AUDIO_LANGUAGE_PRIORITY = ("eng",)
 
 # Windows fallbacks. These can also be overridden by CLI arguments or env vars.
 MKVMERGE = Path(r"C:\Program Files\MKVToolNix\mkvmerge.exe")
@@ -7128,10 +7129,10 @@ def build_parser(config_defaults: dict[str, Any] | None = None) -> argparse.Argu
     )
     parser.add_argument(
         "--audio-language-priority",
-        default=default("audio_language_priority", ""),
+        default=default("audio_language_priority", DEFAULT_AUDIO_LANGUAGE_PRIORITY),
         help=(
             "Comma- or semicolon-separated audio language priority list. "
-            "Example: eng,pt-PT keeps English audio first, then Iberian Portuguese."
+            "Example: eng,pt-PT keeps English audio first, then Iberian Portuguese. Default: eng."
         ),
     )
     parser.add_argument(

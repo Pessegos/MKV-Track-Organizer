@@ -1554,6 +1554,7 @@ def test_parser_defaults_keep_commentary_ocr_enabled() -> None:
 
     assert args.auto_pgs_ocr is True
     assert args.auto_commentary_ocr is True
+    assert m.parse_audio_language_priority(args.audio_language_priority) == ("eng",)
     assert args.preserve_commentary_names is False
     assert not hasattr(args, "validate_explicit_variant_ocr")
 
