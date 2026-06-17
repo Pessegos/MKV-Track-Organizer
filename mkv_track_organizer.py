@@ -285,6 +285,7 @@ CONFIG_PATH_LIST_KEYS = {
 CONFIG_STRING_LIST_KEYS = {
     "subtitle_language_ids",
     "regional_order",
+    "audio_language_priority",
 }
 
 CONFIG_BOOL_KEYS = {
@@ -2057,24 +2058,56 @@ def normalize_preferred_language(value: Any) -> str:
     return normalize_language_code(text) if text else ""
 
 
-def track_matches_preferred_language(track: TrackInfo, preferred_language: str | None) -> bool:
-    preferred = normalize_preferred_language(preferred_language)
-    if not preferred:
+def parse_audio_language_priority(value: Any) -> tuple[str, ...]:
+    if value is None:
+        raw_items: list[str] = []
+    elif isinstance(value, str):
+        raw_items = re.split(r"[;,]", value)
+    else:
+        raw_items = []
+        for item in value:
+            raw_items.extend(re.split(r"[;,]", str(item)))
+
+    priority: list[str] = []
+    seen: set[str] = set()
+    for raw_item in raw_items:
+        language = normalize_language_code(str(raw_item).strip())
+        if not language or language in seen:
+            continue
+        priority.append(language)
+        seen.add(language)
+    return tuple(priority)
+
+
+def track_matches_language_code(track: TrackInfo, language_code: str | None) -> bool:
+    desired = normalize_preferred_language(language_code)
+    if not desired:
         return False
 
-    language_code = track_language_code(track)
-    if language_code == preferred:
+    track_code = track_language_code(track)
+    if track_code == desired:
         return True
 
-    if "-" not in preferred:
-        return base_language_code(language_code) == preferred
+    if "-" not in desired:
+        return base_language_code(track_code) == desired
 
-    preferred_base = LANGUAGE_VARIANT_BASES.get(preferred)
-    if preferred_base and language_code == preferred_base:
-        hinted_variant = explicit_variant_hint_for_track(track, preferred_base)
-        return hinted_variant in {None, preferred}
+    desired_base = LANGUAGE_VARIANT_BASES.get(desired)
+    if desired_base and track_code == desired_base:
+        hinted_variant = explicit_variant_hint_for_track(track, desired_base)
+        return hinted_variant in {None, desired}
 
     return False
+
+
+def track_matches_preferred_language(track: TrackInfo, preferred_language: str | None) -> bool:
+    return track_matches_language_code(track, preferred_language)
+
+
+def audio_language_priority_rank(track: TrackInfo, priority: tuple[str, ...]) -> int | None:
+    for index, language_code in enumerate(priority):
+        if track_matches_language_code(track, language_code):
+            return index
+    return None
 
 
 def normalize_region_name(raw_name: str) -> str:
@@ -2158,29 +2191,37 @@ def audio_sort_key(
     regional_order: Any = None,
     preferred_language: str | None = None,
     preferred_audio_first: bool = False,
+    audio_language_priority: Any = None,
 ) -> tuple[Any, ...]:
     role = detect_audio_role(track)
     special_role_group = 1 if role in {"Audio Description", "Commentary", "Isolated Score"} else 0
+    audio_priority = parse_audio_language_priority(audio_language_priority)
+    priority_rank = audio_language_priority_rank(track, audio_priority) if audio_priority else None
+    if priority_rank is not None:
+        return (0, priority_rank, special_role_group, 0 if track.default else 1, track.order)
+
     if preferred_audio_first and normalize_preferred_language(preferred_language):
         preferred_group = 0 if track_matches_preferred_language(track, preferred_language) else 1
         if language_order_style == "regional":
             return (
+                1,
                 special_role_group,
                 preferred_group,
                 0 if track.default else 1,
                 *language_sort_key(track, language_order_style, regional_order),
                 track.order,
             )
-        return (special_role_group, preferred_group, 0 if track.default else 1, track.order)
+        return (1, special_role_group, preferred_group, 0 if track.default else 1, track.order)
 
     if language_order_style == "regional":
         return (
+            1,
             0 if track.default else 1,
             special_role_group,
             *language_sort_key(track, language_order_style, regional_order),
             track.order,
         )
-    return (0 if track.default else 1, special_role_group, track.order)
+    return (1, 0 if track.default else 1, special_role_group, track.order)
 
 
 def subtitle_extension(track: TrackInfo) -> str:
@@ -5126,6 +5167,7 @@ def ordered_tracks(
     preferred_audio_first: bool = False,
     preferred_subtitle_first: bool = False,
     preferred_forced_subtitle_default: bool = False,
+    audio_language_priority: Any = None,
 ) -> list[TrackInfo]:
     included_videos = [track for track in videos if not track.drop]
     included_audio = [track for track in audio_tracks if not track.drop]
@@ -5140,6 +5182,7 @@ def ordered_tracks(
                 regional_order,
                 preferred_language,
                 preferred_audio_first,
+                audio_language_priority,
             ),
         )
         + sorted(
@@ -5277,6 +5320,7 @@ def metadata_edit_plan(
     preferred_audio_first: bool = False,
     preferred_subtitle_first: bool = False,
     preferred_forced_subtitle_default: bool = False,
+    audio_language_priority: Any = None,
 ) -> MetadataEditPlan:
     all_tracks = sorted(videos + audio_tracks + subtitles, key=lambda item: item.order)
     desired_tracks = ordered_tracks(
@@ -5290,6 +5334,7 @@ def metadata_edit_plan(
         preferred_audio_first,
         preferred_subtitle_first,
         preferred_forced_subtitle_default,
+        audio_language_priority,
     )
 
     dropped_tracks = [track for track in all_tracks if track.drop]
@@ -5353,6 +5398,7 @@ def build_mkvmerge_command(
     preferred_audio_first: bool = False,
     preferred_subtitle_first: bool = False,
     preferred_forced_subtitle_default: bool = False,
+    audio_language_priority: Any = None,
 ) -> list[str]:
     command = command_with_mkvtoolnix_ui_language([str(mkvmerge), "--output", str(output_path)])
     input_paths = [input_path] if isinstance(input_path, Path) else list(input_path)
@@ -5429,6 +5475,7 @@ def build_mkvmerge_command(
         preferred_audio_first,
         preferred_subtitle_first,
         preferred_forced_subtitle_default,
+        audio_language_priority,
     )
     if ordered:
         command.extend(["--track-order", ",".join(f"{track.source_index}:{track.id}" for track in ordered)])
@@ -5455,6 +5502,7 @@ def print_track_plan(
     preferred_audio_first: bool = False,
     preferred_subtitle_first: bool = False,
     preferred_forced_subtitle_default: bool = False,
+    audio_language_priority: Any = None,
 ) -> None:
     print("\nTrack plan:")
     show_source = any(track.source_index for track in [*videos, *audio_tracks, *subtitles])
@@ -5474,6 +5522,7 @@ def print_track_plan(
             regional_order,
             preferred_language,
             preferred_audio_first,
+            audio_language_priority,
         ),
     ):
         reason_text = track_note_text(track)
@@ -6395,6 +6444,7 @@ def process_file(
     preferred_audio_default = bool(getattr(args, "preferred_audio_default", False))
     preferred_subtitle_first = bool(getattr(args, "preferred_subtitle_first", False))
     preferred_forced_subtitle_default = bool(getattr(args, "preferred_forced_subtitle_default", False))
+    audio_language_priority = getattr(args, "audio_language_priority", ())
     preserve_commentary_names = bool(getattr(args, "preserve_commentary_names", False))
     apply_audio_names(audio_tracks, audio_name_style)
 
@@ -6502,6 +6552,7 @@ def process_file(
         preferred_audio_first,
         preferred_subtitle_first,
         preferred_forced_subtitle_default,
+        audio_language_priority,
     )
     print_track_explanations(subtitles, args.explain_track_ids)
 
@@ -6516,6 +6567,7 @@ def process_file(
         preferred_audio_first,
         preferred_subtitle_first,
         preferred_forced_subtitle_default,
+        audio_language_priority,
     )
     metadata_mode = getattr(args, "metadata_edit_mode", "off")
     if metadata_mode in {"auto", "only"}:
@@ -6609,6 +6661,7 @@ def process_file(
         preferred_audio_first=preferred_audio_first,
         preferred_subtitle_first=preferred_subtitle_first,
         preferred_forced_subtitle_default=preferred_forced_subtitle_default,
+        audio_language_priority=audio_language_priority,
     )
 
     print("\nmkvmerge command:")
@@ -6719,6 +6772,7 @@ def process_merged_inputs(
     preferred_audio_default = bool(getattr(args, "preferred_audio_default", False))
     preferred_subtitle_first = bool(getattr(args, "preferred_subtitle_first", False))
     preferred_forced_subtitle_default = bool(getattr(args, "preferred_forced_subtitle_default", False))
+    audio_language_priority = getattr(args, "audio_language_priority", ())
     preserve_commentary_names = bool(getattr(args, "preserve_commentary_names", False))
     apply_audio_names(audio_tracks, audio_name_style)
 
@@ -6838,6 +6892,7 @@ def process_merged_inputs(
         preferred_audio_first,
         preferred_subtitle_first,
         preferred_forced_subtitle_default,
+        audio_language_priority,
     )
     print_track_explanations(subtitles, args.explain_track_ids)
 
@@ -6877,6 +6932,7 @@ def process_merged_inputs(
         preferred_audio_first=preferred_audio_first,
         preferred_subtitle_first=preferred_subtitle_first,
         preferred_forced_subtitle_default=preferred_forced_subtitle_default,
+        audio_language_priority=audio_language_priority,
     )
 
     print("\nmkvmerge command:")
@@ -7069,6 +7125,14 @@ def build_parser(config_defaults: dict[str, Any] | None = None) -> argparse.Argu
         "--preferred-language",
         default=default("preferred_language", ""),
         help="Preferred language code for optional custom ordering/default rules, e.g. pt-PT.",
+    )
+    parser.add_argument(
+        "--audio-language-priority",
+        default=default("audio_language_priority", ""),
+        help=(
+            "Comma- or semicolon-separated audio language priority list. "
+            "Example: eng,pt-PT keeps English audio first, then Iberian Portuguese."
+        ),
     )
     parser.add_argument(
         "--preferred-audio-first",
@@ -7488,6 +7552,7 @@ def prepare_batch_run(args: argparse.Namespace, config_path: Path | None = None)
         allowed = ", ".join(sorted(LANGUAGE_ORDER_STYLES))
         raise OrganizerError(f"--language-order-style must be one of these values: {allowed}.")
     args.regional_order = parse_regional_order(getattr(args, "regional_order", None))
+    args.audio_language_priority = parse_audio_language_priority(getattr(args, "audio_language_priority", None))
     args.preferred_language = normalize_preferred_language(getattr(args, "preferred_language", ""))
     if (
         not args.preferred_language

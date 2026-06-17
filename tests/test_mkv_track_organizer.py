@@ -1312,6 +1312,28 @@ def test_preferred_audio_can_be_first_without_being_default() -> None:
     assert [track.id for track in ordered] == [0, 2, 1]
 
 
+def test_audio_language_priority_keeps_english_then_commentary_then_portuguese() -> None:
+    video = video_track(0)
+    english = audio_track(1, "eng")
+    english_commentary = audio_track(2, "eng", codec="AC-3", codec_id="A_AC3", channels=2)
+    portuguese = audio_track(3, "pt-PT")
+    spanish = audio_track(4, "spa")
+    english_commentary.role = "commentary"
+    portuguese.default = True
+
+    ordered = m.ordered_tracks(
+        [video],
+        [portuguese, spanish, english_commentary, english],
+        [],
+        "regional",
+        preferred_language="pt-PT",
+        preferred_audio_first=True,
+        audio_language_priority="eng, pt-PT",
+    )
+
+    assert [track.id for track in ordered] == [0, 1, 2, 3, 4]
+
+
 def test_preferred_language_variant_matches_generic_but_not_conflicting_variant() -> None:
     iberian = audio_track(1, "pt-PT")
     brazilian = audio_track(2, "pt-BR")
@@ -1509,6 +1531,7 @@ def test_config_defaults(tmp_path: Path) -> None:
             '{"recursive": true, "output_suffix": "fixed", "detect_language_variants": false, '
             '"metadata_edit_mode": true, "audio_name_style": "language-format", '
             '"language_order_style": "regional", "regional_order": "asia;americas", '
+            '"audio_language_priority": "eng;pt-PT", '
             '"preserve_commentary_names": true}'
         ),
         encoding="utf-8",
@@ -1521,6 +1544,7 @@ def test_config_defaults(tmp_path: Path) -> None:
     assert defaults["audio_name_style"] == "language-format"
     assert defaults["language_order_style"] == "regional"
     assert defaults["regional_order"] == ["asia", "americas"]
+    assert defaults["audio_language_priority"] == ["eng", "pt-PT"]
     assert defaults["preserve_commentary_names"] is True
 
 
