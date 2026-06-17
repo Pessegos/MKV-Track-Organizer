@@ -2,6 +2,8 @@ import argparse
 import sys
 from pathlib import Path
 
+import pytest
+
 import mkv_track_organizer as m
 
 
@@ -1286,14 +1288,15 @@ def test_default_audio_ignores_dropped_tracks() -> None:
     assert [track.id for track in m.ordered_tracks([video], [english, portuguese], [])] == [0, 2]
 
 
-def test_preferred_audio_can_be_first_without_being_default() -> None:
+def test_preferred_audio_can_be_first_among_non_english_without_being_default() -> None:
     video = video_track(0)
     english = audio_track(1, "eng")
-    portuguese = audio_track(2, "pt-PT")
+    spanish = audio_track(2, "spa")
+    portuguese = audio_track(3, "pt-PT")
 
     m.apply_default_flags(
         [video],
-        [english, portuguese],
+        [english, spanish, portuguese],
         [],
         preferred_language="pt-PT",
         preferred_audio_default=False,
@@ -1301,7 +1304,7 @@ def test_preferred_audio_can_be_first_without_being_default() -> None:
 
     ordered = m.ordered_tracks(
         [video],
-        [english, portuguese],
+        [english, spanish, portuguese],
         [],
         preferred_language="pt-PT",
         preferred_audio_first=True,
@@ -1309,10 +1312,10 @@ def test_preferred_audio_can_be_first_without_being_default() -> None:
 
     assert english.default is True
     assert portuguese.default is False
-    assert [track.id for track in ordered] == [0, 2, 1]
+    assert [track.id for track in ordered] == [0, 1, 3, 2]
 
 
-def test_audio_language_priority_keeps_english_then_commentary_then_portuguese() -> None:
+def test_default_audio_order_keeps_english_commentary_before_preferred_language() -> None:
     video = video_track(0)
     english = audio_track(1, "eng")
     english_commentary = audio_track(2, "eng", codec="AC-3", codec_id="A_AC3", channels=2)
@@ -1328,7 +1331,6 @@ def test_audio_language_priority_keeps_english_then_commentary_then_portuguese()
         "regional",
         preferred_language="pt-PT",
         preferred_audio_first=True,
-        audio_language_priority="eng, pt-PT",
     )
 
     assert [track.id for track in ordered] == [0, 1, 2, 3, 4]
@@ -1544,7 +1546,7 @@ def test_config_defaults(tmp_path: Path) -> None:
     assert defaults["audio_name_style"] == "language-format"
     assert defaults["language_order_style"] == "regional"
     assert defaults["regional_order"] == ["asia", "americas"]
-    assert defaults["audio_language_priority"] == ["eng", "pt-PT"]
+    assert "audio_language_priority" not in defaults
     assert defaults["preserve_commentary_names"] is True
 
 
@@ -1554,11 +1556,16 @@ def test_parser_defaults_keep_commentary_ocr_enabled() -> None:
 
     assert args.auto_pgs_ocr is True
     assert args.auto_commentary_ocr is True
-    assert m.parse_audio_language_priority(args.audio_language_priority) == ("eng",)
-    assert m.effective_audio_language_priority("") == ("eng",)
-    assert m.effective_audio_language_priority("pt-PT") == ("pt-PT",)
+    assert not hasattr(args, "audio_language_priority")
     assert args.preserve_commentary_names is False
     assert not hasattr(args, "validate_explicit_variant_ocr")
+
+
+def test_parser_rejects_removed_audio_language_priority_option() -> None:
+    parser = m.build_parser({})
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--audio-language-priority", "pt-PT"])
 
 
 def test_config_metadata_edit_mode_accepts_off_and_only(tmp_path: Path) -> None:

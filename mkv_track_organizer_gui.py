@@ -3013,9 +3013,6 @@ class MainWindow(QMainWindow):
             allowed = ", ".join(sorted(organizer.LANGUAGE_ORDER_STYLES))
             raise organizer.OrganizerError(f"--language-order-style must be one of these values: {allowed}.")
         args.regional_order = organizer.parse_regional_order(getattr(args, "regional_order", None))
-        args.audio_language_priority = organizer.effective_audio_language_priority(
-            getattr(args, "audio_language_priority", None)
-        )
         args.preferred_language = organizer.normalize_preferred_language(getattr(args, "preferred_language", ""))
         if (
             not args.preferred_language
