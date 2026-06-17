@@ -350,7 +350,6 @@ class MainWindow(QMainWindow):
         "output_suffix",
         "existing_output_mode",
         "merge_inputs",
-        "audio_language_priority",
         "metadata_edit_mode",
         "audio_name_style",
         "language_order_style",
@@ -528,8 +527,6 @@ class MainWindow(QMainWindow):
         self.subtitle_delays_edit.setPlaceholderText("5:-250")
         self.preferred_language_edit = QLineEdit()
         self.preferred_language_edit.setPlaceholderText("pt-PT")
-        self.audio_priority_edit = QLineEdit()
-        self.audio_priority_edit.setPlaceholderText("blank = eng, e.g. eng, pt-PT")
 
         self.recursive_check = QCheckBox("Recursive")
         self.merge_inputs_check = QCheckBox("Merge selected sources")
@@ -798,9 +795,6 @@ class MainWindow(QMainWindow):
         self.audio_delays_edit.setToolTip("Manual audio delays in milliseconds. Example: 1:150, 2:-250")
         self.subtitle_delays_edit.setToolTip("Manual subtitle delays in milliseconds. Example: 5:-250")
         self.preferred_language_edit.setToolTip("Language code used by the optional preferred-language rules, for example pt-PT")
-        self.audio_priority_edit.setToolTip(
-            "Audio order priority, for example eng, pt-PT. Leave empty for English first. Commentary follows the same language block."
-        )
         self.merge_inputs_check.setToolTip(
             "Mux selected Matroska inputs into one output. The first source with video supplies video; audio/subtitles come from all sources."
         )
@@ -814,7 +808,9 @@ class MainWindow(QMainWindow):
         self.preserve_commentary_names_check.setToolTip(
             "Keep existing audio/subtitle commentary names, for example 'Commentary by Producer X', instead of rewriting them"
         )
-        self.preferred_audio_first_check.setToolTip("Move preferred-language main audio before other main audio")
+        self.preferred_audio_first_check.setToolTip(
+            "Move preferred-language main audio before other non-English main audio"
+        )
         self.preferred_audio_default_check.setToolTip("Make preferred-language audio default when available")
         self.preferred_subtitle_first_check.setToolTip(
             "Move preferred-language normal subtitles before other normal subtitles"
@@ -839,8 +835,6 @@ class MainWindow(QMainWindow):
         existing_output_label.setToolTip("Controls what happens when the target output file already exists.")
         preferred_language_label = QLabel("Preferred language")
         preferred_language_label.setToolTip("Optional language code used by preferred-language rules.")
-        audio_priority_label = QLabel("Audio priority")
-        audio_priority_label.setToolTip("Comma-separated audio language order. Empty uses English first.")
 
         profile_actions = QHBoxLayout()
         profile_actions.addWidget(self.update_profile_button)
@@ -884,10 +878,8 @@ class MainWindow(QMainWindow):
             preferred_toggles.addWidget(checkbox)
         preferred_toggles.addStretch(1)
         advanced_layout.addLayout(preferred_toggles, 6, 2, 1, 2)
-        advanced_layout.addWidget(audio_priority_label, 7, 0)
-        advanced_layout.addWidget(self.audio_priority_edit, 7, 1)
-        advanced_layout.addWidget(existing_output_label, 8, 0)
-        advanced_layout.addWidget(self.existing_output_combo, 8, 1)
+        advanced_layout.addWidget(existing_output_label, 7, 0)
+        advanced_layout.addWidget(self.existing_output_combo, 7, 1)
 
         advanced_toggles = QHBoxLayout()
         for checkbox in [
@@ -903,7 +895,7 @@ class MainWindow(QMainWindow):
         ]:
             advanced_toggles.addWidget(checkbox)
         advanced_toggles.addStretch(1)
-        advanced_layout.addLayout(advanced_toggles, 9, 0, 1, 4)
+        advanced_layout.addLayout(advanced_toggles, 8, 0, 1, 4)
         self.advanced_panel.setVisible(False)
         root.addWidget(self.advanced_panel)
 
@@ -1666,7 +1658,6 @@ class MainWindow(QMainWindow):
             "output_suffix": self.suffix_edit.text().strip(),
             "existing_output_mode": self._existing_output_mode(),
             "merge_inputs": self.merge_inputs_check.isChecked(),
-            "audio_language_priority": self.audio_priority_edit.text().strip(),
             "metadata_edit_mode": self.metadata_combo.currentText(),
             "audio_name_style": self.audio_name_style_combo.currentData() or "auto",
             "language_order_style": self.language_order_style_combo.currentData() or "default",
@@ -1698,12 +1689,6 @@ class MainWindow(QMainWindow):
             self._set_existing_output_mode("skip")
         if "merge_inputs" in payload:
             self.merge_inputs_check.setChecked(bool(payload["merge_inputs"]))
-        if "audio_language_priority" in payload:
-            raw_priority = payload["audio_language_priority"]
-            if isinstance(raw_priority, (list, tuple)):
-                self.audio_priority_edit.setText(", ".join(str(item) for item in raw_priority if str(item).strip()))
-            else:
-                self.audio_priority_edit.setText(str(raw_priority or ""))
         if "metadata_edit_mode" in payload:
             self.metadata_combo.setCurrentText(str(payload["metadata_edit_mode"]))
         if "audio_name_style" in payload:
@@ -1842,10 +1827,6 @@ class MainWindow(QMainWindow):
         self.audio_delays_edit.setText(getattr(args, "audio_delays", "") or "")
         self.subtitle_delays_edit.setText(getattr(args, "subtitle_delays", "") or "")
         self.preferred_language_edit.setText(getattr(args, "preferred_language", "") or "")
-        raw_audio_priority = getattr(args, "audio_language_priority", "") or ""
-        if isinstance(raw_audio_priority, (list, tuple)):
-            raw_audio_priority = ", ".join(str(item) for item in raw_audio_priority if str(item).strip())
-        self.audio_priority_edit.setText(str(raw_audio_priority))
         self._set_existing_output_mode(self._existing_output_mode_from_args(args))
 
         self.recursive_check.setChecked(bool(args.recursive))
@@ -2797,7 +2778,6 @@ class MainWindow(QMainWindow):
             if item.strip()
         ]
         args.preferred_language = self.preferred_language_edit.text().strip()
-        args.audio_language_priority = self.audio_priority_edit.text().strip()
 
         args.recursive = self.recursive_check.isChecked()
         args.dry_run = dry_run
