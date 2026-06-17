@@ -1187,7 +1187,7 @@ class MainWindow(QMainWindow):
         self.audio_sync_analyze_button.setIcon(style.standardIcon(QStyle.SP_MediaPlay))
         self.audio_sync_apply_organizer_button.setIcon(style.standardIcon(QStyle.SP_DialogApplyButton))
         self.audio_sync_apply_organizer_button.setToolTip(
-            "Fill the Organizer input and audio delay fields; Organizer remux applies the delay with mkvmerge --sync."
+            "Fill the Organizer input, audio delay, and subtitle delay fields; Organizer remux applies them with mkvmerge --sync."
         )
         self.audio_sync_apply_organizer_button.setEnabled(False)
         self.audio_sync_export_button.setIcon(style.standardIcon(QStyle.SP_DialogSaveButton))
@@ -1992,6 +1992,28 @@ class MainWindow(QMainWindow):
         )
         return answer == QMessageBox.Yes
 
+    def _matroska_track_ids_by_type(self, source_path: Path, track_type: str) -> list[int]:
+        try:
+            args, _config_path = self._load_default_args()
+            mkvmerge = organizer.resolve_tool_path(
+                args.mkvmerge,
+                "mkvmerge",
+                "MKVMERGE",
+                organizer.common_mkvtoolnix_paths("mkvmerge.exe"),
+            )
+            if not mkvmerge:
+                return []
+            metadata = organizer.load_metadata(mkvmerge, source_path)
+        except Exception as error:
+            self.append_audio_sync_summary_line(f"Could not read subtitle track IDs for Organizer delays: {error}")
+            return []
+
+        return [
+            int(track.get("id"))
+            for track in metadata.get("tracks", [])
+            if track.get("type") == track_type and track.get("id") is not None
+        ]
+
     @Slot()
     def apply_audio_sync_delay_to_organizer(self) -> None:
         if not self.audio_sync_result:
@@ -2016,11 +2038,20 @@ class MainWindow(QMainWindow):
 
         delay_ms = int(round(self.audio_sync_result.timeline_shift_seconds * 1000))
         delay_text = ", ".join(f"{stream.index}:{delay_ms:+d}" for stream in selected_streams)
+        subtitle_track_ids = self._matroska_track_ids_by_type(source_path, "subtitles")
+        if not subtitle_track_ids:
+            subtitle_track_ids = [stream.index for stream in self.audio_sync_source_streams if stream.type == "subtitle"]
+        subtitle_delay_text = ", ".join(f"{track_id}:{delay_ms:+d}" for track_id in subtitle_track_ids)
         self.input_paths = []
         self.add_input_paths([source_path])
         self.audio_delays_edit.setText(delay_text)
+        self.subtitle_delays_edit.setText(subtitle_delay_text)
         self.tabs.setCurrentIndex(0)
         self.append_audio_sync_summary_line(f"Organizer will apply audio delays: {delay_text}")
+        if subtitle_delay_text:
+            self.append_audio_sync_summary_line(f"Organizer will apply subtitle delays: {subtitle_delay_text}")
+        else:
+            self.append_audio_sync_summary_line("Organizer found no source subtitles to delay.")
         self.append_audio_sync_summary_line(
             f"Timeline shift: {audio_sync.format_delay_ms(self.audio_sync_result.timeline_shift_seconds)}"
         )
