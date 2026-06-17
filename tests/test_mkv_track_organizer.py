@@ -131,6 +131,8 @@ def test_language_hints_fix_wrong_metadata_language() -> None:
     assert m.normalize_language_from_properties("und", "Taiwan") == "zh-TW"
     assert m.normalize_language_from_properties("zh", "Chinese (Hong Kong)") == "zh-HK"
     assert m.normalize_language_from_properties("zh", "Chinese (Simplified)") == "zh-Hans"
+    assert m.normalize_language_from_properties("zh", "Mandarin") == "cmn"
+    assert m.normalize_language_from_properties("zh", "Taiwanese Mandarin") == "zh-TW"
     assert m.normalize_language_from_properties("yue", "Cantonese") == "yue"
     assert m.normalize_language_from_properties("por", "European (Forced)") == "pt-PT"
     assert m.normalize_language_from_properties("spa", "European") == "es-ES"
@@ -165,6 +167,30 @@ def test_duplicate_detection_respects_language_variants_from_track_names() -> No
     assert canadian.output_language == "fr-CA"
     assert not french.duplicate_group
     assert not canadian.duplicate_group
+
+
+def test_duplicate_detection_keeps_taiwanese_mandarin_separate() -> None:
+    mandarin = audio_track(17, "zh", codec="E-AC-3", codec_id="A_EAC3", channels=6, original_name="Mandarin")
+    taiwanese = audio_track(
+        27,
+        "zh",
+        codec="E-AC-3",
+        codec_id="A_EAC3",
+        channels=6,
+        original_name="Taiwanese Mandarin",
+    )
+    for track in [mandarin, taiwanese]:
+        language = m.normalize_language_from_properties(track.language, track.original_name)
+        track.language = language
+        track.output_language = language
+        track.language_name = m.language_display_name(language)
+
+    m.detect_duplicate_tracks(Path("mulanv2-tagless.mka"), [mandarin, taiwanese], [])
+
+    assert mandarin.output_language == "cmn"
+    assert taiwanese.output_language == "zh-TW"
+    assert not mandarin.duplicate_group
+    assert not taiwanese.duplicate_group
 
 
 def test_audio_name_auto_keeps_format_only_for_single_language() -> None:
