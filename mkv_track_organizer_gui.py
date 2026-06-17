@@ -349,6 +349,7 @@ class MainWindow(QMainWindow):
     PROFILE_FIELDS = (
         "output_suffix",
         "existing_output_mode",
+        "merge_inputs",
         "metadata_edit_mode",
         "audio_name_style",
         "language_order_style",
@@ -1654,6 +1655,7 @@ class MainWindow(QMainWindow):
         return {
             "output_suffix": self.suffix_edit.text().strip(),
             "existing_output_mode": self._existing_output_mode(),
+            "merge_inputs": self.merge_inputs_check.isChecked(),
             "metadata_edit_mode": self.metadata_combo.currentText(),
             "audio_name_style": self.audio_name_style_combo.currentData() or "auto",
             "language_order_style": self.language_order_style_combo.currentData() or "default",
@@ -1683,6 +1685,8 @@ class MainWindow(QMainWindow):
             self._set_existing_output_mode("overwrite")
         elif payload.get("skip_existing"):
             self._set_existing_output_mode("skip")
+        if "merge_inputs" in payload:
+            self.merge_inputs_check.setChecked(bool(payload["merge_inputs"]))
         if "metadata_edit_mode" in payload:
             self.metadata_combo.setCurrentText(str(payload["metadata_edit_mode"]))
         if "audio_name_style" in payload:
