@@ -529,7 +529,7 @@ class MainWindow(QMainWindow):
         self.preferred_language_edit = QLineEdit()
         self.preferred_language_edit.setPlaceholderText("pt-PT")
         self.audio_priority_edit = QLineEdit()
-        self.audio_priority_edit.setPlaceholderText("eng, pt-PT")
+        self.audio_priority_edit.setPlaceholderText("blank = eng, e.g. eng, pt-PT")
 
         self.recursive_check = QCheckBox("Recursive")
         self.merge_inputs_check = QCheckBox("Merge selected sources")
@@ -799,7 +799,7 @@ class MainWindow(QMainWindow):
         self.subtitle_delays_edit.setToolTip("Manual subtitle delays in milliseconds. Example: 5:-250")
         self.preferred_language_edit.setToolTip("Language code used by the optional preferred-language rules, for example pt-PT")
         self.audio_priority_edit.setToolTip(
-            "Optional audio order priority, for example eng, pt-PT. Commentary follows the same language block."
+            "Audio order priority, for example eng, pt-PT. Leave empty for English first. Commentary follows the same language block."
         )
         self.merge_inputs_check.setToolTip(
             "Mux selected Matroska inputs into one output. The first source with video supplies video; audio/subtitles come from all sources."
@@ -840,7 +840,7 @@ class MainWindow(QMainWindow):
         preferred_language_label = QLabel("Preferred language")
         preferred_language_label.setToolTip("Optional language code used by preferred-language rules.")
         audio_priority_label = QLabel("Audio priority")
-        audio_priority_label.setToolTip("Optional comma-separated audio language order, for example eng, pt-PT.")
+        audio_priority_label.setToolTip("Comma-separated audio language order. Empty uses English first.")
 
         profile_actions = QHBoxLayout()
         profile_actions.addWidget(self.update_profile_button)
@@ -3033,7 +3033,7 @@ class MainWindow(QMainWindow):
             allowed = ", ".join(sorted(organizer.LANGUAGE_ORDER_STYLES))
             raise organizer.OrganizerError(f"--language-order-style must be one of these values: {allowed}.")
         args.regional_order = organizer.parse_regional_order(getattr(args, "regional_order", None))
-        args.audio_language_priority = organizer.parse_audio_language_priority(
+        args.audio_language_priority = organizer.effective_audio_language_priority(
             getattr(args, "audio_language_priority", None)
         )
         args.preferred_language = organizer.normalize_preferred_language(getattr(args, "preferred_language", ""))

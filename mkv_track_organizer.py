@@ -2072,12 +2072,19 @@ def parse_audio_language_priority(value: Any) -> tuple[str, ...]:
     priority: list[str] = []
     seen: set[str] = set()
     for raw_item in raw_items:
-        language = normalize_language_code(str(raw_item).strip())
+        raw_language = str(raw_item).strip()
+        if not raw_language:
+            continue
+        language = normalize_language_code(raw_language)
         if not language or language in seen:
             continue
         priority.append(language)
         seen.add(language)
     return tuple(priority)
+
+
+def effective_audio_language_priority(value: Any) -> tuple[str, ...]:
+    return parse_audio_language_priority(value) or DEFAULT_AUDIO_LANGUAGE_PRIORITY
 
 
 def track_matches_language_code(track: TrackInfo, language_code: str | None) -> bool:
@@ -7553,7 +7560,7 @@ def prepare_batch_run(args: argparse.Namespace, config_path: Path | None = None)
         allowed = ", ".join(sorted(LANGUAGE_ORDER_STYLES))
         raise OrganizerError(f"--language-order-style must be one of these values: {allowed}.")
     args.regional_order = parse_regional_order(getattr(args, "regional_order", None))
-    args.audio_language_priority = parse_audio_language_priority(getattr(args, "audio_language_priority", None))
+    args.audio_language_priority = effective_audio_language_priority(getattr(args, "audio_language_priority", None))
     args.preferred_language = normalize_preferred_language(getattr(args, "preferred_language", ""))
     if (
         not args.preferred_language
