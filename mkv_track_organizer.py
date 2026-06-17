@@ -2170,31 +2170,38 @@ def audio_sort_key(
 ) -> tuple[Any, ...]:
     role = detect_audio_role(track)
     special_role_group = 1 if role in {"Audio Description", "Commentary", "Isolated Score"} else 0
+    english_group = 0 if track_is_english_first_audio(track) else 1
+
+    if special_role_group:
+        if language_order_style == "regional":
+            return (1, english_group, *language_sort_key(track, language_order_style, regional_order), track.order)
+        return (1, english_group, 0 if track.default else 1, track.order)
+
     if track_is_english_first_audio(track):
-        return (0, special_role_group, 0 if track.default else 1, track.order)
+        return (0, 0, 0 if track.default else 1, track.order)
 
     if preferred_audio_first and normalize_preferred_language(preferred_language):
         preferred_group = 0 if track_matches_preferred_language(track, preferred_language) else 1
         if language_order_style == "regional":
             return (
+                0,
                 1,
-                special_role_group,
                 preferred_group,
                 0 if track.default else 1,
                 *language_sort_key(track, language_order_style, regional_order),
                 track.order,
             )
-        return (1, special_role_group, preferred_group, 0 if track.default else 1, track.order)
+        return (0, 1, preferred_group, 0 if track.default else 1, track.order)
 
     if language_order_style == "regional":
         return (
+            0,
             1,
             0 if track.default else 1,
-            special_role_group,
             *language_sort_key(track, language_order_style, regional_order),
             track.order,
         )
-    return (1, 0 if track.default else 1, special_role_group, track.order)
+    return (0, 1, 0 if track.default else 1, track.order)
 
 
 def subtitle_extension(track: TrackInfo) -> str:

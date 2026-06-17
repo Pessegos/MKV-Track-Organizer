@@ -1315,7 +1315,7 @@ def test_preferred_audio_can_be_first_among_non_english_without_being_default() 
     assert [track.id for track in ordered] == [0, 1, 3, 2]
 
 
-def test_default_audio_order_keeps_english_commentary_before_preferred_language() -> None:
+def test_default_audio_order_keeps_commentary_after_main_audio() -> None:
     video = video_track(0)
     english = audio_track(1, "eng")
     english_commentary = audio_track(2, "eng", codec="AC-3", codec_id="A_AC3", channels=2)
@@ -1333,7 +1333,7 @@ def test_default_audio_order_keeps_english_commentary_before_preferred_language(
         preferred_audio_first=True,
     )
 
-    assert [track.id for track in ordered] == [0, 1, 2, 3, 4]
+    assert [track.id for track in ordered] == [0, 1, 3, 4, 2]
 
 
 def test_preferred_language_variant_matches_generic_but_not_conflicting_variant() -> None:
