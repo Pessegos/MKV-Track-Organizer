@@ -348,6 +348,7 @@ class MainWindow(QMainWindow):
     PROFILE_STORE_VERSION = 1
     PROFILE_FIELDS = (
         "output_suffix",
+        "existing_output_mode",
         "metadata_edit_mode",
         "audio_name_style",
         "language_order_style",
@@ -574,6 +575,10 @@ class MainWindow(QMainWindow):
         )
         self.report_format_combo = QComboBox()
         self.report_format_combo.addItems(["both", "json", "txt"])
+        self.existing_output_combo = QComboBox()
+        self.existing_output_combo.addItem("Stop if exists", "stop")
+        self.existing_output_combo.addItem("Overwrite", "overwrite")
+        self.existing_output_combo.addItem("Skip existing", "skip")
 
         self.advanced_button = QToolButton()
         self.advanced_panel = QWidget()
@@ -781,6 +786,9 @@ class MainWindow(QMainWindow):
         self._apply_combo_help(self.audio_name_style_combo, self.AUDIO_NAME_STYLE_HELP)
         self._apply_combo_help(self.language_order_style_combo, self.LANGUAGE_ORDER_STYLE_HELP)
         self._apply_combo_help(self.regional_order_combo, self.REGIONAL_ORDER_HELP)
+        self.existing_output_combo.setToolTip(
+            "Choose what happens when the target output file already exists. Stop is safest; Overwrite replaces it; Skip leaves it untouched."
+        )
         self.subtitle_language_edit.setToolTip("Manual language override, for example spa:7,8; fr-CA:9")
         self.forced_ids_edit.setToolTip("Manual forced-subtitle override, for example 5,8,12")
         self.audio_delays_edit.setToolTip("Manual audio delays in milliseconds. Example: 1:150, 2:-250")
@@ -820,6 +828,8 @@ class MainWindow(QMainWindow):
         language_order_label.setToolTip("Controls how languages are sorted in the output.")
         regional_order_label = QLabel("Region order")
         regional_order_label.setToolTip("Controls region priority when Language order is Regional.")
+        existing_output_label = QLabel("Existing output")
+        existing_output_label.setToolTip("Controls what happens when the target output file already exists.")
         preferred_language_label = QLabel("Preferred language")
         preferred_language_label.setToolTip("Optional language code used by preferred-language rules.")
 
@@ -865,6 +875,8 @@ class MainWindow(QMainWindow):
             preferred_toggles.addWidget(checkbox)
         preferred_toggles.addStretch(1)
         advanced_layout.addLayout(preferred_toggles, 6, 2, 1, 2)
+        advanced_layout.addWidget(existing_output_label, 7, 0)
+        advanced_layout.addWidget(self.existing_output_combo, 7, 1)
 
         advanced_toggles = QHBoxLayout()
         for checkbox in [
@@ -880,7 +892,7 @@ class MainWindow(QMainWindow):
         ]:
             advanced_toggles.addWidget(checkbox)
         advanced_toggles.addStretch(1)
-        advanced_layout.addLayout(advanced_toggles, 7, 0, 1, 4)
+        advanced_layout.addLayout(advanced_toggles, 8, 0, 1, 4)
         self.advanced_panel.setVisible(False)
         root.addWidget(self.advanced_panel)
 
@@ -1617,9 +1629,31 @@ class MainWindow(QMainWindow):
         self.update_profile_button.setEnabled(has_profile)
         self.delete_profile_button.setEnabled(has_profile)
 
+    def _existing_output_mode(self) -> str:
+        mode = str(self.existing_output_combo.currentData() or "stop")
+        return mode if mode in {"stop", "overwrite", "skip"} else "stop"
+
+    def _set_existing_output_mode(self, mode: str) -> None:
+        normalized_mode = str(mode or "stop").strip().lower().replace("_", "-")
+        if normalized_mode in {"skip-existing", "skip_existing"}:
+            normalized_mode = "skip"
+        if normalized_mode not in {"stop", "overwrite", "skip"}:
+            normalized_mode = "stop"
+        index = self.existing_output_combo.findData(normalized_mode)
+        self.existing_output_combo.setCurrentIndex(index if index >= 0 else 0)
+
+    @staticmethod
+    def _existing_output_mode_from_args(args) -> str:
+        if bool(getattr(args, "overwrite", False)):
+            return "overwrite"
+        if bool(getattr(args, "skip_existing", False)):
+            return "skip"
+        return "stop"
+
     def _profile_payload_from_ui(self) -> dict:
         return {
             "output_suffix": self.suffix_edit.text().strip(),
+            "existing_output_mode": self._existing_output_mode(),
             "metadata_edit_mode": self.metadata_combo.currentText(),
             "audio_name_style": self.audio_name_style_combo.currentData() or "auto",
             "language_order_style": self.language_order_style_combo.currentData() or "default",
@@ -1643,6 +1677,12 @@ class MainWindow(QMainWindow):
     def _apply_profile_payload(self, payload: dict) -> None:
         if "output_suffix" in payload:
             self.suffix_edit.setText(str(payload["output_suffix"] or ""))
+        if "existing_output_mode" in payload:
+            self._set_existing_output_mode(str(payload["existing_output_mode"]))
+        elif payload.get("overwrite"):
+            self._set_existing_output_mode("overwrite")
+        elif payload.get("skip_existing"):
+            self._set_existing_output_mode("skip")
         if "metadata_edit_mode" in payload:
             self.metadata_combo.setCurrentText(str(payload["metadata_edit_mode"]))
         if "audio_name_style" in payload:
@@ -1781,6 +1821,7 @@ class MainWindow(QMainWindow):
         self.audio_delays_edit.setText(getattr(args, "audio_delays", "") or "")
         self.subtitle_delays_edit.setText(getattr(args, "subtitle_delays", "") or "")
         self.preferred_language_edit.setText(getattr(args, "preferred_language", "") or "")
+        self._set_existing_output_mode(self._existing_output_mode_from_args(args))
 
         self.recursive_check.setChecked(bool(args.recursive))
         self.merge_inputs_check.setChecked(bool(getattr(args, "merge_inputs", False)))
@@ -2704,6 +2745,9 @@ class MainWindow(QMainWindow):
         args.recursive = self.recursive_check.isChecked()
         args.dry_run = dry_run
         args.merge_inputs = self.merge_inputs_check.isChecked()
+        existing_output_mode = self._existing_output_mode()
+        args.overwrite = existing_output_mode == "overwrite"
+        args.skip_existing = existing_output_mode == "skip"
         if self.tracks_table.rowCount() and self.manual_track_order_active:
             self._sync_track_order_from_table()
         args.track_selection_overrides = dict(self.manual_track_includes)
