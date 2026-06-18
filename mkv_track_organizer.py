@@ -76,7 +76,7 @@ VARIANT_METADATA_OVERRIDE_MIN_CONFIDENCE = 0.70
 OCR_VALIDATED_VARIANT_LANGUAGES = {"spa", "chi"}
 METADATA_EDIT_MODES = {"off", "auto", "only"}
 AUDIO_NAME_STYLES = {"auto", "format", "language-format", "keep"}
-LANGUAGE_ORDER_STYLES = {"default", "regional"}
+LANGUAGE_ORDER_STYLES = {"custom", "default", "regional"}
 CHINESE_TRADITIONAL_REGIONAL_VARIANTS = {"zh-TW", "zh-HK"}
 MATROSKA_INPUT_SUFFIXES = {".mkv", ".mka"}
 
@@ -284,6 +284,7 @@ CONFIG_PATH_LIST_KEYS = {
 }
 
 CONFIG_STRING_LIST_KEYS = {
+    "custom_language_order",
     "subtitle_language_ids",
     "regional_order",
 }
@@ -2129,6 +2130,31 @@ def parse_regional_order(value: Any) -> tuple[str, ...]:
     return tuple(selected + [region_name for region_name in DEFAULT_REGIONAL_ORDER if region_name not in seen])
 
 
+def parse_custom_language_order(value: Any) -> tuple[str, ...]:
+    raw_items: list[str]
+    if value is None:
+        raw_items = []
+    elif isinstance(value, str):
+        raw_items = re.split(r"[;,]", value)
+    else:
+        raw_items = []
+        for item in value:
+            raw_items.extend(re.split(r"[;,]", str(item)))
+
+    selected: list[str] = []
+    seen: set[str] = set()
+    for raw_item in raw_items:
+        raw_language = str(raw_item).strip()
+        if not raw_language:
+            continue
+        language_code = normalize_language_code(raw_language)
+        if language_code in {"", "und"} or language_code in seen:
+            continue
+        selected.append(language_code)
+        seen.add(language_code)
+    return tuple(selected)
+
+
 def regional_language_order_map(regional_order: Any = None) -> dict[str, tuple[int, int]]:
     order = parse_regional_order(regional_order)
     groups_by_name = {region_name: language_codes for region_name, language_codes in REGIONAL_LANGUAGE_GROUPS}
@@ -2151,6 +2177,19 @@ def regional_language_sort_key(code: str | None, regional_order: Any = None) -> 
     return (*rank, language_name)
 
 
+def custom_language_sort_key(code: str | None, custom_language_order: Any = None) -> tuple[int, str]:
+    language_code = normalize_language_code(code)
+    language_name = remove_accents(language_display_name(language_code)).casefold()
+    order = parse_custom_language_order(custom_language_order)
+    order_map = {ordered_code: index for index, ordered_code in enumerate(order)}
+    rank = order_map.get(language_code)
+    if rank is None:
+        rank = order_map.get(base_language_code(language_code))
+    if rank is None:
+        return (len(order), language_name)
+    return (rank, language_name)
+
+
 def language_sort_key(
     track: TrackInfo,
     language_order_style: str = "default",
@@ -2159,6 +2198,8 @@ def language_sort_key(
     language_name = remove_accents(track.language_name or language_display_name(track_language_code(track))).casefold()
     if language_order_style == "regional":
         return (*regional_language_sort_key(track_language_code(track), regional_order), language_name)
+    if language_order_style == "custom":
+        return custom_language_sort_key(track_language_code(track), regional_order)
     return (language_name,)
 
 
@@ -2172,6 +2213,14 @@ def audio_sort_key(
     role = detect_audio_role(track)
     special_role_group = 1 if role in {"Audio Description", "Commentary", "Isolated Score"} else 0
     english_group = 0 if track_is_english_first_audio(track) else 1
+
+    if language_order_style == "custom":
+        return (
+            special_role_group,
+            *language_sort_key(track, language_order_style, regional_order),
+            0 if track.default else 1,
+            track.order,
+        )
 
     if special_role_group:
         if language_order_style == "regional":
@@ -5133,6 +5182,9 @@ def subtitle_language_sort_key(
     language_order_style: str = "default",
     regional_order: Any = None,
 ) -> tuple[Any, ...]:
+    if language_order_style == "custom":
+        return (0, *language_sort_key(track, language_order_style, regional_order))
+
     if is_english(track):
         return (0, "")
 
@@ -5171,7 +5223,7 @@ def subtitle_sort_key(
     language_key = subtitle_language_sort_key(track, language_order_style, regional_order)
     if role_group == 0 and preferred_subtitle_first and normalize_preferred_language(preferred_language):
         preferred_group = 0 if track_matches_preferred_language(track, preferred_language) else 1
-        if is_english(track):
+        if is_english(track) and language_order_style != "custom":
             return (primary_group, role_group, preferred_group, 0, english_normal_subtitle_rank(track), track.order)
         return (
             primary_group,
@@ -5184,7 +5236,7 @@ def subtitle_sort_key(
             track.order,
         )
 
-    if role_group == 0 and is_english(track):
+    if role_group == 0 and is_english(track) and language_order_style != "custom":
         return (primary_group, role_group, 0, english_normal_subtitle_rank(track), track.order)
 
     if role_group == 0:
@@ -6466,7 +6518,11 @@ def process_file(
         apply_default_language_variants(subtitles)
     audio_name_style = getattr(args, "audio_name_style", "auto")
     language_order_style = getattr(args, "language_order_style", "default")
-    regional_order = getattr(args, "regional_order", None)
+    regional_order = (
+        getattr(args, "custom_language_order", None)
+        if language_order_style == "custom"
+        else getattr(args, "regional_order", None)
+    )
     track_order_overrides = getattr(args, "track_order_overrides", None)
     preferred_language = getattr(args, "preferred_language", "")
     preferred_audio_first = bool(getattr(args, "preferred_audio_first", False))
@@ -6800,7 +6856,11 @@ def process_merged_inputs(
 
     audio_name_style = getattr(args, "audio_name_style", "auto")
     language_order_style = getattr(args, "language_order_style", "default")
-    regional_order = getattr(args, "regional_order", None)
+    regional_order = (
+        getattr(args, "custom_language_order", None)
+        if language_order_style == "custom"
+        else getattr(args, "regional_order", None)
+    )
     track_order_overrides = getattr(args, "track_order_overrides", None)
     preferred_language = getattr(args, "preferred_language", "")
     preferred_audio_first = bool(getattr(args, "preferred_audio_first", False))
@@ -7162,6 +7222,14 @@ def build_parser(config_defaults: dict[str, Any] | None = None) -> argparse.Argu
             "Region order used when --language-order-style regional is active. "
             "Use comma-separated region names, e.g. asia,americas,europe. "
             "Missing regions are appended automatically."
+        ),
+    )
+    parser.add_argument(
+        "--custom-language-order",
+        default=default("custom_language_order", []),
+        help=(
+            "Comma- or semicolon-separated language codes used when --language-order-style custom is active. "
+            "Example: eng,pt-PT,por,spa,es-419,fre."
         ),
     )
     parser.add_argument(
@@ -7602,6 +7670,9 @@ def prepare_batch_run(args: argparse.Namespace, config_path: Path | None = None)
         allowed = ", ".join(sorted(LANGUAGE_ORDER_STYLES))
         raise OrganizerError(f"--language-order-style must be one of these values: {allowed}.")
     args.regional_order = parse_regional_order(getattr(args, "regional_order", None))
+    args.custom_language_order = parse_custom_language_order(getattr(args, "custom_language_order", None))
+    if args.language_order_style == "custom" and not args.custom_language_order:
+        raise OrganizerError("--custom-language-order is required when --language-order-style custom is active.")
     args.preferred_language = normalize_preferred_language(getattr(args, "preferred_language", ""))
     if (
         not args.preferred_language

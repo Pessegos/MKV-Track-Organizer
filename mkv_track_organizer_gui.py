@@ -354,6 +354,7 @@ class MainWindow(QMainWindow):
         "audio_name_style",
         "language_order_style",
         "regional_order",
+        "custom_language_order",
         "report_format",
         "smart_sub_detection",
         "drop_empty_subs",
@@ -459,6 +460,7 @@ class MainWindow(QMainWindow):
         "keep": "Keeps the existing audio track names from the input file.",
     }
     LANGUAGE_ORDER_STYLE_HELP = {
+        "custom": "Uses the language-code order saved in the Config tab.",
         "default": "Uses the existing organizer order rules.",
         "regional": "Groups languages by broad regions, with Europe before Americas and Asia.",
     }
@@ -567,6 +569,7 @@ class MainWindow(QMainWindow):
         self.language_order_style_combo = QComboBox()
         self.language_order_style_combo.addItem("Default", "default")
         self.language_order_style_combo.addItem("Regional", "regional")
+        self.language_order_style_combo.addItem("Custom", "custom")
         self.regional_order_combo = QComboBox()
         self.regional_order_combo.addItem("Europe first", "europe,americas,asia,oceania,middle-east-africa")
         self.regional_order_combo.addItem("Americas first", "americas,europe,asia,oceania,middle-east-africa")
@@ -582,6 +585,17 @@ class MainWindow(QMainWindow):
         self.existing_output_combo.addItem("Stop if exists", "stop")
         self.existing_output_combo.addItem("Overwrite", "overwrite")
         self.existing_output_combo.addItem("Skip existing", "skip")
+        self.config_custom_language_order_edit = QLineEdit()
+        self.config_custom_language_order_edit.setPlaceholderText("eng, pt-PT, por, es-ES, es-419, fr-FR, fr-CA")
+        self.config_use_custom_order_check = QCheckBox("Use custom order by default")
+        self.config_path_label = QLabel(str(organizer.DEFAULT_CONFIG_PATH))
+        self.config_status_label = QLabel("")
+        self.config_reload_button = QPushButton("Reload")
+        self.config_save_button = QPushButton("Save config")
+        self.config_apply_button = QPushButton("Use custom order")
+        self.config_reload_button.setObjectName("secondaryButton")
+        self.config_save_button.setObjectName("primaryButton")
+        self.config_apply_button.setObjectName("secondaryButton")
 
         self.advanced_button = QToolButton()
         self.advanced_panel = QWidget()
@@ -797,6 +811,14 @@ class MainWindow(QMainWindow):
         self.audio_delays_edit.setToolTip("Manual audio delays in milliseconds. Example: 1:150, 2:-250")
         self.subtitle_delays_edit.setToolTip("Manual subtitle delays in milliseconds. Example: 5:-250")
         self.preferred_language_edit.setToolTip("Language code used by the optional preferred-language rules, for example pt-PT")
+        self.config_custom_language_order_edit.setToolTip(
+            "Comma- or semicolon-separated language codes used by Language order = Custom."
+        )
+        self.config_use_custom_order_check.setToolTip("Open the Organizer with Language order set to Custom")
+        self.config_path_label.setToolTip("Config file used for app-wide defaults")
+        self.config_reload_button.setToolTip("Reload the config file from disk")
+        self.config_save_button.setToolTip("Save these app-wide defaults to the config file")
+        self.config_apply_button.setToolTip("Switch the Organizer to Language order = Custom")
         self.merge_inputs_check.setToolTip(
             "Mux selected Matroska inputs into one output. The first source with video supplies video; audio/subtitles come from all sources."
         )
@@ -980,6 +1002,7 @@ class MainWindow(QMainWindow):
         self.statusBar().addPermanentWidget(self.progress_label)
         self.statusBar().addPermanentWidget(self.progress, 1)
         self.tabs.addTab(organizer_tab, style.standardIcon(QStyle.SP_FileIcon), "Organizer")
+        self.tabs.addTab(self._build_config_tab(), style.standardIcon(QStyle.SP_FileDialogDetailedView), "Config")
         self.tabs.addTab(self._build_audio_sync_tab(), style.standardIcon(QStyle.SP_MediaSeekForward), "Audio Sync")
         self.tabs.addTab(self._build_makemkv_tab(), style.standardIcon(QStyle.SP_DirOpenIcon), "MakeMKV Batch")
         self.setCentralWidget(self.tabs)
@@ -992,6 +1015,9 @@ class MainWindow(QMainWindow):
             self.organizer_reset_button.clicked.connect(self.reset_organizer_tab)
         browse_output.clicked.connect(self.choose_output_folder)
         self.advanced_button.toggled.connect(self.toggle_advanced)
+        self.config_reload_button.clicked.connect(self.reload_config_tab)
+        self.config_save_button.clicked.connect(self.save_config_tab)
+        self.config_apply_button.clicked.connect(self.apply_custom_config_to_organizer)
 
     def _build_makemkv_tab(self) -> QWidget:
         style = self.style()
@@ -1099,6 +1125,33 @@ class MainWindow(QMainWindow):
         output_button.clicked.connect(self.choose_makemkv_output_folder)
         self.makemkv_selection_combo.currentIndexChanged.connect(self._makemkv_selection_changed)
         self._makemkv_selection_changed()
+        return tab
+
+    def _build_config_tab(self) -> QWidget:
+        tab = QWidget()
+        root = QVBoxLayout(tab)
+        root.setContentsMargins(12, 12, 12, 10)
+        root.setSpacing(10)
+
+        config_group = QGroupBox("Organizer defaults")
+        config_layout = QGridLayout(config_group)
+        config_layout.setColumnStretch(1, 1)
+        config_layout.addWidget(QLabel("Config file"), 0, 0)
+        config_layout.addWidget(self.config_path_label, 0, 1, 1, 3)
+        config_layout.addWidget(QLabel("Custom language order"), 1, 0)
+        config_layout.addWidget(self.config_custom_language_order_edit, 1, 1, 1, 3)
+        config_layout.addWidget(self.config_use_custom_order_check, 2, 1, 1, 3)
+
+        actions = QHBoxLayout()
+        actions.addWidget(self.config_reload_button)
+        actions.addWidget(self.config_save_button)
+        actions.addWidget(self.config_apply_button)
+        actions.addStretch(1)
+        config_layout.addLayout(actions, 3, 1, 1, 3)
+        config_layout.addWidget(self.config_status_label, 4, 1, 1, 3)
+
+        root.addWidget(config_group)
+        root.addStretch(1)
         return tab
 
     def _build_audio_sync_tab(self) -> QWidget:
@@ -1570,6 +1623,75 @@ class MainWindow(QMainWindow):
         parser = organizer.build_parser(config_defaults)
         return parser.parse_args([]), config_path
 
+    def _config_file_path(self) -> Path:
+        return Path(self.default_config_path or organizer.DEFAULT_CONFIG_PATH)
+
+    def _read_raw_config(self) -> dict:
+        path = self._config_file_path()
+        if not path.exists():
+            return {}
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            self.config_status_label.setText(f"Could not read config: {error}")
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def reload_config_tab(self) -> None:
+        config = self._read_raw_config()
+        raw_order = config.get("custom_language_order", getattr(self.default_args, "custom_language_order", []))
+        if isinstance(raw_order, (list, tuple)):
+            order_text = ", ".join(str(item) for item in raw_order if str(item).strip())
+        else:
+            order_text = str(raw_order or "")
+        self.config_custom_language_order_edit.setText(order_text)
+        self.config_use_custom_order_check.setChecked(
+            str(config.get("language_order_style", getattr(self.default_args, "language_order_style", ""))) == "custom"
+        )
+        self.config_path_label.setText(str(self._config_file_path()))
+        self.config_status_label.setText("Config loaded.")
+
+    def save_config_tab(self) -> None:
+        order_text = self.config_custom_language_order_edit.text().strip()
+        try:
+            parsed_order = organizer.parse_custom_language_order(order_text)
+        except organizer.OrganizerError as error:
+            self.config_status_label.setText(str(error))
+            return
+
+        config = self._read_raw_config()
+        if parsed_order:
+            config["custom_language_order"] = list(parsed_order)
+        else:
+            config.pop("custom_language_order", None)
+        if self.config_use_custom_order_check.isChecked():
+            if not parsed_order:
+                self.config_status_label.setText("Custom order is required when custom order is the default.")
+                return
+            config["language_order_style"] = "custom"
+        elif config.get("language_order_style") == "custom":
+            config["language_order_style"] = "default"
+
+        path = self._config_file_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
+        except OSError as error:
+            self.config_status_label.setText(f"Could not save config: {error}")
+            return
+
+        self.default_args, self.default_config_path = self._load_default_args()
+        self.config_path_label.setText(str(self._config_file_path()))
+        self.config_status_label.setText("Config saved.")
+
+    def apply_custom_config_to_organizer(self) -> None:
+        index = self.language_order_style_combo.findData("custom")
+        if index >= 0:
+            self.language_order_style_combo.setCurrentIndex(index)
+        self.config_use_custom_order_check.setChecked(True)
+        self._clear_manual_track_order()
+        self.config_status_label.setText("Organizer will use the custom language order.")
+
     def _load_profile_store(self) -> None:
         self.profiles = {}
         self.last_profile_name = ""
@@ -1668,6 +1790,7 @@ class MainWindow(QMainWindow):
             "audio_name_style": self.audio_name_style_combo.currentData() or "auto",
             "language_order_style": self.language_order_style_combo.currentData() or "default",
             "regional_order": self.regional_order_combo.currentData() or "",
+            "custom_language_order": self.config_custom_language_order_edit.text().strip(),
             "report_format": self.report_format_combo.currentText(),
             "smart_sub_detection": self.smart_subs_check.isChecked(),
             "drop_empty_subs": self.drop_empty_check.isChecked(),
@@ -1710,6 +1833,14 @@ class MainWindow(QMainWindow):
             index = self.regional_order_combo.findData(str(payload["regional_order"]))
             if index >= 0:
                 self.regional_order_combo.setCurrentIndex(index)
+        if "custom_language_order" in payload:
+            raw_order = payload["custom_language_order"]
+            if isinstance(raw_order, (list, tuple)):
+                self.config_custom_language_order_edit.setText(
+                    ", ".join(str(item) for item in raw_order if str(item).strip())
+                )
+            else:
+                self.config_custom_language_order_edit.setText(str(raw_order or ""))
         if "report_format" in payload:
             self.report_format_combo.setCurrentText(str(payload["report_format"]))
 
@@ -1875,6 +2006,13 @@ class MainWindow(QMainWindow):
         regional_order_index = self.regional_order_combo.findData(regional_order)
         if regional_order_index >= 0:
             self.regional_order_combo.setCurrentIndex(regional_order_index)
+        custom_order = getattr(args, "custom_language_order", []) or []
+        if isinstance(custom_order, (list, tuple)):
+            custom_order = ", ".join(str(item) for item in custom_order if str(item).strip())
+        self.config_custom_language_order_edit.setText(str(custom_order))
+        self.config_use_custom_order_check.setChecked(
+            str(getattr(args, "language_order_style", "") or "") == "custom"
+        )
         self._sync_combo_tooltip(self.metadata_combo, self.METADATA_MODE_HELP)
         self._sync_combo_tooltip(self.audio_name_style_combo, self.AUDIO_NAME_STYLE_HELP)
         self._language_order_style_changed()
@@ -2824,6 +2962,7 @@ class MainWindow(QMainWindow):
         args.audio_name_style = self.audio_name_style_combo.currentData() or "auto"
         args.language_order_style = self.language_order_style_combo.currentData() or "default"
         args.regional_order = self.regional_order_combo.currentData() or ""
+        args.custom_language_order = self.config_custom_language_order_edit.text().strip()
         args.report_format = self.report_format_combo.currentText()
         return args, config_path
 
@@ -3032,6 +3171,13 @@ class MainWindow(QMainWindow):
             allowed = ", ".join(sorted(organizer.LANGUAGE_ORDER_STYLES))
             raise organizer.OrganizerError(f"--language-order-style must be one of these values: {allowed}.")
         args.regional_order = organizer.parse_regional_order(getattr(args, "regional_order", None))
+        args.custom_language_order = organizer.parse_custom_language_order(
+            getattr(args, "custom_language_order", None)
+        )
+        if args.language_order_style == "custom" and not args.custom_language_order:
+            raise organizer.OrganizerError(
+                "--custom-language-order is required when --language-order-style custom is active."
+            )
         args.preferred_language = organizer.normalize_preferred_language(getattr(args, "preferred_language", ""))
         if (
             not args.preferred_language
@@ -3620,6 +3766,7 @@ class MainWindow(QMainWindow):
             *tracks.get("audio", []),
             *tracks.get("subtitles", []),
         ]
+        report_tracks = self._tracks_in_command_order(report, report_tracks)
         if not self.manual_track_order_active or not self.manual_track_order:
             return report_tracks
 
@@ -3633,6 +3780,43 @@ class MainWindow(QMainWindow):
             return (1, index)
 
         return [track for _index, track in sorted(enumerate(report_tracks), key=sort_key)]
+
+    def _tracks_in_command_order(self, report: dict, tracks: list[dict]) -> list[dict]:
+        command = report.get("command") or []
+        try:
+            order_index = command.index("--track-order")
+            order_text = str(command[order_index + 1])
+        except (ValueError, IndexError):
+            return tracks
+
+        tracks_by_command_key: dict[tuple[int, int], dict] = {}
+        for track in tracks:
+            try:
+                key = (int(track.get("source_index") or 0), int(track.get("id") or 0))
+            except (TypeError, ValueError):
+                continue
+            tracks_by_command_key[key] = track
+
+        ordered: list[dict] = []
+        seen: set[int] = set()
+        for raw_part in order_text.split(","):
+            source_text, separator, track_text = raw_part.partition(":")
+            if not separator:
+                continue
+            try:
+                key = (int(source_text), int(track_text))
+            except ValueError:
+                continue
+            track = tracks_by_command_key.get(key)
+            if track is None:
+                continue
+            ordered.append(track)
+            seen.add(id(track))
+
+        if not ordered:
+            return tracks
+        ordered.extend(track for track in tracks if id(track) not in seen)
+        return ordered
 
     def _track_selection_key(self, track: dict) -> str:
         existing_key = str(track.get("selection_key") or "")

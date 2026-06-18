@@ -1544,6 +1544,24 @@ def test_ordered_tracks_can_customize_regional_order() -> None:
     ]
 
 
+def test_ordered_tracks_can_use_custom_language_order() -> None:
+    video = video_track(0)
+    english_audio = audio_track(1, "eng")
+    portuguese_audio = audio_track(2, "pt-PT")
+    english_subtitle = subtitle_track(3, "eng")
+    portuguese_subtitle = subtitle_track(4, "pt-PT")
+
+    ordered = m.ordered_tracks(
+        [video],
+        [english_audio, portuguese_audio],
+        [english_subtitle, portuguese_subtitle],
+        "custom",
+        "pt-PT,eng",
+    )
+
+    assert [track.id for track in ordered] == [0, 2, 1, 4, 3]
+
+
 def test_parse_regional_order_accepts_aliases_and_appends_missing_regions() -> None:
     assert m.parse_regional_order("asia; middle east africa") == (
         "asia",
@@ -1574,6 +1592,7 @@ def test_config_defaults(tmp_path: Path) -> None:
             '{"recursive": true, "output_suffix": "fixed", "detect_language_variants": false, '
             '"metadata_edit_mode": true, "audio_name_style": "language-format", '
             '"language_order_style": "regional", "regional_order": "asia;americas", '
+            '"custom_language_order": "pt-PT;eng", '
             '"detect_subtitle_language_duplicates": true, '
             '"audio_language_priority": "eng;pt-PT", '
             '"preserve_commentary_names": true}'
@@ -1588,6 +1607,7 @@ def test_config_defaults(tmp_path: Path) -> None:
     assert defaults["audio_name_style"] == "language-format"
     assert defaults["language_order_style"] == "regional"
     assert defaults["regional_order"] == ["asia", "americas"]
+    assert defaults["custom_language_order"] == ["pt-PT", "eng"]
     assert defaults["detect_subtitle_language_duplicates"] is True
     assert "audio_language_priority" not in defaults
     assert defaults["preserve_commentary_names"] is True
@@ -1610,6 +1630,21 @@ def test_parser_can_enable_subtitle_language_duplicate_detection() -> None:
     args = parser.parse_args(["--detect-subtitle-language-duplicates"])
 
     assert args.detect_subtitle_language_duplicates is True
+
+
+def test_parser_accepts_custom_language_order(monkeypatch, tmp_path: Path) -> None:
+    input_file = tmp_path / "movie.mkv"
+    input_file.write_bytes(b"")
+    parser = m.build_parser({})
+    args = parser.parse_args(
+        [str(input_file), "--language-order-style", "custom", "--custom-language-order", "pt-PT,eng"]
+    )
+    monkeypatch.setattr(m, "require_tool", lambda *_args, **_kwargs: None)
+
+    m.prepare_batch_run(args, None)
+
+    assert args.language_order_style == "custom"
+    assert args.custom_language_order == ("pt-PT", "eng")
 
 
 def test_parser_rejects_removed_audio_language_priority_option() -> None:
