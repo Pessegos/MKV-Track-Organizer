@@ -641,7 +641,11 @@ class MainWindow(QMainWindow):
         self.run_button = QPushButton("Run")
         self.cancel_button = QPushButton("Cancel")
         self.track_select_all_button = QPushButton("Select all")
+        self.track_select_audio_button = QPushButton("Select audio")
+        self.track_select_subtitles_button = QPushButton("Select subs")
         self.track_deselect_duplicates_button = QPushButton("Deselect duplicates")
+        self.track_deselect_duplicate_audio_button = QPushButton("Dup audio")
+        self.track_deselect_duplicate_subtitles_button = QPushButton("Dup subs")
         self.track_reset_selection_button = QPushButton("Reset selection")
         self.track_reset_order_button = QPushButton("Reset order")
         self.track_reset_button = QPushButton("Reset all")
@@ -654,23 +658,38 @@ class MainWindow(QMainWindow):
         self.run_button.setObjectName("primaryButton")
         self.cancel_button.setObjectName("dangerButton")
         self.track_select_all_button.setObjectName("secondaryButton")
+        self.track_select_audio_button.setObjectName("secondaryButton")
+        self.track_select_subtitles_button.setObjectName("secondaryButton")
         self.track_deselect_duplicates_button.setObjectName("secondaryButton")
+        self.track_deselect_duplicate_audio_button.setObjectName("secondaryButton")
+        self.track_deselect_duplicate_subtitles_button.setObjectName("secondaryButton")
         self.track_reset_selection_button.setObjectName("secondaryButton")
         self.track_reset_order_button.setObjectName("secondaryButton")
         self.track_reset_button.setObjectName("secondaryButton")
         self.track_select_all_button.setToolTip("Include every displayed track")
+        self.track_select_audio_button.setToolTip("Include every displayed audio track")
+        self.track_select_subtitles_button.setToolTip("Include every displayed subtitle track")
         self.track_deselect_duplicates_button.setToolTip("Uncheck duplicate-group members and keep each group leader")
+        self.track_deselect_duplicate_audio_button.setToolTip("Uncheck duplicate audio-group members")
+        self.track_deselect_duplicate_subtitles_button.setToolTip("Uncheck duplicate subtitle-group members")
         self.track_reset_selection_button.setToolTip("Restore the preview include/exclude state")
         self.track_reset_order_button.setToolTip("Restore the automatic preview track order")
         self.track_reset_button.setToolTip("Restore the preview include state and automatic track order")
         self.track_select_all_button.setEnabled(False)
+        self.track_select_audio_button.setEnabled(False)
+        self.track_select_subtitles_button.setEnabled(False)
         self.track_deselect_duplicates_button.setEnabled(False)
+        self.track_deselect_duplicate_audio_button.setEnabled(False)
+        self.track_deselect_duplicate_subtitles_button.setEnabled(False)
         self.track_reset_selection_button.setEnabled(False)
         self.track_reset_order_button.setEnabled(False)
         self.track_reset_button.setEnabled(False)
         self.files_table = QTableWidget(0, len(self.FILE_COLUMNS))
         self.results_table = self.files_table
         self.tracks_table = TrackTableWidget(0, len(self.TRACK_COLUMNS))
+        self.track_details_edit = QPlainTextEdit()
+        self.track_details_edit.setObjectName("trackDetails")
+        self.track_details_edit.setPlaceholderText("Select a track to inspect its plan, source, flags, and reasons.")
         self.summary_edit = QPlainTextEdit()
         self.log_edit = QPlainTextEdit()
         self.output_tabs = QTabWidget()
@@ -1004,7 +1023,12 @@ class MainWindow(QMainWindow):
         tracks_layout.setContentsMargins(8, 8, 8, 8)
         tracks_toolbar = QHBoxLayout()
         tracks_toolbar.addWidget(self.track_select_all_button)
+        tracks_toolbar.addWidget(self.track_select_audio_button)
+        tracks_toolbar.addWidget(self.track_select_subtitles_button)
+        tracks_toolbar.addSpacing(8)
         tracks_toolbar.addWidget(self.track_deselect_duplicates_button)
+        tracks_toolbar.addWidget(self.track_deselect_duplicate_audio_button)
+        tracks_toolbar.addWidget(self.track_deselect_duplicate_subtitles_button)
         tracks_toolbar.addSpacing(8)
         tracks_toolbar.addWidget(self.track_reset_selection_button)
         tracks_toolbar.addWidget(self.track_reset_order_button)
@@ -1047,6 +1071,12 @@ class MainWindow(QMainWindow):
         self.tracks_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.tracks_table.installEventFilter(self)
         tracks_layout.addWidget(self.tracks_table)
+        self.track_details_edit.setReadOnly(True)
+        self.track_details_edit.setLineWrapMode(QPlainTextEdit.WidgetWidth)
+        self.track_details_edit.setMaximumHeight(120)
+        self.track_details_edit.setAcceptDrops(True)
+        self.track_details_edit.installEventFilter(self)
+        tracks_layout.addWidget(self.track_details_edit)
 
         for edit in [self.summary_edit, self.log_edit]:
             edit.setReadOnly(True)
@@ -1390,12 +1420,17 @@ class MainWindow(QMainWindow):
         self.run_button.clicked.connect(self.start_run)
         self.cancel_button.clicked.connect(self.cancel_run)
         self.track_select_all_button.clicked.connect(self.select_all_tracks)
+        self.track_select_audio_button.clicked.connect(self.select_audio_tracks)
+        self.track_select_subtitles_button.clicked.connect(self.select_subtitle_tracks)
         self.track_deselect_duplicates_button.clicked.connect(self.deselect_duplicate_tracks)
+        self.track_deselect_duplicate_audio_button.clicked.connect(self.deselect_duplicate_audio_tracks)
+        self.track_deselect_duplicate_subtitles_button.clicked.connect(self.deselect_duplicate_subtitle_tracks)
         self.track_reset_selection_button.clicked.connect(self.reset_track_selection_edits)
         self.track_reset_order_button.clicked.connect(self.reset_track_order_edits)
         self.track_reset_button.clicked.connect(self.reset_track_edits)
         self.tracks_table.itemChanged.connect(self._track_item_changed)
         self.tracks_table.rows_reordered.connect(self._track_rows_reordered)
+        self.tracks_table.itemSelectionChanged.connect(self._update_track_details_for_selection)
         self.makemkv_check_button.clicked.connect(self.check_makemkv_tools)
         self.makemkv_preview_button.clicked.connect(self.start_makemkv_preview)
         self.makemkv_run_button.clicked.connect(self.start_makemkv_run)
@@ -2155,6 +2190,7 @@ class MainWindow(QMainWindow):
             self._refresh_file_list()
             self.tracks_table.setRowCount(0)
             self._set_track_selection_controls_enabled(False)
+            self._update_track_details_for_selection()
 
     @Slot()
     def choose_file(self) -> None:
@@ -2585,6 +2621,7 @@ class MainWindow(QMainWindow):
         self._refresh_file_list()
         self.tracks_table.setRowCount(0)
         self._set_track_selection_controls_enabled(False)
+        self._update_track_details_for_selection()
         self.statusBar().showMessage("Organizer inputs cleared")
 
     @Slot()
@@ -2681,6 +2718,7 @@ class MainWindow(QMainWindow):
         self.files_table.setRowCount(0)
         self.tracks_table.setRowCount(0)
         self._set_track_selection_controls_enabled(False)
+        self._update_track_details_for_selection()
         self.summary_edit.clear()
         self.log_edit.clear()
         self.output_tabs.setCurrentIndex(0)
@@ -2694,6 +2732,7 @@ class MainWindow(QMainWindow):
         self.files_table.setRowCount(0)
         self.tracks_table.setRowCount(0)
         self._set_track_selection_controls_enabled(False)
+        self._update_track_details_for_selection()
         self.advanced_button.setChecked(False)
         self._set_running(False)
         self.cancel_button.setEnabled(False)
@@ -3109,6 +3148,7 @@ class MainWindow(QMainWindow):
         self.current_reports = []
         self.tracks_table.setRowCount(0)
         self._set_track_selection_controls_enabled(False)
+        self._update_track_details_for_selection()
         self._refresh_file_list(running=True)
         self.progress.setRange(0, 0)
         self._set_progress_label("Starting")
@@ -3883,6 +3923,8 @@ class MainWindow(QMainWindow):
             self._populate_tracks_for_row(0)
         else:
             self.tracks_table.setRowCount(0)
+            self._set_track_selection_controls_enabled(False)
+            self._update_track_details_for_selection()
 
     def _populate_makemkv_results(self, reports: list[dict]) -> None:
         self.makemkv_reports = reports
@@ -4098,6 +4140,7 @@ class MainWindow(QMainWindow):
             self.tracks_table.setRowCount(0)
             self._syncing_track_checks = False
             self._set_track_selection_controls_enabled(False)
+            self._update_track_details_for_selection()
             return
 
         report = self.current_reports[row]
@@ -4160,7 +4203,10 @@ class MainWindow(QMainWindow):
                 self.tracks_table.setItem(track_row, column, item)
         self._syncing_track_checks = False
         self.tracks_table.resizeColumnsToContents()
+        if tracks and not self.tracks_table.selectionModel().selectedRows():
+            self.tracks_table.selectRow(0)
         self._set_track_selection_controls_enabled(bool(tracks))
+        self._update_track_details_for_selection()
 
     def _report_tracks(self, report: dict) -> list[dict]:
         tracks = report.get("tracks", {})
@@ -4333,6 +4379,62 @@ class MainWindow(QMainWindow):
             return []
         return self._report_tracks(self.current_reports[row])
 
+    def _current_report(self) -> dict | None:
+        row = self.files_table.currentRow()
+        if row < 0 or row >= len(self.current_reports):
+            return None
+        return self.current_reports[row]
+
+    @Slot()
+    def _update_track_details_for_selection(self) -> None:
+        report = self._current_report()
+        tracks = self._current_track_rows()
+        selected_rows = sorted({index.row() for index in self.tracks_table.selectionModel().selectedRows()})
+        if report is None or not tracks or not selected_rows:
+            self.track_details_edit.setPlainText("No track selected.")
+            return
+
+        row = selected_rows[0]
+        if row < 0 or row >= len(tracks):
+            self.track_details_edit.setPlainText("No track selected.")
+            return
+
+        track = tracks[row]
+        base_drop = bool(track.get("_preview_base_drop", track.get("drop")))
+        include_track = not bool(track.get("drop"))
+        plan_text, plan_tooltip, _categories = self._track_plan_details(report, track, include_track, base_drop)
+        selection_key = self._track_selection_key(track)
+        manual_selection = selection_key in self.manual_track_includes
+        source = str(track.get("source_name") or track.get("source_path") or "-")
+        input_language = str(track.get("input_language") or "")
+        output_language = str(track.get("output_language") or "")
+        original_name = str(track.get("original_name") or "-")
+        current_name = str(track.get("name") or "-")
+        role = str(track.get("role") or "normal")
+        delay = self._delay_text(track.get("delay_ms")) or "0 ms"
+        reason = self._track_reason(track) or "-"
+
+        lines = [
+            f"Track {track.get('id', '')} | {self._track_type_label(str(track.get('type') or ''))} | {source}",
+            f"Selection: {'included' if include_track else 'excluded'}"
+            f"{' (manual)' if manual_selection else ''}",
+            f"Language: {input_language or '-'} -> {output_language or '-'}",
+            f"Name: {current_name}",
+            f"Original name: {original_name}",
+            f"Codec: {track.get('codec') or '-'}",
+            "Flags: "
+            f"default={self._yes_no(track.get('default')) or 'no'}, "
+            f"forced={self._yes_no(track.get('forced')) or 'no'}, "
+            f"role={role}, delay={delay}",
+            f"Plan: {plan_text}",
+            f"Reason: {reason}",
+        ]
+        if plan_tooltip:
+            lines.append("Plan details:")
+            lines.extend(f"- {line}" for line in plan_tooltip.splitlines() if line.strip())
+
+        self.track_details_edit.setPlainText("\n".join(lines))
+
     @Slot(QTableWidgetItem)
     def _track_item_changed(self, item: QTableWidgetItem) -> None:
         if self._syncing_track_checks or item.column() != self.TRACK_INCLUDE_COLUMN:
@@ -4397,8 +4499,24 @@ class MainWindow(QMainWindow):
         self._set_displayed_track_checks(Qt.Checked)
 
     @Slot()
+    def select_audio_tracks(self) -> None:
+        self._set_displayed_track_checks(Qt.Checked, track_type="audio")
+
+    @Slot()
+    def select_subtitle_tracks(self) -> None:
+        self._set_displayed_track_checks(Qt.Checked, track_type="subtitles")
+
+    @Slot()
     def deselect_duplicate_tracks(self) -> None:
         self._set_displayed_track_checks(Qt.Unchecked, duplicate_members_only=True)
+
+    @Slot()
+    def deselect_duplicate_audio_tracks(self) -> None:
+        self._set_displayed_track_checks(Qt.Unchecked, duplicate_members_only=True, track_type="audio")
+
+    @Slot()
+    def deselect_duplicate_subtitle_tracks(self) -> None:
+        self._set_displayed_track_checks(Qt.Unchecked, duplicate_members_only=True, track_type="subtitles")
 
     @Slot()
     def reset_track_selection_edits(self) -> None:
@@ -4424,10 +4542,17 @@ class MainWindow(QMainWindow):
         self._populate_tracks_for_row(self.files_table.currentRow())
         self.statusBar().showMessage("Track edits reset")
 
-    def _set_displayed_track_checks(self, check_state: Qt.CheckState, duplicate_members_only: bool = False) -> None:
+    def _set_displayed_track_checks(
+        self,
+        check_state: Qt.CheckState,
+        duplicate_members_only: bool = False,
+        track_type: str | None = None,
+    ) -> None:
         tracks = self._current_track_rows()
         include_track = check_state == Qt.Checked
         for track in tracks:
+            if track_type and track.get("type") != track_type:
+                continue
             if duplicate_members_only and track.get("duplicate_of_id") is None:
                 continue
             self._set_manual_track_include(track, include_track)
@@ -4454,10 +4579,25 @@ class MainWindow(QMainWindow):
 
     def _set_track_selection_controls_enabled(self, enabled: bool) -> None:
         manual_selection_count = self._current_manual_selection_count() if enabled else 0
-        self.track_select_all_button.setEnabled(enabled)
-        self.track_deselect_duplicates_button.setEnabled(
-            enabled and any(track.get("duplicate_of_id") is not None for track in self._current_track_rows())
+        current_tracks = self._current_track_rows() if enabled else []
+        has_audio = any(track.get("type") == "audio" for track in current_tracks)
+        has_subtitles = any(track.get("type") == "subtitles" for track in current_tracks)
+        has_audio_duplicates = any(
+            track.get("type") == "audio" and track.get("duplicate_of_id") is not None
+            for track in current_tracks
         )
+        has_subtitle_duplicates = any(
+            track.get("type") == "subtitles" and track.get("duplicate_of_id") is not None
+            for track in current_tracks
+        )
+        self.track_select_all_button.setEnabled(enabled)
+        self.track_select_audio_button.setEnabled(enabled and has_audio)
+        self.track_select_subtitles_button.setEnabled(enabled and has_subtitles)
+        self.track_deselect_duplicates_button.setEnabled(
+            enabled and (has_audio_duplicates or has_subtitle_duplicates)
+        )
+        self.track_deselect_duplicate_audio_button.setEnabled(enabled and has_audio_duplicates)
+        self.track_deselect_duplicate_subtitles_button.setEnabled(enabled and has_subtitle_duplicates)
         self.track_reset_selection_button.setEnabled(enabled and manual_selection_count > 0)
         self.track_reset_order_button.setEnabled(enabled and self.manual_track_order_active)
         self.track_reset_button.setEnabled(

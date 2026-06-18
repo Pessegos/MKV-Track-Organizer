@@ -96,10 +96,28 @@ def test_track_table_shows_plan_and_manual_exclude(qapp):
 
         assert window.tracks_table.item(0, window.TRACK_PLAN_COLUMN).text() == "Delay +150 ms | Rename"
         assert window.tracks_table.item(1, window.TRACK_PLAN_COLUMN).text() == "Duplicate"
+        assert "Plan: Delay +150 ms | Rename" in window.track_details_edit.toPlainText()
+        assert "Original name: English" in window.track_details_edit.toPlainText()
         assert "2/2 included" in window.track_status_label.text()
         assert "1 duplicate warning" in window.track_status_label.text()
+        assert window.track_select_audio_button.isEnabled()
+        assert window.track_select_subtitles_button.isEnabled()
+        assert not window.track_deselect_duplicate_audio_button.isEnabled()
+        assert window.track_deselect_duplicate_subtitles_button.isEnabled()
         assert not window.track_reset_selection_button.isEnabled()
         assert not window.track_reset_order_button.isEnabled()
+
+        window.tracks_table.selectRow(1)
+        assert "Plan: Duplicate" in window.track_details_edit.toPlainText()
+        assert "Possible duplicate of source.mkv track 1" in window.track_details_edit.toPlainText()
+
+        window.deselect_duplicate_subtitle_tracks()
+
+        assert window.tracks_table.item(1, window.TRACK_PLAN_COLUMN).text() == "Exclude manually"
+        assert "1 manual selection edit" in window.track_status_label.text()
+        assert window.track_reset_selection_button.isEnabled()
+
+        window.reset_track_selection_edits()
 
         include_item = window.tracks_table.item(0, window.TRACK_INCLUDE_COLUMN)
         include_item.setCheckState(Qt.Unchecked)
