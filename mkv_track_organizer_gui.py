@@ -429,19 +429,14 @@ class MainWindow(QMainWindow):
         "Input lang",
         "Output lang",
         "Name",
-        "Default",
-        "Forced",
-        "Drop",
-        "Role",
+        "Flags",
         "Delay",
         "Plan",
-        "Reason",
     ]
     TRACK_INCLUDE_COLUMN = TRACK_COLUMNS.index("Include")
     TRACK_NAME_COLUMN = TRACK_COLUMNS.index("Name")
-    TRACK_DROP_COLUMN = TRACK_COLUMNS.index("Drop")
+    TRACK_FLAGS_COLUMN = TRACK_COLUMNS.index("Flags")
     TRACK_PLAN_COLUMN = TRACK_COLUMNS.index("Plan")
-    TRACK_REASON_COLUMN = TRACK_COLUMNS.index("Reason")
     STATUS_COLORS_BY_THEME = {
         "light": {
             "Ready": ("#edf7ed", "#1f6f3f"),
@@ -643,9 +638,11 @@ class MainWindow(QMainWindow):
         self.track_select_all_button = QPushButton("Select all")
         self.track_select_audio_button = QPushButton("Select audio")
         self.track_select_subtitles_button = QPushButton("Select subs")
-        self.track_deselect_duplicates_button = QPushButton("Deselect duplicates")
-        self.track_deselect_duplicate_audio_button = QPushButton("Dup audio")
-        self.track_deselect_duplicate_subtitles_button = QPushButton("Dup subs")
+        self.track_include_selected_button = QPushButton("Include selected")
+        self.track_exclude_selected_button = QPushButton("Exclude selected")
+        self.track_deselect_duplicates_button = QPushButton("Drop duplicates")
+        self.track_deselect_duplicate_audio_button = QPushButton("Drop dup audio")
+        self.track_deselect_duplicate_subtitles_button = QPushButton("Drop dup subs")
         self.track_reset_selection_button = QPushButton("Reset selection")
         self.track_reset_order_button = QPushButton("Reset order")
         self.track_reset_button = QPushButton("Reset all")
@@ -660,6 +657,8 @@ class MainWindow(QMainWindow):
         self.track_select_all_button.setObjectName("secondaryButton")
         self.track_select_audio_button.setObjectName("secondaryButton")
         self.track_select_subtitles_button.setObjectName("secondaryButton")
+        self.track_include_selected_button.setObjectName("secondaryButton")
+        self.track_exclude_selected_button.setObjectName("secondaryButton")
         self.track_deselect_duplicates_button.setObjectName("secondaryButton")
         self.track_deselect_duplicate_audio_button.setObjectName("secondaryButton")
         self.track_deselect_duplicate_subtitles_button.setObjectName("secondaryButton")
@@ -669,6 +668,8 @@ class MainWindow(QMainWindow):
         self.track_select_all_button.setToolTip("Include every displayed track")
         self.track_select_audio_button.setToolTip("Include every displayed audio track")
         self.track_select_subtitles_button.setToolTip("Include every displayed subtitle track")
+        self.track_include_selected_button.setToolTip("Include the selected track rows")
+        self.track_exclude_selected_button.setToolTip("Exclude the selected track rows from the next run")
         self.track_deselect_duplicates_button.setToolTip("Uncheck duplicate-group members and keep each group leader")
         self.track_deselect_duplicate_audio_button.setToolTip("Uncheck duplicate audio-group members")
         self.track_deselect_duplicate_subtitles_button.setToolTip("Uncheck duplicate subtitle-group members")
@@ -678,6 +679,8 @@ class MainWindow(QMainWindow):
         self.track_select_all_button.setEnabled(False)
         self.track_select_audio_button.setEnabled(False)
         self.track_select_subtitles_button.setEnabled(False)
+        self.track_include_selected_button.setEnabled(False)
+        self.track_exclude_selected_button.setEnabled(False)
         self.track_deselect_duplicates_button.setEnabled(False)
         self.track_deselect_duplicate_audio_button.setEnabled(False)
         self.track_deselect_duplicate_subtitles_button.setEnabled(False)
@@ -1026,6 +1029,9 @@ class MainWindow(QMainWindow):
         tracks_toolbar.addWidget(self.track_select_audio_button)
         tracks_toolbar.addWidget(self.track_select_subtitles_button)
         tracks_toolbar.addSpacing(8)
+        tracks_toolbar.addWidget(self.track_include_selected_button)
+        tracks_toolbar.addWidget(self.track_exclude_selected_button)
+        tracks_toolbar.addSpacing(8)
         tracks_toolbar.addWidget(self.track_deselect_duplicates_button)
         tracks_toolbar.addWidget(self.track_deselect_duplicate_audio_button)
         tracks_toolbar.addWidget(self.track_deselect_duplicate_subtitles_button)
@@ -1045,16 +1051,12 @@ class MainWindow(QMainWindow):
             self.TRACK_COLUMNS.index("Type"),
             self.TRACK_COLUMNS.index("Input lang"),
             self.TRACK_COLUMNS.index("Output lang"),
-            self.TRACK_COLUMNS.index("Default"),
-            self.TRACK_COLUMNS.index("Forced"),
-            self.TRACK_DROP_COLUMN,
-            self.TRACK_COLUMNS.index("Role"),
+            self.TRACK_FLAGS_COLUMN,
             self.TRACK_COLUMNS.index("Delay"),
         ]:
             track_header.setSectionResizeMode(column, QHeaderView.ResizeToContents)
         track_header.setSectionResizeMode(self.TRACK_NAME_COLUMN, QHeaderView.Stretch)
         track_header.setSectionResizeMode(self.TRACK_PLAN_COLUMN, QHeaderView.Stretch)
-        track_header.setSectionResizeMode(self.TRACK_REASON_COLUMN, QHeaderView.Stretch)
         track_header.setStretchLastSection(False)
         self.tracks_table.setAlternatingRowColors(True)
         self.tracks_table.setSelectionBehavior(QTableWidget.SelectRows)
@@ -1422,6 +1424,8 @@ class MainWindow(QMainWindow):
         self.track_select_all_button.clicked.connect(self.select_all_tracks)
         self.track_select_audio_button.clicked.connect(self.select_audio_tracks)
         self.track_select_subtitles_button.clicked.connect(self.select_subtitle_tracks)
+        self.track_include_selected_button.clicked.connect(self.include_selected_tracks)
+        self.track_exclude_selected_button.clicked.connect(self.exclude_selected_tracks)
         self.track_deselect_duplicates_button.clicked.connect(self.deselect_duplicate_tracks)
         self.track_deselect_duplicate_audio_button.clicked.connect(self.deselect_duplicate_audio_tracks)
         self.track_deselect_duplicate_subtitles_button.clicked.connect(self.deselect_duplicate_subtitle_tracks)
@@ -4170,13 +4174,9 @@ class MainWindow(QMainWindow):
                 track.get("input_language", ""),
                 track.get("output_language", ""),
                 track.get("name", ""),
-                self._yes_no(track.get("default")),
-                self._yes_no(track.get("forced")),
-                self._yes_no(track.get("drop")),
-                track.get("role", ""),
+                self._track_flags_text(track),
                 self._delay_text(track.get("delay_ms")),
                 plan_text,
-                self._track_reason(track),
             ]
             for column, value in enumerate(values):
                 item = QTableWidgetItem(str(value))
@@ -4387,9 +4387,10 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _update_track_details_for_selection(self) -> None:
+        self._sync_track_selection_action_buttons()
         report = self._current_report()
         tracks = self._current_track_rows()
-        selected_rows = sorted({index.row() for index in self.tracks_table.selectionModel().selectedRows()})
+        selected_rows = self._selected_track_rows()
         if report is None or not tracks or not selected_rows:
             self.track_details_edit.setPlainText("No track selected.")
             return
@@ -4507,6 +4508,14 @@ class MainWindow(QMainWindow):
         self._set_displayed_track_checks(Qt.Checked, track_type="subtitles")
 
     @Slot()
+    def include_selected_tracks(self) -> None:
+        self._set_selected_track_checks(Qt.Checked)
+
+    @Slot()
+    def exclude_selected_tracks(self) -> None:
+        self._set_selected_track_checks(Qt.Unchecked)
+
+    @Slot()
     def deselect_duplicate_tracks(self) -> None:
         self._set_displayed_track_checks(Qt.Unchecked, duplicate_members_only=True)
 
@@ -4558,6 +4567,21 @@ class MainWindow(QMainWindow):
             self._set_manual_track_include(track, include_track)
         self._populate_tracks_for_row(self.files_table.currentRow())
 
+    def _selected_track_rows(self) -> list[int]:
+        return sorted({index.row() for index in self.tracks_table.selectionModel().selectedRows()})
+
+    def _set_selected_track_checks(self, check_state: Qt.CheckState) -> None:
+        tracks = self._current_track_rows()
+        include_track = check_state == Qt.Checked
+        selected_rows = self._selected_track_rows()
+        for row in selected_rows:
+            if 0 <= row < len(tracks):
+                self._set_manual_track_include(tracks[row], include_track)
+        self._populate_tracks_for_row(self.files_table.currentRow())
+        for row in selected_rows:
+            if 0 <= row < self.tracks_table.rowCount():
+                self.tracks_table.selectRow(row)
+
     def _current_track_selection_keys(self) -> set[str]:
         return {self._track_selection_key(track) for track in self._current_track_rows()}
 
@@ -4593,6 +4617,7 @@ class MainWindow(QMainWindow):
         self.track_select_all_button.setEnabled(enabled)
         self.track_select_audio_button.setEnabled(enabled and has_audio)
         self.track_select_subtitles_button.setEnabled(enabled and has_subtitles)
+        self._sync_track_selection_action_buttons(enabled, current_tracks)
         self.track_deselect_duplicates_button.setEnabled(
             enabled and (has_audio_duplicates or has_subtitle_duplicates)
         )
@@ -4604,6 +4629,20 @@ class MainWindow(QMainWindow):
             enabled and (manual_selection_count > 0 or self.manual_track_order_active)
         )
         self._update_track_status_label(enabled, manual_selection_count)
+
+    def _sync_track_selection_action_buttons(
+        self,
+        enabled: bool | None = None,
+        current_tracks: list[dict] | None = None,
+    ) -> None:
+        if enabled is None:
+            enabled = self.tracks_table.rowCount() > 0
+        if current_tracks is None:
+            current_tracks = self._current_track_rows() if enabled else []
+        selected_rows = self._selected_track_rows() if enabled else []
+        has_selected = any(0 <= row < len(current_tracks) for row in selected_rows)
+        self.track_include_selected_button.setEnabled(enabled and has_selected)
+        self.track_exclude_selected_button.setEnabled(enabled and has_selected)
 
     def _update_track_status_label(self, enabled: bool, manual_selection_count: int = 0) -> None:
         if not enabled:
@@ -4644,6 +4683,19 @@ class MainWindow(QMainWindow):
         scores = track.get("role_scores") or {}
         score_parts = [f"{name}:{score}" for name, score in scores.items() if score]
         return ", ".join(score_parts)
+
+    def _track_flags_text(self, track: dict) -> str:
+        flags: list[str] = []
+        if track.get("default"):
+            flags.append("Default")
+        if track.get("forced"):
+            flags.append("Forced")
+        role = str(track.get("role") or "").strip()
+        if role and role != "normal":
+            flags.append(role.upper() if role == "sdh" else role.title())
+        if track.get("drop"):
+            flags.append("Excluded")
+        return ", ".join(flags)
 
     def _style_track_item(self, item: QTableWidgetItem, track: dict, column: int | None = None) -> None:
         item.setBackground(QBrush())

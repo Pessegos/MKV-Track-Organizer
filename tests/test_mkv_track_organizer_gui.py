@@ -110,6 +110,18 @@ def test_track_table_shows_plan_and_manual_exclude(qapp):
         window.tracks_table.selectRow(1)
         assert "Plan: Duplicate" in window.track_details_edit.toPlainText()
         assert "Possible duplicate of source.mkv track 1" in window.track_details_edit.toPlainText()
+        assert window.track_include_selected_button.isEnabled()
+        assert window.track_exclude_selected_button.isEnabled()
+
+        window.exclude_selected_tracks()
+
+        assert window.tracks_table.item(1, window.TRACK_PLAN_COLUMN).text() == "Exclude manually"
+        assert "Excluded" in window.tracks_table.item(1, window.TRACK_FLAGS_COLUMN).text()
+        assert "Selection: excluded (manual)" in window.track_details_edit.toPlainText()
+
+        window.include_selected_tracks()
+
+        assert window.tracks_table.item(1, window.TRACK_PLAN_COLUMN).text() == "Duplicate"
 
         window.deselect_duplicate_subtitle_tracks()
 
