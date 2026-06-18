@@ -11,7 +11,7 @@ from pathlib import Path
 
 try:
     from PySide6.QtCore import QEvent, QObject, QThread, QTimer, Qt, Signal, Slot
-    from PySide6.QtGui import QColor, QCloseEvent, QDragEnterEvent, QDropEvent, QTextCursor
+    from PySide6.QtGui import QBrush, QColor, QCloseEvent, QDragEnterEvent, QDropEvent, QTextCursor
     from PySide6.QtWidgets import (
         QApplication,
         QAbstractItemView,
@@ -434,8 +434,14 @@ class MainWindow(QMainWindow):
         "Drop",
         "Role",
         "Delay",
+        "Plan",
         "Reason",
     ]
+    TRACK_INCLUDE_COLUMN = TRACK_COLUMNS.index("Include")
+    TRACK_NAME_COLUMN = TRACK_COLUMNS.index("Name")
+    TRACK_DROP_COLUMN = TRACK_COLUMNS.index("Drop")
+    TRACK_PLAN_COLUMN = TRACK_COLUMNS.index("Plan")
+    TRACK_REASON_COLUMN = TRACK_COLUMNS.index("Reason")
     STATUS_COLORS_BY_THEME = {
         "light": {
             "Ready": ("#edf7ed", "#1f6f3f"),
@@ -636,6 +642,7 @@ class MainWindow(QMainWindow):
         self.cancel_button = QPushButton("Cancel")
         self.track_select_all_button = QPushButton("Select all")
         self.track_deselect_duplicates_button = QPushButton("Deselect duplicates")
+        self.track_reset_button = QPushButton("Reset track edits")
         self.organizer_clear_button: QToolButton | None = None
         self.organizer_reset_button: QToolButton | None = None
         self.check_tools_button.setObjectName("secondaryButton")
@@ -644,10 +651,13 @@ class MainWindow(QMainWindow):
         self.cancel_button.setObjectName("dangerButton")
         self.track_select_all_button.setObjectName("secondaryButton")
         self.track_deselect_duplicates_button.setObjectName("secondaryButton")
+        self.track_reset_button.setObjectName("secondaryButton")
         self.track_select_all_button.setToolTip("Include every displayed track")
         self.track_deselect_duplicates_button.setToolTip("Uncheck duplicate-group members and keep each group leader")
+        self.track_reset_button.setToolTip("Restore the preview include state and automatic track order")
         self.track_select_all_button.setEnabled(False)
         self.track_deselect_duplicates_button.setEnabled(False)
+        self.track_reset_button.setEnabled(False)
         self.files_table = QTableWidget(0, len(self.FILE_COLUMNS))
         self.results_table = self.files_table
         self.tracks_table = TrackTableWidget(0, len(self.TRACK_COLUMNS))
@@ -985,14 +995,29 @@ class MainWindow(QMainWindow):
         tracks_toolbar = QHBoxLayout()
         tracks_toolbar.addWidget(self.track_select_all_button)
         tracks_toolbar.addWidget(self.track_deselect_duplicates_button)
+        tracks_toolbar.addWidget(self.track_reset_button)
         tracks_toolbar.addStretch(1)
         tracks_layout.addLayout(tracks_toolbar)
         self.tracks_table.setHorizontalHeaderLabels(self.TRACK_COLUMNS)
-        self.tracks_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.tracks_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.tracks_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.tracks_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.Stretch)
-        self.tracks_table.horizontalHeader().setStretchLastSection(True)
+        track_header = self.tracks_table.horizontalHeader()
+        for column in [
+            self.TRACK_INCLUDE_COLUMN,
+            self.TRACK_COLUMNS.index("ID"),
+            self.TRACK_COLUMNS.index("Source"),
+            self.TRACK_COLUMNS.index("Type"),
+            self.TRACK_COLUMNS.index("Input lang"),
+            self.TRACK_COLUMNS.index("Output lang"),
+            self.TRACK_COLUMNS.index("Default"),
+            self.TRACK_COLUMNS.index("Forced"),
+            self.TRACK_DROP_COLUMN,
+            self.TRACK_COLUMNS.index("Role"),
+            self.TRACK_COLUMNS.index("Delay"),
+        ]:
+            track_header.setSectionResizeMode(column, QHeaderView.ResizeToContents)
+        track_header.setSectionResizeMode(self.TRACK_NAME_COLUMN, QHeaderView.Stretch)
+        track_header.setSectionResizeMode(self.TRACK_PLAN_COLUMN, QHeaderView.Stretch)
+        track_header.setSectionResizeMode(self.TRACK_REASON_COLUMN, QHeaderView.Stretch)
+        track_header.setStretchLastSection(False)
         self.tracks_table.setAlternatingRowColors(True)
         self.tracks_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.tracks_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
@@ -1352,6 +1377,7 @@ class MainWindow(QMainWindow):
         self.cancel_button.clicked.connect(self.cancel_run)
         self.track_select_all_button.clicked.connect(self.select_all_tracks)
         self.track_deselect_duplicates_button.clicked.connect(self.deselect_duplicate_tracks)
+        self.track_reset_button.clicked.connect(self.reset_track_edits)
         self.tracks_table.itemChanged.connect(self._track_item_changed)
         self.tracks_table.rows_reordered.connect(self._track_rows_reordered)
         self.makemkv_check_button.clicked.connect(self.check_makemkv_tools)
@@ -4060,8 +4086,18 @@ class MainWindow(QMainWindow):
         self.tracks_table.setRowCount(len(tracks))
         for track_row, track in enumerate(tracks):
             selection_key = self._track_selection_key(track)
-            include_track = self.manual_track_includes.get(selection_key, not bool(track.get("drop")))
+            if "_preview_base_drop" not in track:
+                track["_preview_base_drop"] = bool(track.get("drop"))
+            base_drop = bool(track.get("_preview_base_drop"))
+            include_track = self.manual_track_includes.get(selection_key, not base_drop)
             track["drop"] = not include_track
+            plan_text, plan_tooltip, plan_categories = self._track_plan_details(
+                report,
+                track,
+                include_track,
+                base_drop,
+            )
+            track["_preview_plan_categories"] = plan_categories
             values = [
                 "",
                 track.get("id", ""),
@@ -4076,11 +4112,12 @@ class MainWindow(QMainWindow):
                 self._yes_no(track.get("drop")),
                 track.get("role", ""),
                 self._delay_text(track.get("delay_ms")),
+                plan_text,
                 self._track_reason(track),
             ]
             for column, value in enumerate(values):
                 item = QTableWidgetItem(str(value))
-                if column == 0:
+                if column == self.TRACK_INCLUDE_COLUMN:
                     item.setFlags(
                         (item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
                         & ~Qt.ItemIsEditable
@@ -4091,13 +4128,15 @@ class MainWindow(QMainWindow):
                 else:
                     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                 tooltips = []
-                if column == 7 and track.get("original_name"):
+                if column == self.TRACK_NAME_COLUMN and track.get("original_name"):
                     tooltips.append(f"Original: {track['original_name']}")
+                if column == self.TRACK_PLAN_COLUMN and plan_tooltip:
+                    tooltips.append(plan_tooltip)
                 if track.get("duplicate_reason"):
                     tooltips.append(str(track["duplicate_reason"]))
                 if tooltips:
                     item.setToolTip("\n".join(tooltips))
-                self._style_track_item(item, track)
+                self._style_track_item(item, track, column)
                 self.tracks_table.setItem(track_row, column, item)
         self._syncing_track_checks = False
         self.tracks_table.resizeColumnsToContents()
@@ -4172,6 +4211,102 @@ class MainWindow(QMainWindow):
             int(track.get("id") or 0),
         )
 
+    def _plan_item_selection_key(self, item: dict) -> str:
+        try:
+            source_index = int(item.get("source_index") or 0)
+            track_type = str(item.get("track_type") or "")
+            track_id = int(item.get("track_id") or 0)
+        except (TypeError, ValueError):
+            return ""
+        return organizer.track_selection_key(source_index, track_type, track_id)
+
+    def _plan_items_for_track(self, report: dict, track: dict) -> list[dict]:
+        selection_key = self._track_selection_key(track)
+        summary = report.get("plan_summary") or {}
+        return [
+            item for item in summary.get("items") or []
+            if self._plan_item_selection_key(item) == selection_key
+        ]
+
+    def _track_plan_details(
+        self,
+        report: dict,
+        track: dict,
+        include_track: bool,
+        base_drop: bool,
+    ) -> tuple[str, str, list[str]]:
+        items = self._plan_items_for_track(report, track)
+        tooltip_lines = []
+        for item in items:
+            tooltip = self._plan_item_tooltip(item)
+            if tooltip:
+                tooltip_lines.append(tooltip)
+        categories: list[str] = []
+
+        if not include_track:
+            categories.append("drop")
+            if base_drop:
+                return "Remove", "\n".join(tooltip_lines), categories
+            return "Exclude manually", "User unchecked this track for the next run.", categories
+
+        labels: list[str] = []
+        if base_drop:
+            labels.append("Include manually")
+            categories.append("manual")
+            if tooltip_lines:
+                tooltip_lines.insert(0, "Overrides the planned removal from the preview.")
+
+        if track.get("duplicate_group") and track.get("duplicate_of_id") is None:
+            labels.append("Duplicate group")
+            categories.append("duplicate")
+
+        for item in items:
+            category = str(item.get("category") or "other")
+            if category == "drop":
+                continue
+            label = self._short_plan_label(category, item, track)
+            if label and label not in labels:
+                labels.append(label)
+            if category not in categories:
+                categories.append(category)
+
+        if not labels:
+            return "Keep", "No metadata or selection changes planned for this track.", categories
+        return " | ".join(labels), "\n".join(tooltip_lines), categories
+
+    def _plan_item_tooltip(self, item: dict) -> str:
+        message = str(item.get("message") or "")
+        reason = str(item.get("reason") or "")
+        if message and reason:
+            return f"{message}\nReason: {reason}"
+        return message or reason
+
+    def _short_plan_label(self, category: str, item: dict, track: dict) -> str:
+        if category == "duplicate":
+            return "Duplicate"
+        if category == "language":
+            input_language = str(track.get("input_language") or "")
+            output_language = str(track.get("output_language") or "")
+            return f"Language {input_language} -> {output_language}" if input_language and output_language else "Language"
+        if category == "name":
+            return "Rename"
+        if category == "flag":
+            message = str(item.get("message") or "")
+            return "Default off" if message.startswith("Unset") else "Default on"
+        if category == "role":
+            role = str(track.get("role") or "").strip().lower()
+            message = str(item.get("message") or "").lower()
+            if role == "sdh":
+                return "Mark SDH"
+            if role == "forced":
+                return "Mark forced"
+            if role == "commentary" or "commentary" in message:
+                return "Mark commentary"
+            return "Mark role"
+        if category == "delay":
+            return f"Delay {self._delay_text(track.get('delay_ms'))}".strip()
+        return category.replace("_", " ").title()
+
     def _current_track_rows(self) -> list[dict]:
         row = self.files_table.currentRow()
         if row < 0 or row >= len(self.current_reports):
@@ -4180,7 +4315,7 @@ class MainWindow(QMainWindow):
 
     @Slot(QTableWidgetItem)
     def _track_item_changed(self, item: QTableWidgetItem) -> None:
-        if self._syncing_track_checks or item.column() != 0:
+        if self._syncing_track_checks or item.column() != self.TRACK_INCLUDE_COLUMN:
             return
         selection_key = str(item.data(Qt.UserRole) or "")
         if not selection_key:
@@ -4189,13 +4324,14 @@ class MainWindow(QMainWindow):
         self.manual_track_includes[selection_key] = include_track
 
         tracks = self._current_track_rows()
+        row_to_restore = item.row()
         if 0 <= item.row() < len(tracks):
             track = tracks[item.row()]
             track["drop"] = not include_track
-            drop_item = self.tracks_table.item(item.row(), 10)
-            if drop_item:
-                drop_item.setText(self._yes_no(track.get("drop")))
-            item.setToolTip("Included in the remux" if include_track else "Excluded from the remux")
+            self._populate_tracks_for_row(self.files_table.currentRow())
+            if 0 <= row_to_restore < self.tracks_table.rowCount():
+                self.tracks_table.selectRow(row_to_restore)
+        self._set_track_selection_controls_enabled(bool(tracks))
 
     @Slot(list, int)
     def _track_rows_reordered(self, selected_rows: list[int], target_row: int) -> None:
@@ -4244,19 +4380,29 @@ class MainWindow(QMainWindow):
     def deselect_duplicate_tracks(self) -> None:
         self._set_displayed_track_checks(Qt.Unchecked, duplicate_members_only=True)
 
+    @Slot()
+    def reset_track_edits(self) -> None:
+        self.manual_track_includes = {}
+        self._clear_manual_track_order()
+        self._populate_tracks_for_row(self.files_table.currentRow())
+        self.statusBar().showMessage("Track edits reset")
+
     def _set_displayed_track_checks(self, check_state: Qt.CheckState, duplicate_members_only: bool = False) -> None:
         tracks = self._current_track_rows()
-        for row, track in enumerate(tracks):
+        include_track = check_state == Qt.Checked
+        for track in tracks:
             if duplicate_members_only and track.get("duplicate_of_id") is None:
                 continue
-            item = self.tracks_table.item(row, 0)
-            if item:
-                item.setCheckState(check_state)
+            self.manual_track_includes[self._track_selection_key(track)] = include_track
+        self._populate_tracks_for_row(self.files_table.currentRow())
 
     def _set_track_selection_controls_enabled(self, enabled: bool) -> None:
         self.track_select_all_button.setEnabled(enabled)
         self.track_deselect_duplicates_button.setEnabled(
             enabled and any(track.get("duplicate_of_id") is not None for track in self._current_track_rows())
+        )
+        self.track_reset_button.setEnabled(
+            enabled and (bool(self.manual_track_includes) or self.manual_track_order_active)
         )
 
     def _track_type_label(self, track_type: str) -> str:
@@ -4273,7 +4419,11 @@ class MainWindow(QMainWindow):
         score_parts = [f"{name}:{score}" for name, score in scores.items() if score]
         return ", ".join(score_parts)
 
-    def _style_track_item(self, item: QTableWidgetItem, track: dict) -> None:
+    def _style_track_item(self, item: QTableWidgetItem, track: dict, column: int | None = None) -> None:
+        item.setBackground(QBrush())
+        item.setForeground(QBrush())
+        column = item.column() if column is None else column
+
         if track.get("duplicate_group"):
             if self.current_theme == "light":
                 item.setBackground(QColor("#ffe4e6"))
@@ -4285,6 +4435,41 @@ class MainWindow(QMainWindow):
 
         if track.get("drop"):
             item.setForeground(QColor("#64748b") if self.current_theme == "light" else QColor("#94a3b8"))
+
+        if column == self.TRACK_PLAN_COLUMN:
+            self._style_plan_item(item, track)
+
+    def _style_plan_item(self, item: QTableWidgetItem, track: dict) -> None:
+        categories = set(track.get("_preview_plan_categories") or [])
+        if not categories:
+            return
+
+        if "drop" in categories:
+            background, foreground = (
+                ("#fee2e2", "#991b1b")
+                if self.current_theme == "light"
+                else ("#4a1d21", "#fecaca")
+            )
+        elif "duplicate" in categories:
+            background, foreground = (
+                ("#fff1f2", "#9f1239")
+                if self.current_theme == "light"
+                else ("#3a1f27", "#ffb4bd")
+            )
+        elif "manual" in categories:
+            background, foreground = (
+                ("#ecfdf5", "#166534")
+                if self.current_theme == "light"
+                else ("#123524", "#86efac")
+            )
+        else:
+            background, foreground = (
+                ("#eff6ff", "#1d4ed8")
+                if self.current_theme == "light"
+                else ("#15354a", "#7dd3fc")
+            )
+        item.setBackground(QColor(background))
+        item.setForeground(QColor(foreground))
 
     def _yes_no(self, value) -> str:
         return "Yes" if value else ""
