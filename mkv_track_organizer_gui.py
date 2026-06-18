@@ -358,6 +358,7 @@ class MainWindow(QMainWindow):
         "smart_sub_detection",
         "drop_empty_subs",
         "detect_duplicate_tracks",
+        "detect_subtitle_language_duplicates",
         "detect_language_variants",
         "auto_pgs_ocr",
         "auto_commentary_ocr",
@@ -533,6 +534,7 @@ class MainWindow(QMainWindow):
         self.smart_subs_check = QCheckBox("Smart subtitle detection")
         self.drop_empty_check = QCheckBox("Drop empty subtitles")
         self.duplicate_check = QCheckBox("Detect duplicates")
+        self.subtitle_language_duplicates_check = QCheckBox("Subtitle lang duplicates")
         self.variant_check = QCheckBox("Detect language variants")
         self.auto_pgs_ocr_check = QCheckBox("Auto PGS OCR")
         self.auto_commentary_ocr_check = QCheckBox("Commentary/SDH OCR")
@@ -801,6 +803,9 @@ class MainWindow(QMainWindow):
         self.smart_subs_check.setToolTip("Automatically classify forced, empty, commentary, and SDH subtitles")
         self.drop_empty_check.setToolTip("Exclude subtitles classified as empty")
         self.duplicate_check.setToolTip("Highlight likely duplicate audio/subtitle tracks without dropping them")
+        self.subtitle_language_duplicates_check.setToolTip(
+            "Also mark subtitle tracks with the same language/role across formats; keeps ASS before PGS before SRT"
+        )
         self.variant_check.setToolTip("Automatically detect language variants such as es-ES vs es-419")
         self.auto_pgs_ocr_check.setToolTip("Run OCR for PGS subtitles when needed for language detection")
         self.auto_commentary_ocr_check.setToolTip("OCR extra full-size PGS tracks that may be commentary or SDH; normal and named SDH tracks are skipped")
@@ -887,6 +892,7 @@ class MainWindow(QMainWindow):
             self.smart_subs_check,
             self.drop_empty_check,
             self.duplicate_check,
+            self.subtitle_language_duplicates_check,
             self.variant_check,
             self.auto_pgs_ocr_check,
             self.auto_commentary_ocr_check,
@@ -1666,6 +1672,7 @@ class MainWindow(QMainWindow):
             "smart_sub_detection": self.smart_subs_check.isChecked(),
             "drop_empty_subs": self.drop_empty_check.isChecked(),
             "detect_duplicate_tracks": self.duplicate_check.isChecked(),
+            "detect_subtitle_language_duplicates": self.subtitle_language_duplicates_check.isChecked(),
             "detect_language_variants": self.variant_check.isChecked(),
             "auto_pgs_ocr": self.auto_pgs_ocr_check.isChecked(),
             "auto_commentary_ocr": self.auto_commentary_ocr_check.isChecked(),
@@ -1709,6 +1716,14 @@ class MainWindow(QMainWindow):
         self.smart_subs_check.setChecked(bool(payload.get("smart_sub_detection", self.smart_subs_check.isChecked())))
         self.drop_empty_check.setChecked(bool(payload.get("drop_empty_subs", self.drop_empty_check.isChecked())))
         self.duplicate_check.setChecked(bool(payload.get("detect_duplicate_tracks", self.duplicate_check.isChecked())))
+        self.subtitle_language_duplicates_check.setChecked(
+            bool(
+                payload.get(
+                    "detect_subtitle_language_duplicates",
+                    self.subtitle_language_duplicates_check.isChecked(),
+                )
+            )
+        )
         self.variant_check.setChecked(bool(payload.get("detect_language_variants", self.variant_check.isChecked())))
         self.auto_pgs_ocr_check.setChecked(bool(payload.get("auto_pgs_ocr", self.auto_pgs_ocr_check.isChecked())))
         self.auto_commentary_ocr_check.setChecked(
@@ -1834,6 +1849,9 @@ class MainWindow(QMainWindow):
         self.smart_subs_check.setChecked(bool(args.smart_sub_detection))
         self.drop_empty_check.setChecked(bool(args.drop_empty_subs))
         self.duplicate_check.setChecked(bool(getattr(args, "detect_duplicate_tracks", True)))
+        self.subtitle_language_duplicates_check.setChecked(
+            bool(getattr(args, "detect_subtitle_language_duplicates", False))
+        )
         self.variant_check.setChecked(bool(args.detect_language_variants))
         self.auto_pgs_ocr_check.setChecked(bool(args.auto_pgs_ocr))
         self.auto_commentary_ocr_check.setChecked(bool(args.auto_commentary_ocr))
@@ -2792,6 +2810,7 @@ class MainWindow(QMainWindow):
         args.smart_sub_detection = self.smart_subs_check.isChecked()
         args.drop_empty_subs = self.drop_empty_check.isChecked()
         args.detect_duplicate_tracks = self.duplicate_check.isChecked()
+        args.detect_subtitle_language_duplicates = self.subtitle_language_duplicates_check.isChecked()
         args.detect_language_variants = self.variant_check.isChecked()
         args.auto_pgs_ocr = self.auto_pgs_ocr_check.isChecked()
         args.auto_commentary_ocr = self.auto_commentary_ocr_check.isChecked()

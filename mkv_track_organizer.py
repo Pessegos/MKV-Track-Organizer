@@ -295,6 +295,7 @@ CONFIG_BOOL_KEYS = {
     "smart_sub_detection",
     "drop_empty_subs",
     "detect_duplicate_tracks",
+    "detect_subtitle_language_duplicates",
     "merge_inputs",
     "detect_language_variants",
     "batch_language_variant_consensus",
@@ -4879,6 +4880,31 @@ def subtitle_duplicate_key(track: TrackInfo) -> tuple[Any, ...] | None:
     )
 
 
+def subtitle_language_duplicate_key(track: TrackInfo) -> tuple[Any, ...] | None:
+    if track.drop:
+        return None
+    language_code = duplicate_language_key(track)
+    if not language_code:
+        return None
+    return (
+        "subtitle-language",
+        language_code,
+        track.role or "normal",
+        bool(track.forced),
+    )
+
+
+def subtitle_language_duplicate_format_rank(track: TrackInfo) -> int:
+    text = combined_track_text(track)
+    if "ass" in text or "ssa" in text:
+        return 0
+    if is_pgs_subtitle(track):
+        return 1
+    if subtitle_extension(track) == ".srt" or is_text_subtitle(track):
+        return 2
+    return 3
+
+
 def duplicate_metric(track: TrackInfo) -> float | None:
     if track.type != "subtitles":
         return None
@@ -4920,14 +4946,19 @@ def duplicate_group_reason(track: TrackInfo) -> str:
     return "same subtitle language, role, codec, and comparable size/events"
 
 
-def mark_duplicate_group(input_path: Path, tracks: list[TrackInfo]) -> None:
+def mark_duplicate_group(
+    input_path: Path,
+    tracks: list[TrackInfo],
+    reason: str | None = None,
+    leader_key: Callable[[TrackInfo], Any] | None = None,
+) -> None:
     if len(tracks) < 2:
         return
-    leader = min(tracks, key=lambda item: item.order)
+    leader = min(tracks, key=leader_key or (lambda item: item.order))
     member_ids = [track.id for track in sorted(tracks, key=lambda item: item.order)]
     member_text = ", ".join(duplicate_track_label(track, input_path) for track in sorted(tracks, key=lambda item: item.order))
     group_id = f"{duplicate_source_label(input_path, leader)}:{leader.type}:{leader.id}"
-    reason = duplicate_group_reason(leader)
+    reason = reason or duplicate_group_reason(leader)
     leader_label = duplicate_track_label(leader, input_path)
 
     for track in tracks:
@@ -4945,25 +4976,51 @@ def mark_duplicate_group(input_path: Path, tracks: list[TrackInfo]) -> None:
             track.duplicate_reason = f"Possible duplicate of {leader_label}; {reason}"
 
 
-def detect_duplicate_tracks(input_path: Path, audio_tracks: list[TrackInfo], subtitles: list[TrackInfo]) -> None:
+def detect_duplicate_tracks(
+    input_path: Path,
+    audio_tracks: list[TrackInfo],
+    subtitles: list[TrackInfo],
+    detect_exact_duplicates: bool = True,
+    detect_subtitle_language_duplicates: bool = False,
+) -> None:
     reset_duplicate_tracking([*audio_tracks, *subtitles])
-    tracks_by_key: dict[tuple[Any, ...], list[TrackInfo]] = {}
 
-    for track in audio_tracks:
-        key = audio_duplicate_key(track)
-        if key:
-            tracks_by_key.setdefault(key, []).append(track)
+    if detect_exact_duplicates:
+        tracks_by_key: dict[tuple[Any, ...], list[TrackInfo]] = {}
 
-    for track in subtitles:
-        key = subtitle_duplicate_key(track)
-        if key:
-            tracks_by_key.setdefault(key, []).append(track)
+        for track in audio_tracks:
+            key = audio_duplicate_key(track)
+            if key:
+                tracks_by_key.setdefault(key, []).append(track)
 
-    for tracks in tracks_by_key.values():
-        if len(tracks) < 2:
-            continue
-        for group in split_duplicate_metric_groups(tracks):
-            mark_duplicate_group(input_path, group)
+        for track in subtitles:
+            key = subtitle_duplicate_key(track)
+            if key:
+                tracks_by_key.setdefault(key, []).append(track)
+
+        for tracks in tracks_by_key.values():
+            if len(tracks) < 2:
+                continue
+            for group in split_duplicate_metric_groups(tracks):
+                mark_duplicate_group(input_path, group)
+
+    if detect_subtitle_language_duplicates:
+        tracks_by_language: dict[tuple[Any, ...], list[TrackInfo]] = {}
+        for track in subtitles:
+            key = subtitle_language_duplicate_key(track)
+            if key:
+                tracks_by_language.setdefault(key, []).append(track)
+
+        reason = "same subtitle language and role; preferred format order ASS > PGS > SRT"
+        for tracks in tracks_by_language.values():
+            if len(tracks) < 2:
+                continue
+            mark_duplicate_group(
+                input_path,
+                tracks,
+                reason=reason,
+                leader_key=lambda item: (subtitle_language_duplicate_format_rank(item), item.order),
+            )
 
 
 def apply_default_flags(
@@ -6416,6 +6473,10 @@ def process_file(
     preferred_audio_default = bool(getattr(args, "preferred_audio_default", False))
     preferred_subtitle_first = bool(getattr(args, "preferred_subtitle_first", False))
     preferred_forced_subtitle_default = bool(getattr(args, "preferred_forced_subtitle_default", False))
+    detect_duplicate_tracks_enabled = bool(getattr(args, "detect_duplicate_tracks", True))
+    detect_subtitle_language_duplicates_enabled = bool(
+        getattr(args, "detect_subtitle_language_duplicates", False)
+    )
     preserve_commentary_names = bool(getattr(args, "preserve_commentary_names", False))
     apply_audio_names(audio_tracks, audio_name_style)
 
@@ -6488,8 +6549,14 @@ def process_file(
     apply_audio_names(audio_tracks, audio_name_style)
     if preserve_commentary_names:
         apply_preserved_commentary_names([*audio_tracks, *subtitles])
-    if getattr(args, "detect_duplicate_tracks", True):
-        detect_duplicate_tracks(input_path, audio_tracks, subtitles)
+    if detect_duplicate_tracks_enabled or detect_subtitle_language_duplicates_enabled:
+        detect_duplicate_tracks(
+            input_path,
+            audio_tracks,
+            subtitles,
+            detect_exact_duplicates=detect_duplicate_tracks_enabled,
+            detect_subtitle_language_duplicates=detect_subtitle_language_duplicates_enabled,
+        )
     apply_track_selection_overrides(
         videos,
         audio_tracks,
@@ -6740,6 +6807,10 @@ def process_merged_inputs(
     preferred_audio_default = bool(getattr(args, "preferred_audio_default", False))
     preferred_subtitle_first = bool(getattr(args, "preferred_subtitle_first", False))
     preferred_forced_subtitle_default = bool(getattr(args, "preferred_forced_subtitle_default", False))
+    detect_duplicate_tracks_enabled = bool(getattr(args, "detect_duplicate_tracks", True))
+    detect_subtitle_language_duplicates_enabled = bool(
+        getattr(args, "detect_subtitle_language_duplicates", False)
+    )
     preserve_commentary_names = bool(getattr(args, "preserve_commentary_names", False))
     apply_audio_names(audio_tracks, audio_name_style)
 
@@ -6825,8 +6896,14 @@ def process_merged_inputs(
     apply_audio_names(audio_tracks, audio_name_style)
     if preserve_commentary_names:
         apply_preserved_commentary_names([*audio_tracks, *subtitles])
-    if getattr(args, "detect_duplicate_tracks", True):
-        detect_duplicate_tracks(input_files[0], audio_tracks, subtitles)
+    if detect_duplicate_tracks_enabled or detect_subtitle_language_duplicates_enabled:
+        detect_duplicate_tracks(
+            input_files[0],
+            audio_tracks,
+            subtitles,
+            detect_exact_duplicates=detect_duplicate_tracks_enabled,
+            detect_subtitle_language_duplicates=detect_subtitle_language_duplicates_enabled,
+        )
     apply_track_selection_overrides(
         videos,
         audio_tracks,
@@ -6961,6 +7038,7 @@ def build_parser(config_defaults: dict[str, Any] | None = None) -> argparse.Argu
     parser.set_defaults(
         smart_sub_detection=default("smart_sub_detection", True),
         detect_duplicate_tracks=default("detect_duplicate_tracks", True),
+        detect_subtitle_language_duplicates=default("detect_subtitle_language_duplicates", False),
         merge_inputs=default("merge_inputs", False),
         detect_language_variants=default("detect_language_variants", True),
         auto_pgs_ocr=default("auto_pgs_ocr", True),
@@ -7260,6 +7338,21 @@ def build_parser(config_defaults: dict[str, Any] | None = None) -> argparse.Argu
         dest="detect_duplicate_tracks",
         action="store_false",
         help="Disable likely duplicate track detection.",
+    )
+    parser.add_argument(
+        "--detect-subtitle-language-duplicates",
+        dest="detect_subtitle_language_duplicates",
+        action="store_true",
+        help=(
+            "Also highlight subtitle tracks with the same language/role across formats. "
+            "The kept leader prefers ASS, then PGS, then SRT."
+        ),
+    )
+    parser.add_argument(
+        "--no-detect-subtitle-language-duplicates",
+        dest="detect_subtitle_language_duplicates",
+        action="store_false",
+        help="Disable same-language subtitle duplicate detection.",
     )
     parser.add_argument(
         "--detect-pt-variant",

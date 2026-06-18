@@ -1463,6 +1463,47 @@ def test_duplicate_subtitle_detection_keeps_language_variants_separate() -> None
     assert not latin_american.duplicate_group
 
 
+def test_subtitle_language_duplicate_detection_prefers_ass_then_pgs_then_srt() -> None:
+    srt = subtitle_track(3, "eng")
+    pgs = subtitle_track(5, "eng")
+    pgs.codec = "HDMV PGS"
+    pgs.codec_id = "S_HDMV/PGS"
+    ass = subtitle_track(7, "eng")
+    ass.codec = "SubStation Alpha"
+    ass.codec_id = "S_TEXT/ASS"
+    forced = subtitle_track(9, "eng")
+    forced.role = "forced"
+    forced.forced = True
+
+    m.detect_duplicate_tracks(
+        Path("source-c.mkv"),
+        [],
+        [srt, pgs, ass, forced],
+        detect_exact_duplicates=False,
+        detect_subtitle_language_duplicates=True,
+    )
+
+    assert ass.duplicate_group
+    assert ass.duplicate_of_id is None
+    assert pgs.duplicate_of_id == ass.id
+    assert srt.duplicate_of_id == ass.id
+    assert ass.duplicate_member_ids == [3, 5, 7]
+    assert "ASS > PGS > SRT" in srt.duplicate_reason
+    assert not forced.duplicate_group
+
+
+def test_subtitle_language_duplicate_detection_is_opt_in() -> None:
+    srt = subtitle_track(3, "eng")
+    pgs = subtitle_track(5, "eng")
+    pgs.codec = "HDMV PGS"
+    pgs.codec_id = "S_HDMV/PGS"
+
+    m.detect_duplicate_tracks(Path("source-d.mkv"), [], [srt, pgs])
+
+    assert not srt.duplicate_group
+    assert not pgs.duplicate_group
+
+
 def test_ordered_tracks_can_group_audio_by_region() -> None:
     video = video_track(0)
     cantonese = audio_track(1, "yue")
@@ -1533,6 +1574,7 @@ def test_config_defaults(tmp_path: Path) -> None:
             '{"recursive": true, "output_suffix": "fixed", "detect_language_variants": false, '
             '"metadata_edit_mode": true, "audio_name_style": "language-format", '
             '"language_order_style": "regional", "regional_order": "asia;americas", '
+            '"detect_subtitle_language_duplicates": true, '
             '"audio_language_priority": "eng;pt-PT", '
             '"preserve_commentary_names": true}'
         ),
@@ -1546,6 +1588,7 @@ def test_config_defaults(tmp_path: Path) -> None:
     assert defaults["audio_name_style"] == "language-format"
     assert defaults["language_order_style"] == "regional"
     assert defaults["regional_order"] == ["asia", "americas"]
+    assert defaults["detect_subtitle_language_duplicates"] is True
     assert "audio_language_priority" not in defaults
     assert defaults["preserve_commentary_names"] is True
 
@@ -1556,9 +1599,17 @@ def test_parser_defaults_keep_commentary_ocr_enabled() -> None:
 
     assert args.auto_pgs_ocr is True
     assert args.auto_commentary_ocr is True
+    assert args.detect_subtitle_language_duplicates is False
     assert not hasattr(args, "audio_language_priority")
     assert args.preserve_commentary_names is False
     assert not hasattr(args, "validate_explicit_variant_ocr")
+
+
+def test_parser_can_enable_subtitle_language_duplicate_detection() -> None:
+    parser = m.build_parser({})
+    args = parser.parse_args(["--detect-subtitle-language-duplicates"])
+
+    assert args.detect_subtitle_language_duplicates is True
 
 
 def test_parser_rejects_removed_audio_language_priority_option() -> None:
