@@ -297,6 +297,7 @@ CONFIG_BOOL_KEYS = {
     "drop_empty_subs",
     "detect_duplicate_tracks",
     "detect_subtitle_language_duplicates",
+    "disable_track_statistics_tags",
     "merge_inputs",
     "detect_language_variants",
     "batch_language_variant_consensus",
@@ -5528,8 +5529,11 @@ def build_mkvmerge_command(
     preferred_audio_first: bool = False,
     preferred_subtitle_first: bool = False,
     preferred_forced_subtitle_default: bool = False,
+    disable_track_statistics_tags: bool = True,
 ) -> list[str]:
     command = command_with_mkvtoolnix_ui_language([str(mkvmerge), "--output", str(output_path)])
+    if disable_track_statistics_tags:
+        command.append("--disable-track-statistics-tags")
     input_paths = [input_path] if isinstance(input_path, Path) else list(input_path)
 
     for source_index, source_path in enumerate(input_paths):
@@ -6574,6 +6578,7 @@ def process_file(
     preferred_audio_default = bool(getattr(args, "preferred_audio_default", False))
     preferred_subtitle_first = bool(getattr(args, "preferred_subtitle_first", False))
     preferred_forced_subtitle_default = bool(getattr(args, "preferred_forced_subtitle_default", False))
+    disable_track_statistics_tags = bool(getattr(args, "disable_track_statistics_tags", True))
     detect_duplicate_tracks_enabled = bool(getattr(args, "detect_duplicate_tracks", True))
     detect_subtitle_language_duplicates_enabled = bool(
         getattr(args, "detect_subtitle_language_duplicates", False)
@@ -6798,6 +6803,7 @@ def process_file(
         preferred_audio_first=preferred_audio_first,
         preferred_subtitle_first=preferred_subtitle_first,
         preferred_forced_subtitle_default=preferred_forced_subtitle_default,
+        disable_track_statistics_tags=disable_track_statistics_tags,
     )
 
     print("\nmkvmerge command:")
@@ -6912,6 +6918,7 @@ def process_merged_inputs(
     preferred_audio_default = bool(getattr(args, "preferred_audio_default", False))
     preferred_subtitle_first = bool(getattr(args, "preferred_subtitle_first", False))
     preferred_forced_subtitle_default = bool(getattr(args, "preferred_forced_subtitle_default", False))
+    disable_track_statistics_tags = bool(getattr(args, "disable_track_statistics_tags", True))
     detect_duplicate_tracks_enabled = bool(getattr(args, "detect_duplicate_tracks", True))
     detect_subtitle_language_duplicates_enabled = bool(
         getattr(args, "detect_subtitle_language_duplicates", False)
@@ -7080,6 +7087,7 @@ def process_merged_inputs(
         preferred_audio_first=preferred_audio_first,
         preferred_subtitle_first=preferred_subtitle_first,
         preferred_forced_subtitle_default=preferred_forced_subtitle_default,
+        disable_track_statistics_tags=disable_track_statistics_tags,
     )
 
     print("\nmkvmerge command:")
@@ -7161,6 +7169,7 @@ def build_parser(config_defaults: dict[str, Any] | None = None) -> argparse.Argu
         skip_existing=default("skip_existing", False),
         report=default("report", False),
         preserve_commentary_names=default("preserve_commentary_names", False),
+        disable_track_statistics_tags=default("disable_track_statistics_tags", True),
         preferred_audio_first=default("preferred_audio_first", False),
         preferred_audio_default=default("preferred_audio_default", False),
         preferred_subtitle_first=default("preferred_subtitle_first", False),
@@ -7250,6 +7259,19 @@ def build_parser(config_defaults: dict[str, Any] | None = None) -> argparse.Argu
         dest="preserve_commentary_names",
         action="store_false",
         help="Allow Organizer to rewrite commentary track names.",
+    )
+    parser.add_argument(
+        "--disable-track-statistics-tags",
+        dest="disable_track_statistics_tags",
+        action="store_true",
+        default=default("disable_track_statistics_tags", True),
+        help="Do not write mkvmerge per-track statistics tags. Enabled by default.",
+    )
+    parser.add_argument(
+        "--write-track-statistics-tags",
+        dest="disable_track_statistics_tags",
+        action="store_false",
+        help="Allow mkvmerge to write per-track statistics tags.",
     )
     parser.add_argument(
         "--language-order-style",

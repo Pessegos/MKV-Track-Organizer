@@ -1021,6 +1021,33 @@ def test_mkvmerge_command_applies_audio_and_subtitle_delays(tmp_path: Path) -> N
     assert "2:-250" in sync_values
 
 
+def test_mkvmerge_command_disables_track_statistics_tags_by_default(tmp_path: Path) -> None:
+    command = m.build_mkvmerge_command(
+        mkvmerge=Path("mkvmerge"),
+        input_path=tmp_path / "in.mkv",
+        output_path=tmp_path / "out.mkv",
+        videos=[video_track(0)],
+        audio_tracks=[],
+        subtitles=[],
+    )
+
+    assert "--disable-track-statistics-tags" in command
+
+
+def test_mkvmerge_command_can_write_track_statistics_tags(tmp_path: Path) -> None:
+    command = m.build_mkvmerge_command(
+        mkvmerge=Path("mkvmerge"),
+        input_path=tmp_path / "in.mkv",
+        output_path=tmp_path / "out.mkv",
+        videos=[video_track(0)],
+        audio_tracks=[],
+        subtitles=[],
+        disable_track_statistics_tags=False,
+    )
+
+    assert "--disable-track-statistics-tags" not in command
+
+
 def test_merge_output_path_defaults_to_merged_suffix(tmp_path: Path) -> None:
     first = tmp_path / "main.mkv"
     second = tmp_path / "extra.mkv"
@@ -1653,6 +1680,7 @@ def test_config_defaults(tmp_path: Path) -> None:
             '"language_order_style": "regional", "regional_order": "asia;americas", '
             '"custom_language_order": "pt-PT;eng", '
             '"detect_subtitle_language_duplicates": true, '
+            '"disable_track_statistics_tags": false, '
             '"audio_language_priority": "eng;pt-PT", '
             '"preserve_commentary_names": true}'
         ),
@@ -1668,6 +1696,7 @@ def test_config_defaults(tmp_path: Path) -> None:
     assert defaults["regional_order"] == ["asia", "americas"]
     assert defaults["custom_language_order"] == ["pt-PT", "eng"]
     assert defaults["detect_subtitle_language_duplicates"] is True
+    assert defaults["disable_track_statistics_tags"] is False
     assert "audio_language_priority" not in defaults
     assert defaults["preserve_commentary_names"] is True
 
@@ -1681,7 +1710,15 @@ def test_parser_defaults_keep_commentary_ocr_enabled() -> None:
     assert args.detect_subtitle_language_duplicates is False
     assert not hasattr(args, "audio_language_priority")
     assert args.preserve_commentary_names is False
+    assert args.disable_track_statistics_tags is True
     assert not hasattr(args, "validate_explicit_variant_ocr")
+
+
+def test_parser_can_write_track_statistics_tags() -> None:
+    parser = m.build_parser({})
+    args = parser.parse_args(["--write-track-statistics-tags"])
+
+    assert args.disable_track_statistics_tags is False
 
 
 def test_parser_can_enable_subtitle_language_duplicate_detection() -> None:

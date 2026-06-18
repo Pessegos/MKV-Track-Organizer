@@ -360,6 +360,7 @@ class MainWindow(QMainWindow):
         "drop_empty_subs",
         "detect_duplicate_tracks",
         "detect_subtitle_language_duplicates",
+        "disable_track_statistics_tags",
         "detect_language_variants",
         "auto_pgs_ocr",
         "auto_commentary_ocr",
@@ -537,6 +538,7 @@ class MainWindow(QMainWindow):
         self.drop_empty_check = QCheckBox("Drop empty subtitles")
         self.duplicate_check = QCheckBox("Detect duplicates")
         self.subtitle_language_duplicates_check = QCheckBox("Subtitle lang duplicates")
+        self.disable_track_statistics_tags_check = QCheckBox("Skip stats tags")
         self.variant_check = QCheckBox("Detect language variants")
         self.auto_pgs_ocr_check = QCheckBox("Auto PGS OCR")
         self.auto_commentary_ocr_check = QCheckBox("Commentary/SDH OCR")
@@ -828,6 +830,9 @@ class MainWindow(QMainWindow):
         self.subtitle_language_duplicates_check.setToolTip(
             "Also mark subtitle tracks with the same language/role across formats; keeps ASS before PGS before SRT"
         )
+        self.disable_track_statistics_tags_check.setToolTip(
+            "Do not write mkvmerge per-track statistics tags. This does not affect audio or subtitle delays."
+        )
         self.variant_check.setToolTip("Automatically detect language variants such as es-ES vs es-419")
         self.auto_pgs_ocr_check.setToolTip("Run OCR for PGS subtitles when needed for language detection")
         self.auto_commentary_ocr_check.setToolTip("OCR extra full-size PGS tracks that may be commentary or SDH; normal and named SDH tracks are skipped")
@@ -915,6 +920,7 @@ class MainWindow(QMainWindow):
             self.drop_empty_check,
             self.duplicate_check,
             self.subtitle_language_duplicates_check,
+            self.disable_track_statistics_tags_check,
             self.variant_check,
             self.auto_pgs_ocr_check,
             self.auto_commentary_ocr_check,
@@ -1796,6 +1802,7 @@ class MainWindow(QMainWindow):
             "drop_empty_subs": self.drop_empty_check.isChecked(),
             "detect_duplicate_tracks": self.duplicate_check.isChecked(),
             "detect_subtitle_language_duplicates": self.subtitle_language_duplicates_check.isChecked(),
+            "disable_track_statistics_tags": self.disable_track_statistics_tags_check.isChecked(),
             "detect_language_variants": self.variant_check.isChecked(),
             "auto_pgs_ocr": self.auto_pgs_ocr_check.isChecked(),
             "auto_commentary_ocr": self.auto_commentary_ocr_check.isChecked(),
@@ -1852,6 +1859,14 @@ class MainWindow(QMainWindow):
                 payload.get(
                     "detect_subtitle_language_duplicates",
                     self.subtitle_language_duplicates_check.isChecked(),
+                )
+            )
+        )
+        self.disable_track_statistics_tags_check.setChecked(
+            bool(
+                payload.get(
+                    "disable_track_statistics_tags",
+                    self.disable_track_statistics_tags_check.isChecked(),
                 )
             )
         )
@@ -1982,6 +1997,9 @@ class MainWindow(QMainWindow):
         self.duplicate_check.setChecked(bool(getattr(args, "detect_duplicate_tracks", True)))
         self.subtitle_language_duplicates_check.setChecked(
             bool(getattr(args, "detect_subtitle_language_duplicates", False))
+        )
+        self.disable_track_statistics_tags_check.setChecked(
+            bool(getattr(args, "disable_track_statistics_tags", True))
         )
         self.variant_check.setChecked(bool(args.detect_language_variants))
         self.auto_pgs_ocr_check.setChecked(bool(args.auto_pgs_ocr))
@@ -2949,6 +2967,7 @@ class MainWindow(QMainWindow):
         args.drop_empty_subs = self.drop_empty_check.isChecked()
         args.detect_duplicate_tracks = self.duplicate_check.isChecked()
         args.detect_subtitle_language_duplicates = self.subtitle_language_duplicates_check.isChecked()
+        args.disable_track_statistics_tags = self.disable_track_statistics_tags_check.isChecked()
         args.detect_language_variants = self.variant_check.isChecked()
         args.auto_pgs_ocr = self.auto_pgs_ocr_check.isChecked()
         args.auto_commentary_ocr = self.auto_commentary_ocr_check.isChecked()
