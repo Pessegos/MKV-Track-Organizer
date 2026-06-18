@@ -3868,6 +3868,7 @@ class MainWindow(QMainWindow):
                 f"{verification_counts.get('ok', 0)} ok, "
                 f"{verification_counts.get('failed', 0)} failed"
             )
+        self._append_plan_summary_lines(self.append_summary_line, result.reports)
         for output_dir in self._output_dirs(result.reports):
             self.append_summary_line(f"Output: {output_dir}")
         self.append_summary_line()
@@ -3898,6 +3899,7 @@ class MainWindow(QMainWindow):
                     f"{verification_counts.get('ok', 0)} ok, "
                     f"{verification_counts.get('failed', 0)} failed"
                 )
+            self._append_plan_summary_lines(self.append_makemkv_summary_line, organizer_result.reports)
             for output_dir in self._output_dirs(organizer_result.reports):
                 self.append_makemkv_summary_line(f"Organizer output: {output_dir}")
         self.append_makemkv_summary_line()
@@ -3918,6 +3920,37 @@ class MainWindow(QMainWindow):
                 continue
             counts[status] = counts.get(status, 0) + 1
         return counts
+
+    def _plan_summary_counts(self, reports: list[dict]) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for report in reports:
+            summary = report.get("plan_summary") or {}
+            for category, count in (summary.get("counts") or {}).items():
+                counts[str(category)] = counts.get(str(category), 0) + int(count or 0)
+        return counts
+
+    def _plan_summary_items(self, reports: list[dict], limit: int = 8) -> list[dict]:
+        items: list[dict] = []
+        for report in reports:
+            summary = report.get("plan_summary") or {}
+            for item in summary.get("items") or []:
+                items.append(item)
+                if len(items) >= limit:
+                    return items
+        return items
+
+    def _append_plan_summary_lines(self, append_line, reports: list[dict], limit: int = 8) -> None:
+        counts = self._plan_summary_counts(reports)
+        if not counts:
+            return
+
+        append_line("Planned changes: " + organizer.format_plan_summary_counts({"counts": counts}))
+        for item in self._plan_summary_items(reports, limit=limit):
+            message = str(item.get("message") or "")
+            if not message:
+                continue
+            reason = f" ({item.get('reason')})" if item.get("reason") else ""
+            append_line(f"- {message}{reason}")
 
     def _output_dirs(self, reports: list[dict], limit: int = 3) -> list[str]:
         seen: list[str] = []

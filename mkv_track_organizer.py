@@ -5965,6 +5965,204 @@ def print_subtitle_role_score_report(subtitles: list[TrackInfo]) -> None:
         )
 
 
+def plan_track_type_label(track: TrackInfo) -> str:
+    if track.type == "subtitles":
+        return "subtitle"
+    return track.type or "track"
+
+
+def plan_track_label(track: TrackInfo) -> str:
+    source = f"{track.source_name}: " if track.source_name else ""
+    language = track.language_name or language_display_name(track.output_language or track.language)
+    return f"{source}{plan_track_type_label(track)} {track.id} {language}".strip()
+
+
+def plan_add_item(
+    items: list[dict[str, Any]],
+    track: TrackInfo,
+    category: str,
+    message: str,
+    reason: str = "",
+) -> None:
+    item = {
+        "category": category,
+        "track_type": track.type,
+        "track_id": track.id,
+        "source_index": track.source_index,
+        "source_name": track.source_name,
+        "label": plan_track_label(track),
+        "message": message,
+        "reason": reason,
+    }
+    if item not in items:
+        items.append(item)
+
+
+def plan_drop_reason(track: TrackInfo) -> str:
+    if track.duplicate_of_id is not None and track.duplicate_reason:
+        return track.duplicate_reason
+    if track.role == "empty" and track.role_reason:
+        return track.role_reason
+    if track.type == "video" and track.source_index:
+        return "non-primary video source in merged output"
+    return track.duplicate_reason or track.role_reason or "excluded by selection"
+
+
+def plan_role_label(track: TrackInfo) -> str:
+    if track.type == "audio" and detect_audio_role(track) == "Commentary":
+        return "commentary audio"
+    if track.role == "sdh":
+        return "SDH subtitle"
+    if track.role == "commentary":
+        return "commentary subtitle"
+    if track.role == "forced":
+        return "forced subtitle"
+    return track.role
+
+
+def plan_summary_for_tracks(
+    videos: list[TrackInfo] | None = None,
+    audio_tracks: list[TrackInfo] | None = None,
+    subtitles: list[TrackInfo] | None = None,
+) -> dict[str, Any]:
+    tracks = [*(videos or []), *(audio_tracks or []), *(subtitles or [])]
+    items: list[dict[str, Any]] = []
+
+    for track in sorted(tracks, key=lambda item: item.order):
+        label = plan_track_label(track)
+        if track.drop:
+            plan_add_item(
+                items,
+                track,
+                "drop",
+                f"Remove {label}",
+                plan_drop_reason(track),
+            )
+            continue
+
+        if track.duplicate_of_id is not None:
+            plan_add_item(
+                items,
+                track,
+                "duplicate",
+                f"Flag {label} as a possible duplicate",
+                track.duplicate_reason,
+            )
+
+        if track.type in {"audio", "subtitles"}:
+            input_language = normalize_language_code(track.language)
+            output_language = normalize_language_code(track.output_language)
+            if output_language != input_language:
+                plan_add_item(
+                    items,
+                    track,
+                    "language",
+                    f"Set {label} language: {input_language} -> {output_language}",
+                )
+
+            original_name = str(track.original_name or "").strip()
+            suggested_name = str(track.suggested_name or "").strip()
+            if suggested_name and suggested_name != original_name:
+                plan_add_item(
+                    items,
+                    track,
+                    "name",
+                    f"Set {label} name: {suggested_name}",
+                    f"original: {original_name}" if original_name else "track was unnamed",
+                )
+
+        original_default = bool(track.properties.get("default_track", False))
+        if track.default != original_default:
+            plan_add_item(
+                items,
+                track,
+                "flag",
+                f"{'Set' if track.default else 'Unset'} default flag on {label}",
+            )
+
+        if track.type == "audio" and detect_audio_role(track) == "Commentary" and not has_commentary_flag(track):
+            plan_add_item(
+                items,
+                track,
+                "role",
+                f"Mark {label} as {plan_role_label(track)}",
+            )
+        elif track.type == "subtitles":
+            if track.forced and not has_forced_flag(track):
+                plan_add_item(
+                    items,
+                    track,
+                    "role",
+                    f"Mark {label} as {plan_role_label(track)}",
+                    track.role_reason,
+                )
+            if track.role == "sdh" and not has_hearing_impaired_flag(track):
+                plan_add_item(
+                    items,
+                    track,
+                    "role",
+                    f"Mark {label} as {plan_role_label(track)}",
+                    track.role_reason,
+                )
+            if track.role == "commentary" and not has_commentary_flag(track):
+                plan_add_item(
+                    items,
+                    track,
+                    "role",
+                    f"Mark {label} as {plan_role_label(track)}",
+                    track.role_reason,
+                )
+
+        if track.delay_ms:
+            plan_add_item(
+                items,
+                track,
+                "delay",
+                f"Apply delay to {label}: {track.delay_ms:+d} ms",
+            )
+
+    counts: dict[str, int] = {}
+    for item in items:
+        category = str(item.get("category") or "other")
+        counts[category] = counts.get(category, 0) + 1
+
+    return {
+        "included_tracks": sum(1 for track in tracks if not track.drop),
+        "dropped_tracks": sum(1 for track in tracks if track.drop),
+        "items": items,
+        "counts": counts,
+    }
+
+
+def format_plan_summary_counts(summary: dict[str, Any]) -> str:
+    counts = summary.get("counts") or {}
+    if not counts:
+        return "no planned metadata/selection changes"
+    ordered_keys = ["drop", "delay", "language", "role", "flag", "name", "duplicate"]
+    parts = [f"{key}={counts[key]}" for key in ordered_keys if counts.get(key)]
+    parts.extend(
+        f"{key}={value}"
+        for key, value in sorted(counts.items())
+        if key not in ordered_keys
+    )
+    return ", ".join(parts)
+
+
+def print_plan_summary(summary: dict[str, Any], limit: int = 40) -> None:
+    items = summary.get("items") or []
+    print("\nPlanned changes:")
+    print(f"  Summary: {format_plan_summary_counts(summary)}")
+    if not items:
+        return
+
+    for item in items[:limit]:
+        reason = f" ({item['reason']})" if item.get("reason") else ""
+        print(f"  - {item['message']}{reason}")
+    remaining = len(items) - limit
+    if remaining > 0:
+        print(f"  - ... {remaining} more planned change(s)")
+
+
 def track_report_data(track: TrackInfo) -> dict[str, Any]:
     analysis = track.analysis
     pgs = analysis.pgs if analysis else None
@@ -6027,7 +6225,12 @@ def file_report_data(
     message: str = "",
     input_paths: list[Path] | None = None,
     verification: dict[str, Any] | None = None,
+    plan_summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    has_tracks = bool(videos or audio_tracks or subtitles)
+    if plan_summary is None and has_tracks:
+        plan_summary = plan_summary_for_tracks(videos, audio_tracks, subtitles)
+
     return {
         "input": str(input_path),
         "inputs": [str(path) for path in (input_paths or [input_path])],
@@ -6037,6 +6240,7 @@ def file_report_data(
         "command": command or [],
         "command_text": format_command(command or []),
         "verification": verification or {},
+        "plan_summary": plan_summary or {},
         "tracks": {
             "video": [track_report_data(track) for track in (videos or [])],
             "audio": [track_report_data(track) for track in (audio_tracks or [])],
@@ -6117,6 +6321,16 @@ def write_batch_report(
             if len(item_inputs) > 1:
                 lines.append("  sources:")
                 lines.extend(f"    - {input_item}" for input_item in item_inputs)
+            plan_summary = item.get("plan_summary") or {}
+            plan_items = plan_summary.get("items") or []
+            if plan_summary:
+                lines.append(f"  planned changes: {format_plan_summary_counts(plan_summary)}")
+                for change in plan_items[:8]:
+                    reason = f" ({change['reason']})" if change.get("reason") else ""
+                    lines.append(f"    - {change['message']}{reason}")
+                remaining_changes = len(plan_items) - 8
+                if remaining_changes > 0:
+                    lines.append(f"    - ... {remaining_changes} more planned change(s)")
             track_groups = item.get("tracks", {})
             audio_tracks = track_groups.get("audio", [])
             subtitles = track_groups.get("subtitles", [])
@@ -6937,6 +7151,8 @@ def process_file(
         preferred_subtitle_first,
         preferred_forced_subtitle_default,
     )
+    plan_summary = plan_summary_for_tracks(videos, audio_tracks, subtitles)
+    print_plan_summary(plan_summary)
     print_track_explanations(subtitles, args.explain_track_ids)
 
     metadata_plan = metadata_edit_plan(
@@ -6967,6 +7183,7 @@ def process_file(
                 audio_tracks=audio_tracks,
                 subtitles=subtitles,
                 message=metadata_plan.reason,
+                plan_summary=plan_summary,
             )
 
         if not args.mkvpropedit:
@@ -6992,6 +7209,7 @@ def process_file(
                     audio_tracks=audio_tracks,
                     subtitles=subtitles,
                     message="metadata-only via mkvpropedit",
+                    plan_summary=plan_summary,
                 )
 
             progress("Writing metadata", 85)
@@ -7017,6 +7235,7 @@ def process_file(
                 audio_tracks=audio_tracks,
                 subtitles=subtitles,
                 message="metadata-only via mkvpropedit",
+                plan_summary=plan_summary,
             )
 
     if metadata_mode == "only":
@@ -7026,7 +7245,16 @@ def process_file(
     if skip_message:
         print(f"Skipping: {skip_message}.")
         progress("Skipped", 100)
-        return file_report_data(input_path, output_path, "skipped", message=skip_message)
+        return file_report_data(
+            input_path,
+            output_path,
+            "skipped",
+            videos=videos,
+            audio_tracks=audio_tracks,
+            subtitles=subtitles,
+            message=skip_message,
+            plan_summary=plan_summary,
+        )
 
     progress("Building command", 80)
     command = build_mkvmerge_command(
@@ -7060,6 +7288,7 @@ def process_file(
             videos=videos,
             audio_tracks=audio_tracks,
             subtitles=subtitles,
+            plan_summary=plan_summary,
         )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -7114,6 +7343,7 @@ def process_file(
         subtitles=subtitles,
         message=message,
         verification=verification,
+        plan_summary=plan_summary,
     )
 
 
@@ -7315,6 +7545,8 @@ def process_merged_inputs(
         preferred_subtitle_first,
         preferred_forced_subtitle_default,
     )
+    plan_summary = plan_summary_for_tracks(videos, audio_tracks, subtitles)
+    print_plan_summary(plan_summary)
     print_track_explanations(subtitles, args.explain_track_ids)
 
     metadata_mode = getattr(args, "metadata_edit_mode", "off")
@@ -7336,6 +7568,7 @@ def process_merged_inputs(
             subtitles=subtitles,
             message=skip_message,
             input_paths=input_files,
+            plan_summary=plan_summary,
         )
 
     progress("Building command", 80)
@@ -7372,6 +7605,7 @@ def process_merged_inputs(
             subtitles=subtitles,
             message=f"merged preview from {len(input_files)} sources",
             input_paths=input_files,
+            plan_summary=plan_summary,
         )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -7427,6 +7661,7 @@ def process_merged_inputs(
         message=message,
         input_paths=input_files,
         verification=verification,
+        plan_summary=plan_summary,
     )
 
 

@@ -1159,6 +1159,64 @@ def test_verify_output_plan_detects_track_tags_and_mismatches(tmp_path: Path) ->
     assert m.report_counts_as_failure({"status": "verification-failed"})
 
 
+def test_plan_summary_explains_key_preview_changes() -> None:
+    audio = audio_track(1, "eng", original_name="Old English")
+    audio.output_language = "pt-PT"
+    audio.language_name = m.language_display_name("pt-PT")
+    audio.suggested_name = "Portuguese (Iberian) - DTS-HD MA 5.1"
+    audio.default = True
+    audio.delay_ms = 150
+
+    commentary = audio_track(2, "eng", original_name="Commentary by Director")
+    commentary.suggested_name = commentary.original_name
+
+    sdh = subtitle_track(3, "eng")
+    sdh.suggested_name = "English (SDH)"
+    sdh.role = "sdh"
+    sdh.role_reason = "SDH score 80"
+
+    duplicate = subtitle_track(4, "eng")
+    duplicate.duplicate_group = "sub-eng"
+    duplicate.duplicate_of_id = sdh.id
+    duplicate.duplicate_reason = "Same language and preferred codec"
+
+    dropped = subtitle_track(5, "eng", "empty")
+    dropped.drop = True
+    dropped.role = "empty"
+    dropped.role_reason = "empty subtitle"
+
+    summary = m.plan_summary_for_tracks([], [audio, commentary], [sdh, duplicate, dropped])
+    messages = "\n".join(item["message"] for item in summary["items"])
+
+    assert summary["counts"]["language"] == 1
+    assert summary["counts"]["name"] == 2
+    assert summary["counts"]["flag"] == 1
+    assert summary["counts"]["role"] == 2
+    assert summary["counts"]["delay"] == 1
+    assert summary["counts"]["duplicate"] == 1
+    assert summary["counts"]["drop"] == 1
+    assert "Apply delay" in messages
+    assert "Flag subtitle 4 English as a possible duplicate" in messages
+    assert "Remove subtitle 5 English" in messages
+    assert "Mark audio 2 English as commentary audio" in messages
+    assert summary["included_tracks"] == 4
+    assert summary["dropped_tracks"] == 1
+
+
+def test_file_report_data_includes_plan_summary(tmp_path: Path) -> None:
+    audio = audio_track(1, "eng")
+    audio.delay_ms = -250
+
+    report = m.file_report_data(
+        tmp_path / "in.mkv",
+        tmp_path / "out.mkv",
+        "dry-run",
+        audio_tracks=[audio],
+    )
+
+    assert report["plan_summary"]["counts"]["delay"] == 1
+
+
 def test_merge_output_path_defaults_to_merged_suffix(tmp_path: Path) -> None:
     first = tmp_path / "main.mkv"
     second = tmp_path / "extra.mkv"
