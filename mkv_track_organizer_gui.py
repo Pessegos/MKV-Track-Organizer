@@ -450,6 +450,7 @@ class MainWindow(QMainWindow):
             "unchanged": ("#f1f5f9", "#475569"),
             "skipped": ("#fff7df", "#8a5a00"),
             "error": ("#fdecec", "#b42318"),
+            "verification-failed": ("#fdecec", "#b42318"),
             "cancelled": ("#f1f5f9", "#475569"),
             "ready": ("#edf7ed", "#1f6f3f"),
         },
@@ -466,6 +467,7 @@ class MainWindow(QMainWindow):
             "unchanged": ("#293241", "#cbd5e1"),
             "skipped": ("#3a2d13", "#f6d365"),
             "error": ("#4a1d21", "#fca5a5"),
+            "verification-failed": ("#4a1d21", "#fca5a5"),
             "cancelled": ("#293241", "#cbd5e1"),
             "ready": ("#153223", "#9ae6b4"),
         },
@@ -3859,6 +3861,13 @@ class MainWindow(QMainWindow):
         self.append_summary_line(f"Cancelled: {'yes' if result.cancelled else 'no'}")
         for status, count in self._status_counts(result.reports).items():
             self.append_summary_line(f"{status}: {count}")
+        verification_counts = self._verification_counts(result.reports)
+        if verification_counts:
+            self.append_summary_line(
+                "Verification: "
+                f"{verification_counts.get('ok', 0)} ok, "
+                f"{verification_counts.get('failed', 0)} failed"
+            )
         for output_dir in self._output_dirs(result.reports):
             self.append_summary_line(f"Output: {output_dir}")
         self.append_summary_line()
@@ -3882,6 +3891,13 @@ class MainWindow(QMainWindow):
             self.append_makemkv_summary_line(f"Errors: {organizer_result.failures}")
             for status, count in self._status_counts(organizer_result.reports).items():
                 self.append_makemkv_summary_line(f"{status}: {count}")
+            verification_counts = self._verification_counts(organizer_result.reports)
+            if verification_counts:
+                self.append_makemkv_summary_line(
+                    "Verification: "
+                    f"{verification_counts.get('ok', 0)} ok, "
+                    f"{verification_counts.get('failed', 0)} failed"
+                )
             for output_dir in self._output_dirs(organizer_result.reports):
                 self.append_makemkv_summary_line(f"Organizer output: {output_dir}")
         self.append_makemkv_summary_line()
@@ -3890,6 +3906,16 @@ class MainWindow(QMainWindow):
         counts: dict[str, int] = {}
         for report in reports:
             status = str(report.get("status", "unknown") or "unknown")
+            counts[status] = counts.get(status, 0) + 1
+        return counts
+
+    def _verification_counts(self, reports: list[dict]) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for report in reports:
+            verification = report.get("verification") or {}
+            status = str(verification.get("status") or "")
+            if not status:
+                continue
             counts[status] = counts.get(status, 0) + 1
         return counts
 

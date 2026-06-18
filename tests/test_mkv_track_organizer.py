@@ -1052,6 +1052,113 @@ def test_mkvmerge_command_can_write_track_statistics_tags(tmp_path: Path) -> Non
     assert "--no-track-tags" not in command
 
 
+def test_verify_output_plan_accepts_matching_metadata(tmp_path: Path) -> None:
+    video = video_track(0)
+    audio = audio_track(1, "eng")
+    subtitle = subtitle_track(2, "pt-PT")
+    audio.suggested_name = "English - DTS-HD MA 5.1"
+    audio.default = True
+    audio.delay_ms = 150
+    subtitle.suggested_name = "Portuguese (Iberian) SDH"
+    subtitle.role = "sdh"
+
+    command = m.build_mkvmerge_command(
+        mkvmerge=Path("mkvmerge"),
+        input_path=tmp_path / "in.mkv",
+        output_path=tmp_path / "out.mkv",
+        videos=[video],
+        audio_tracks=[audio],
+        subtitles=[subtitle],
+    )
+    metadata = {
+        "track_tags": [],
+        "tracks": [
+            {
+                "id": 0,
+                "type": "video",
+                "codec": "HEVC",
+                "properties": {"language": "und", "default_track": False},
+            },
+            {
+                "id": 1,
+                "type": "audio",
+                "codec": "DTS-HD Master Audio",
+                "properties": {
+                    "language": "eng",
+                    "language_ietf": "en",
+                    "track_name": "English - DTS-HD MA 5.1",
+                    "default_track": True,
+                    "flag_commentary": False,
+                },
+            },
+            {
+                "id": 2,
+                "type": "subtitles",
+                "codec": "SubRip/SRT",
+                "properties": {
+                    "language": "por",
+                    "language_ietf": "pt-PT",
+                    "track_name": "Portuguese (Iberian) SDH",
+                    "default_track": False,
+                    "forced_track": False,
+                    "flag_hearing_impaired": True,
+                    "flag_commentary": False,
+                },
+            },
+        ],
+    }
+
+    verification = m.verify_output_plan_from_metadata(
+        metadata,
+        command,
+        [video],
+        [audio],
+        [subtitle],
+    )
+
+    assert verification["status"] == "ok"
+    assert verification["errors"] == []
+    assert verification["output_tracks"] == 3
+
+
+def test_verify_output_plan_detects_track_tags_and_mismatches(tmp_path: Path) -> None:
+    audio = audio_track(1, "eng")
+    audio.suggested_name = "English - DTS-HD MA 5.1"
+    command = m.build_mkvmerge_command(
+        mkvmerge=Path("mkvmerge"),
+        input_path=tmp_path / "in.mkv",
+        output_path=tmp_path / "out.mkv",
+        videos=[],
+        audio_tracks=[audio],
+        subtitles=[],
+    )
+    metadata = {
+        "track_tags": [{"track_id": 0, "num_entries": 1}],
+        "tracks": [
+            {
+                "id": 0,
+                "type": "audio",
+                "codec": "DTS-HD Master Audio",
+                "properties": {
+                    "language": "por",
+                    "track_name": "Portuguese - DTS-HD MA 5.1",
+                    "default_track": False,
+                    "tag_duration": "00:01:00.000000000",
+                },
+            }
+        ],
+    }
+
+    verification = m.verify_output_plan_from_metadata(metadata, command, [], [audio], [])
+
+    assert verification["status"] == "failed"
+    assert any("language mismatch" in error for error in verification["errors"])
+    assert any("Output still contains track tags" in error for error in verification["errors"])
+    assert verification["track_tag_entries"] == 1
+    assert verification["track_tag_properties"] == 1
+    assert m.report_counts_as_failure({"status": "verification-failed"})
+
+
 def test_merge_output_path_defaults_to_merged_suffix(tmp_path: Path) -> None:
     first = tmp_path / "main.mkv"
     second = tmp_path / "extra.mkv"

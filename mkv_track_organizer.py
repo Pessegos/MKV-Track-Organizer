@@ -5617,6 +5617,234 @@ def build_mkvmerge_command(
     return command
 
 
+def command_has_sync_for_track(command: list[str], track: TrackInfo) -> bool:
+    expected = f"{track.id}:{track.delay_ms}"
+    return any(
+        item == "--sync" and index + 1 < len(command) and command[index + 1] == expected
+        for index, item in enumerate(command)
+    )
+
+
+def metadata_track_tag_counts(metadata: dict[str, Any]) -> tuple[int, int]:
+    track_tag_entries = 0
+    for tag_item in metadata.get("track_tags") or []:
+        try:
+            track_tag_entries += int(tag_item.get("num_entries") or 0)
+        except (TypeError, ValueError):
+            track_tag_entries += 1
+
+    track_tag_properties = 0
+    for raw_track in metadata.get("tracks") or []:
+        properties = raw_track.get("properties") or {}
+        track_tag_properties += sum(1 for key in properties if str(key).startswith("tag_"))
+
+    return track_tag_entries, track_tag_properties
+
+
+def verification_track_label(track: TrackInfo) -> str:
+    source = f"{track.source_name}:" if track.source_name else ""
+    return f"{source}{track.type}#{track.id}"
+
+
+def add_verification_issue(issues: list[str], message: str) -> None:
+    if message not in issues:
+        issues.append(message)
+
+
+def verify_output_plan_from_metadata(
+    metadata: dict[str, Any],
+    command: list[str],
+    videos: list[TrackInfo],
+    audio_tracks: list[TrackInfo],
+    subtitles: list[TrackInfo],
+    language_order_style: str = "default",
+    regional_order: Any = None,
+    track_order_overrides: list[str] | None = None,
+    preferred_language: str | None = None,
+    preferred_audio_first: bool = False,
+    preferred_subtitle_first: bool = False,
+    preferred_forced_subtitle_default: bool = False,
+    disable_track_statistics_tags: bool = True,
+) -> dict[str, Any]:
+    errors: list[str] = []
+    warnings: list[str] = []
+    expected_tracks = ordered_tracks(
+        videos,
+        audio_tracks,
+        subtitles,
+        language_order_style,
+        regional_order,
+        track_order_overrides,
+        preferred_language,
+        preferred_audio_first,
+        preferred_subtitle_first,
+        preferred_forced_subtitle_default,
+    )
+    output_tracks = [
+        track
+        for track in build_tracks(metadata)
+        if track.type in {"video", "audio", "subtitles"}
+    ]
+
+    if len(output_tracks) != len(expected_tracks):
+        add_verification_issue(
+            errors,
+            f"Track count mismatch: expected {len(expected_tracks)}, found {len(output_tracks)}.",
+        )
+
+    expected_types = [track.type for track in expected_tracks]
+    output_types = [track.type for track in output_tracks]
+    if expected_types != output_types:
+        add_verification_issue(
+            errors,
+            f"Track order/type mismatch: expected {expected_types}, found {output_types}.",
+        )
+
+    for position, (expected, actual) in enumerate(zip(expected_tracks, output_tracks), start=1):
+        label = verification_track_label(expected)
+        if expected.type != actual.type:
+            continue
+
+        if expected.type in {"audio", "subtitles"}:
+            expected_language = normalize_language_code(expected.output_language or expected.language)
+            actual_language = normalize_language_code(actual.output_language or actual.language)
+            if actual_language != expected_language:
+                add_verification_issue(
+                    errors,
+                    f"Track {position} {label} language mismatch: expected {expected_language}, found {actual_language}.",
+                )
+
+            expected_name = str(expected.suggested_name or "").strip()
+            actual_name = str(actual.original_name or "").strip()
+            if actual_name != expected_name:
+                add_verification_issue(
+                    errors,
+                    f"Track {position} {label} name mismatch: expected {expected_name!r}, found {actual_name!r}.",
+                )
+
+        if actual.default != expected.default:
+            add_verification_issue(
+                errors,
+                f"Track {position} {label} default flag mismatch: expected {expected.default}, found {actual.default}.",
+            )
+
+        if expected.type == "audio":
+            expected_commentary = detect_audio_role(expected) == "Commentary"
+            actual_commentary = has_commentary_flag(actual)
+            if actual_commentary != expected_commentary:
+                add_verification_issue(
+                    errors,
+                    f"Track {position} {label} commentary flag mismatch: expected {expected_commentary}, found {actual_commentary}.",
+                )
+        elif expected.type == "subtitles":
+            if actual.forced != expected.forced:
+                add_verification_issue(
+                    errors,
+                    f"Track {position} {label} forced flag mismatch: expected {expected.forced}, found {actual.forced}.",
+                )
+            expected_hearing_impaired = expected.role == "sdh"
+            actual_hearing_impaired = has_hearing_impaired_flag(actual)
+            if actual_hearing_impaired != expected_hearing_impaired:
+                add_verification_issue(
+                    errors,
+                    (
+                        f"Track {position} {label} hearing-impaired flag mismatch: "
+                        f"expected {expected_hearing_impaired}, found {actual_hearing_impaired}."
+                    ),
+                )
+            expected_commentary = expected.role == "commentary"
+            actual_commentary = has_commentary_flag(actual)
+            if actual_commentary != expected_commentary:
+                add_verification_issue(
+                    errors,
+                    f"Track {position} {label} commentary flag mismatch: expected {expected_commentary}, found {actual_commentary}.",
+                )
+
+        if expected.delay_ms and not command_has_sync_for_track(command, expected):
+            add_verification_issue(
+                errors,
+                f"Track {position} {label} delay was planned as {expected.delay_ms:+d} ms but no matching --sync was found.",
+            )
+
+    track_tag_entries, track_tag_properties = metadata_track_tag_counts(metadata)
+    if disable_track_statistics_tags:
+        if "--disable-track-statistics-tags" not in command:
+            add_verification_issue(errors, "Command did not include --disable-track-statistics-tags.")
+        if "--no-track-tags" not in command:
+            add_verification_issue(errors, "Command did not include --no-track-tags for input track tags.")
+        if track_tag_entries or track_tag_properties:
+            add_verification_issue(
+                errors,
+                (
+                    "Output still contains track tags: "
+                    f"{track_tag_entries} tag entr{'y' if track_tag_entries == 1 else 'ies'}, "
+                    f"{track_tag_properties} tag propert{'y' if track_tag_properties == 1 else 'ies'}."
+                ),
+            )
+
+    return {
+        "status": "failed" if errors else "ok",
+        "errors": errors,
+        "warnings": warnings,
+        "expected_tracks": len(expected_tracks),
+        "output_tracks": len(output_tracks),
+        "track_tag_entries": track_tag_entries,
+        "track_tag_properties": track_tag_properties,
+    }
+
+
+def verify_output_plan(
+    mkvmerge: Path,
+    output_path: Path,
+    command: list[str],
+    videos: list[TrackInfo],
+    audio_tracks: list[TrackInfo],
+    subtitles: list[TrackInfo],
+    language_order_style: str = "default",
+    regional_order: Any = None,
+    track_order_overrides: list[str] | None = None,
+    preferred_language: str | None = None,
+    preferred_audio_first: bool = False,
+    preferred_subtitle_first: bool = False,
+    preferred_forced_subtitle_default: bool = False,
+    disable_track_statistics_tags: bool = True,
+) -> dict[str, Any]:
+    metadata = load_metadata(mkvmerge, output_path)
+    return verify_output_plan_from_metadata(
+        metadata,
+        command,
+        videos,
+        audio_tracks,
+        subtitles,
+        language_order_style,
+        regional_order,
+        track_order_overrides,
+        preferred_language,
+        preferred_audio_first,
+        preferred_subtitle_first,
+        preferred_forced_subtitle_default,
+        disable_track_statistics_tags,
+    )
+
+
+def print_verification_result(verification: dict[str, Any]) -> None:
+    status = verification.get("status", "unknown")
+    print(f"\nOutput verification: {status}")
+    for error in verification.get("errors", []):
+        print(f"  ERROR: {error}")
+    for warning in verification.get("warnings", []):
+        print(f"  Warning: {warning}")
+    if status == "ok":
+        print(
+            "  Tracks checked: "
+            f"{verification.get('output_tracks', 0)}/{verification.get('expected_tracks', 0)}"
+        )
+
+
+def report_counts_as_failure(report: dict[str, Any]) -> bool:
+    return str(report.get("status") or "") == "verification-failed"
+
+
 def track_note_text(track: TrackInfo) -> str:
     notes = [note for note in [track.duplicate_reason, track.role_reason] if note]
     return f" | {' | '.join(notes)}" if notes else ""
@@ -5798,6 +6026,7 @@ def file_report_data(
     subtitles: list[TrackInfo] | None = None,
     message: str = "",
     input_paths: list[Path] | None = None,
+    verification: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "input": str(input_path),
@@ -5807,6 +6036,7 @@ def file_report_data(
         "message": message,
         "command": command or [],
         "command_text": format_command(command or []),
+        "verification": verification or {},
         "tracks": {
             "video": [track_report_data(track) for track in (videos or [])],
             "audio": [track_report_data(track) for track in (audio_tracks or [])],
@@ -5875,6 +6105,14 @@ def write_batch_report(
             )
             if item.get("message"):
                 lines.append(f"  note:   {item['message']}")
+            verification = item.get("verification") or {}
+            if verification:
+                lines.append(f"  verification: {verification.get('status', 'unknown')}")
+                for error in verification.get("errors", [])[:8]:
+                    lines.append(f"    ERROR: {error}")
+                remaining_errors = max(0, len(verification.get("errors", [])) - 8)
+                if remaining_errors:
+                    lines.append(f"    ... {remaining_errors} more verification error(s)")
             item_inputs = item.get("inputs") or []
             if len(item_inputs) > 1:
                 lines.append("  sources:")
@@ -6833,23 +7071,49 @@ def process_file(
         progress_callback,
         "Remuxing output",
         85,
-        100,
+        95,
         cancel_callback,
     )
 
     if result.returncode != 0:
         raise OrganizerError(f"mkvmerge failed with exit code {result.returncode}: {input_path}")
 
+    progress("Verifying output", 96)
+    verification = verify_output_plan(
+        mkvmerge=args.mkvmerge,
+        output_path=output_path,
+        command=command,
+        videos=videos,
+        audio_tracks=audio_tracks,
+        subtitles=subtitles,
+        language_order_style=language_order_style,
+        regional_order=regional_order,
+        track_order_overrides=track_order_overrides,
+        preferred_language=preferred_language,
+        preferred_audio_first=preferred_audio_first,
+        preferred_subtitle_first=preferred_subtitle_first,
+        preferred_forced_subtitle_default=preferred_forced_subtitle_default,
+        disable_track_statistics_tags=disable_track_statistics_tags,
+    )
+    print_verification_result(verification)
+    status = "processed"
+    message = ""
+    if verification.get("status") == "failed":
+        status = "verification-failed"
+        message = f"output verification failed: {len(verification.get('errors', []))} issue(s)"
+
     print(f"Completed: {output_path}")
     progress("File complete", 100)
     return file_report_data(
         input_path,
         output_path,
-        "processed",
+        status,
         command=command,
         videos=videos,
         audio_tracks=audio_tracks,
         subtitles=subtitles,
+        message=message,
+        verification=verification,
     )
 
 
@@ -7119,25 +7383,50 @@ def process_merged_inputs(
         progress_callback,
         "Merging output",
         85,
-        100,
+        95,
         cancel_callback,
     )
 
     if result.returncode != 0:
         raise OrganizerError(f"mkvmerge failed with exit code {result.returncode}: {output_path}")
 
+    progress("Verifying output", 96)
+    verification = verify_output_plan(
+        mkvmerge=args.mkvmerge,
+        output_path=output_path,
+        command=command,
+        videos=videos,
+        audio_tracks=audio_tracks,
+        subtitles=subtitles,
+        language_order_style=language_order_style,
+        regional_order=regional_order,
+        track_order_overrides=track_order_overrides,
+        preferred_language=preferred_language,
+        preferred_audio_first=preferred_audio_first,
+        preferred_subtitle_first=preferred_subtitle_first,
+        preferred_forced_subtitle_default=preferred_forced_subtitle_default,
+        disable_track_statistics_tags=disable_track_statistics_tags,
+    )
+    print_verification_result(verification)
+    status = "processed"
+    message = f"merged {len(input_files)} sources"
+    if verification.get("status") == "failed":
+        status = "verification-failed"
+        message = f"merged {len(input_files)} sources; output verification failed: {len(verification.get('errors', []))} issue(s)"
+
     print(f"Completed merge: {output_path}")
     progress("Merge complete", 100)
     return file_report_data(
         input_files[0],
         output_path,
-        "processed",
+        status,
         command=command,
         videos=videos,
         audio_tracks=audio_tracks,
         subtitles=subtitles,
-        message=f"merged {len(input_files)} sources",
+        message=message,
         input_paths=input_files,
+        verification=verification,
     )
 
 
@@ -7862,6 +8151,8 @@ def run_batch(
                 cancel_callback=cancel_callback,
             )
             reports.append(report)
+            if report_counts_as_failure(report):
+                failures += 1
             emit_batch_event(
                 event_callback,
                 "file-finished",
@@ -7974,6 +8265,8 @@ def run_batch(
                 cancel_callback=cancel_callback,
             )
             reports.append(report)
+            if report_counts_as_failure(report):
+                failures += 1
             emit_batch_event(
                 event_callback,
                 "file-finished",
