@@ -92,6 +92,7 @@ def test_track_table_shows_plan_and_manual_exclude(qapp):
 
     window = gui.MainWindow()
     try:
+        assert window.files_table.parentWidget().minimumWidth() >= 300
         window._populate_results([report])
 
         assert window.tracks_table.item(0, window.TRACK_PLAN_COLUMN).text() == "Delay +150 ms | Rename"
