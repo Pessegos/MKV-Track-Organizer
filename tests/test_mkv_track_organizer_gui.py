@@ -96,15 +96,33 @@ def test_track_table_shows_plan_and_manual_exclude(qapp):
 
         assert window.tracks_table.item(0, window.TRACK_PLAN_COLUMN).text() == "Delay +150 ms | Rename"
         assert window.tracks_table.item(1, window.TRACK_PLAN_COLUMN).text() == "Duplicate"
+        assert "2/2 included" in window.track_status_label.text()
+        assert "1 duplicate warning" in window.track_status_label.text()
+        assert not window.track_reset_selection_button.isEnabled()
+        assert not window.track_reset_order_button.isEnabled()
 
         include_item = window.tracks_table.item(0, window.TRACK_INCLUDE_COLUMN)
         include_item.setCheckState(Qt.Unchecked)
 
         assert window.tracks_table.item(0, window.TRACK_PLAN_COLUMN).text() == "Exclude manually"
+        assert "1 manual selection edit" in window.track_status_label.text()
+        assert window.track_reset_selection_button.isEnabled()
         assert window.track_reset_button.isEnabled()
+
+        window.reset_track_selection_edits()
+
+        assert window.tracks_table.item(0, window.TRACK_PLAN_COLUMN).text() == "Delay +150 ms | Rename"
+        assert not window.track_reset_selection_button.isEnabled()
+
+        window._track_rows_reordered([1], 0)
+
+        assert window.manual_track_order_active
+        assert "manual order" in window.track_status_label.text()
+        assert window.track_reset_order_button.isEnabled()
 
         window.reset_track_edits()
 
-        assert window.tracks_table.item(0, window.TRACK_PLAN_COLUMN).text() == "Delay +150 ms | Rename"
+        assert not window.track_reset_button.isEnabled()
+        assert "2/2 included" in window.track_status_label.text()
     finally:
         window.close()

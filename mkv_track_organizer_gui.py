@@ -642,7 +642,11 @@ class MainWindow(QMainWindow):
         self.cancel_button = QPushButton("Cancel")
         self.track_select_all_button = QPushButton("Select all")
         self.track_deselect_duplicates_button = QPushButton("Deselect duplicates")
-        self.track_reset_button = QPushButton("Reset track edits")
+        self.track_reset_selection_button = QPushButton("Reset selection")
+        self.track_reset_order_button = QPushButton("Reset order")
+        self.track_reset_button = QPushButton("Reset all")
+        self.track_status_label = QLabel("No preview")
+        self.track_status_label.setObjectName("trackStatusLabel")
         self.organizer_clear_button: QToolButton | None = None
         self.organizer_reset_button: QToolButton | None = None
         self.check_tools_button.setObjectName("secondaryButton")
@@ -651,12 +655,18 @@ class MainWindow(QMainWindow):
         self.cancel_button.setObjectName("dangerButton")
         self.track_select_all_button.setObjectName("secondaryButton")
         self.track_deselect_duplicates_button.setObjectName("secondaryButton")
+        self.track_reset_selection_button.setObjectName("secondaryButton")
+        self.track_reset_order_button.setObjectName("secondaryButton")
         self.track_reset_button.setObjectName("secondaryButton")
         self.track_select_all_button.setToolTip("Include every displayed track")
         self.track_deselect_duplicates_button.setToolTip("Uncheck duplicate-group members and keep each group leader")
+        self.track_reset_selection_button.setToolTip("Restore the preview include/exclude state")
+        self.track_reset_order_button.setToolTip("Restore the automatic preview track order")
         self.track_reset_button.setToolTip("Restore the preview include state and automatic track order")
         self.track_select_all_button.setEnabled(False)
         self.track_deselect_duplicates_button.setEnabled(False)
+        self.track_reset_selection_button.setEnabled(False)
+        self.track_reset_order_button.setEnabled(False)
         self.track_reset_button.setEnabled(False)
         self.files_table = QTableWidget(0, len(self.FILE_COLUMNS))
         self.results_table = self.files_table
@@ -995,8 +1005,12 @@ class MainWindow(QMainWindow):
         tracks_toolbar = QHBoxLayout()
         tracks_toolbar.addWidget(self.track_select_all_button)
         tracks_toolbar.addWidget(self.track_deselect_duplicates_button)
+        tracks_toolbar.addSpacing(8)
+        tracks_toolbar.addWidget(self.track_reset_selection_button)
+        tracks_toolbar.addWidget(self.track_reset_order_button)
         tracks_toolbar.addWidget(self.track_reset_button)
         tracks_toolbar.addStretch(1)
+        tracks_toolbar.addWidget(self.track_status_label)
         tracks_layout.addLayout(tracks_toolbar)
         self.tracks_table.setHorizontalHeaderLabels(self.TRACK_COLUMNS)
         track_header = self.tracks_table.horizontalHeader()
@@ -1377,6 +1391,8 @@ class MainWindow(QMainWindow):
         self.cancel_button.clicked.connect(self.cancel_run)
         self.track_select_all_button.clicked.connect(self.select_all_tracks)
         self.track_deselect_duplicates_button.clicked.connect(self.deselect_duplicate_tracks)
+        self.track_reset_selection_button.clicked.connect(self.reset_track_selection_edits)
+        self.track_reset_order_button.clicked.connect(self.reset_track_order_edits)
         self.track_reset_button.clicked.connect(self.reset_track_edits)
         self.tracks_table.itemChanged.connect(self._track_item_changed)
         self.tracks_table.rows_reordered.connect(self._track_rows_reordered)
@@ -1530,6 +1546,10 @@ class MainWindow(QMainWindow):
             QPushButton#secondaryButton:pressed {{
                 background: {palette['secondary_pressed']};
                 border-color: {palette['secondary_text']};
+            }}
+            QLabel#trackStatusLabel {{
+                color: {palette['muted']};
+                padding: 0 4px;
             }}
             QTabWidget::pane {{
                 border: 1px solid {palette['border']};
@@ -4321,12 +4341,12 @@ class MainWindow(QMainWindow):
         if not selection_key:
             return
         include_track = item.checkState() == Qt.Checked
-        self.manual_track_includes[selection_key] = include_track
 
         tracks = self._current_track_rows()
         row_to_restore = item.row()
         if 0 <= item.row() < len(tracks):
             track = tracks[item.row()]
+            self._set_manual_track_include(track, include_track)
             track["drop"] = not include_track
             self._populate_tracks_for_row(self.files_table.currentRow())
             if 0 <= row_to_restore < self.tracks_table.rowCount():
@@ -4381,6 +4401,23 @@ class MainWindow(QMainWindow):
         self._set_displayed_track_checks(Qt.Unchecked, duplicate_members_only=True)
 
     @Slot()
+    def reset_track_selection_edits(self) -> None:
+        current_keys = self._current_track_selection_keys()
+        if current_keys:
+            for key in current_keys:
+                self.manual_track_includes.pop(key, None)
+        else:
+            self.manual_track_includes = {}
+        self._populate_tracks_for_row(self.files_table.currentRow())
+        self.statusBar().showMessage("Track selection reset")
+
+    @Slot()
+    def reset_track_order_edits(self) -> None:
+        self._clear_manual_track_order()
+        self._populate_tracks_for_row(self.files_table.currentRow())
+        self.statusBar().showMessage("Track order reset")
+
+    @Slot()
     def reset_track_edits(self) -> None:
         self.manual_track_includes = {}
         self._clear_manual_track_order()
@@ -4393,16 +4430,65 @@ class MainWindow(QMainWindow):
         for track in tracks:
             if duplicate_members_only and track.get("duplicate_of_id") is None:
                 continue
-            self.manual_track_includes[self._track_selection_key(track)] = include_track
+            self._set_manual_track_include(track, include_track)
         self._populate_tracks_for_row(self.files_table.currentRow())
 
+    def _current_track_selection_keys(self) -> set[str]:
+        return {self._track_selection_key(track) for track in self._current_track_rows()}
+
+    def _track_base_included(self, track: dict) -> bool:
+        return not bool(track.get("_preview_base_drop", track.get("drop")))
+
+    def _set_manual_track_include(self, track: dict, include_track: bool) -> None:
+        selection_key = self._track_selection_key(track)
+        if include_track == self._track_base_included(track):
+            self.manual_track_includes.pop(selection_key, None)
+        else:
+            self.manual_track_includes[selection_key] = include_track
+
+    def _current_manual_selection_count(self) -> int:
+        keys = self._current_track_selection_keys()
+        if not keys:
+            return 0
+        return sum(1 for key in keys if key in self.manual_track_includes)
+
     def _set_track_selection_controls_enabled(self, enabled: bool) -> None:
+        manual_selection_count = self._current_manual_selection_count() if enabled else 0
         self.track_select_all_button.setEnabled(enabled)
         self.track_deselect_duplicates_button.setEnabled(
             enabled and any(track.get("duplicate_of_id") is not None for track in self._current_track_rows())
         )
+        self.track_reset_selection_button.setEnabled(enabled and manual_selection_count > 0)
+        self.track_reset_order_button.setEnabled(enabled and self.manual_track_order_active)
         self.track_reset_button.setEnabled(
-            enabled and (bool(self.manual_track_includes) or self.manual_track_order_active)
+            enabled and (manual_selection_count > 0 or self.manual_track_order_active)
+        )
+        self._update_track_status_label(enabled, manual_selection_count)
+
+    def _update_track_status_label(self, enabled: bool, manual_selection_count: int = 0) -> None:
+        if not enabled:
+            self.track_status_label.setText("No preview")
+            self.track_status_label.setToolTip("")
+            return
+
+        tracks = self._current_track_rows()
+        total = len(tracks)
+        included = sum(1 for track in tracks if not track.get("drop"))
+        excluded = total - included
+        duplicates = sum(1 for track in tracks if track.get("duplicate_group"))
+        parts = [f"{included}/{total} included"]
+        if excluded:
+            parts.append(f"{excluded} excluded")
+        if duplicates:
+            parts.append(f"{duplicates} duplicate warning(s)")
+        if manual_selection_count:
+            parts.append(f"{manual_selection_count} manual selection edit(s)")
+        if self.manual_track_order_active:
+            parts.append("manual order")
+
+        self.track_status_label.setText(" | ".join(parts))
+        self.track_status_label.setToolTip(
+            "Track table status for the selected preview. Manual edits apply to the next run."
         )
 
     def _track_type_label(self, track_type: str) -> str:
