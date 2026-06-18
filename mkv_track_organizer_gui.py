@@ -565,7 +565,7 @@ class MainWindow(QMainWindow):
         self.drop_empty_check = QCheckBox("Drop empty subtitles")
         self.duplicate_check = QCheckBox("Detect duplicates")
         self.subtitle_language_duplicates_check = QCheckBox("Subtitle lang duplicates")
-        self.disable_track_statistics_tags_check = QCheckBox("Skip stats tags")
+        self.disable_track_statistics_tags_check = QCheckBox("Skip track tags")
         self.variant_check = QCheckBox("Detect language variants")
         self.auto_pgs_ocr_check = QCheckBox("Auto PGS OCR")
         self.auto_commentary_ocr_check = QCheckBox("Commentary/SDH OCR")
@@ -726,7 +726,6 @@ class MainWindow(QMainWindow):
         self.audio_sync_custom_checkpoints = 4
         self.audio_sync_previous_checkpoints_index = self.audio_sync_checkpoints_combo.currentIndex()
         self.audio_sync_check_button = QPushButton("Check tools")
-        self.audio_sync_load_button = QPushButton("Load streams")
         self.audio_sync_analyze_button = QPushButton("Analyze")
         self.audio_sync_apply_organizer_button = QPushButton("Apply delay in Organizer")
         self.audio_sync_export_button = QPushButton("Export shifted .mka")
@@ -736,7 +735,6 @@ class MainWindow(QMainWindow):
         self.audio_sync_reset_button: QToolButton | None = None
         self.audio_sync_cancel_button = QPushButton("Cancel")
         self.audio_sync_check_button.setObjectName("secondaryButton")
-        self.audio_sync_load_button.setObjectName("secondaryButton")
         self.audio_sync_analyze_button.setObjectName("primaryButton")
         self.audio_sync_apply_organizer_button.setObjectName("secondaryButton")
         self.audio_sync_export_button.setObjectName("secondaryButton")
@@ -858,7 +856,8 @@ class MainWindow(QMainWindow):
             "Also mark subtitle tracks with the same language/role across formats; keeps ASS before PGS before SRT"
         )
         self.disable_track_statistics_tags_check.setToolTip(
-            "Do not write mkvmerge per-track statistics tags. This does not affect audio or subtitle delays."
+            "Do not copy per-track tags from inputs and do not write mkvmerge statistics tags. "
+            "This does not affect audio or subtitle delays."
         )
         self.variant_check.setToolTip("Automatically detect language variants such as es-ES vs es-419")
         self.auto_pgs_ocr_check.setToolTip("Run OCR for PGS subtitles when needed for language detection")
@@ -1278,7 +1277,6 @@ class MainWindow(QMainWindow):
         root.addWidget(compare_group)
 
         self.audio_sync_check_button.setIcon(style.standardIcon(QStyle.SP_DialogApplyButton))
-        self.audio_sync_load_button.setIcon(style.standardIcon(QStyle.SP_BrowserReload))
         self.audio_sync_analyze_button.setIcon(style.standardIcon(QStyle.SP_MediaPlay))
         self.audio_sync_apply_organizer_button.setIcon(style.standardIcon(QStyle.SP_DialogApplyButton))
         self.audio_sync_apply_organizer_button.setToolTip(
@@ -2861,6 +2859,7 @@ class MainWindow(QMainWindow):
 
         self._populate_audio_sync_combo(self.audio_sync_ref_combo, reference_audio)
         self._populate_audio_sync_combo(self.audio_sync_source_combo, source_audio)
+        auto_selected = self._select_matching_audio_sync_streams(reference_audio, source_audio)
         self._populate_audio_sync_export_table(self.audio_sync_source_streams)
         self.audio_sync_result = None
         self.audio_sync_apply_organizer_button.setEnabled(False)
@@ -2870,6 +2869,8 @@ class MainWindow(QMainWindow):
         self.append_audio_sync_summary_line("Streams loaded.")
         self.append_audio_sync_summary_line(f"Reference audio streams: {len(reference_audio)}")
         self.append_audio_sync_summary_line(f"Source audio streams: {len(source_audio)}")
+        if auto_selected:
+            self.append_audio_sync_summary_line(f"Auto-selected: {auto_selected}")
         self.append_audio_sync_summary_line(
             f"Source subtitle streams: {len([stream for stream in self.audio_sync_source_streams if stream.type == 'subtitle'])}"
         )
@@ -3254,6 +3255,75 @@ class MainWindow(QMainWindow):
         combo.clear()
         for stream in streams:
             combo.addItem(stream.label, stream.relative_index)
+
+    def _select_matching_audio_sync_streams(
+        self,
+        reference_audio: list[audio_sync.MediaStream],
+        source_audio: list[audio_sync.MediaStream],
+    ) -> str:
+        match = self._best_audio_sync_language_match(reference_audio, source_audio)
+        if not match:
+            return ""
+
+        reference_stream, source_stream = match
+        self._set_audio_sync_combo_to_stream(self.audio_sync_ref_combo, reference_stream)
+        self._set_audio_sync_combo_to_stream(self.audio_sync_source_combo, source_stream)
+        language_code = self._audio_sync_stream_language_code(reference_stream)
+        return organizer.language_display_name(language_code)
+
+    def _best_audio_sync_language_match(
+        self,
+        reference_audio: list[audio_sync.MediaStream],
+        source_audio: list[audio_sync.MediaStream],
+    ) -> tuple[audio_sync.MediaStream, audio_sync.MediaStream] | None:
+        candidates: list[tuple[tuple[int, int, int, int, int], audio_sync.MediaStream, audio_sync.MediaStream]] = []
+
+        for reference_stream in reference_audio:
+            reference_code = self._audio_sync_stream_language_code(reference_stream)
+            reference_base = organizer.base_language_code(reference_code)
+            if reference_base == "und":
+                continue
+
+            for source_stream in source_audio:
+                source_code = self._audio_sync_stream_language_code(source_stream)
+                source_base = organizer.base_language_code(source_code)
+                if source_base == "und":
+                    continue
+
+                exact_match = reference_code == source_code
+                base_match = reference_base == source_base
+                if not exact_match and not base_match:
+                    continue
+
+                rank = (
+                    0 if reference_base == "eng" else 1,
+                    0 if exact_match else 1,
+                    self._audio_sync_stream_role_rank(reference_stream) + self._audio_sync_stream_role_rank(source_stream),
+                    reference_stream.relative_index,
+                    source_stream.relative_index,
+                )
+                candidates.append((rank, reference_stream, source_stream))
+
+        if not candidates:
+            return None
+
+        _rank, reference_stream, source_stream = min(candidates, key=lambda item: item[0])
+        return reference_stream, source_stream
+
+    @staticmethod
+    def _audio_sync_stream_language_code(stream: audio_sync.MediaStream) -> str:
+        return organizer.normalize_language_code(stream.language)
+
+    @staticmethod
+    def _audio_sync_stream_role_rank(stream: audio_sync.MediaStream) -> int:
+        text = organizer.language_hint_search_text(stream.title)
+        return 1 if "commentary" in text or "commentaire" in text or "comentario" in text else 0
+
+    @staticmethod
+    def _set_audio_sync_combo_to_stream(combo: QComboBox, stream: audio_sync.MediaStream) -> None:
+        index = combo.findData(stream.relative_index)
+        if index >= 0:
+            combo.setCurrentIndex(index)
 
     def _populate_audio_sync_export_table(self, streams: list[audio_sync.MediaStream]) -> None:
         exportable_streams = [stream for stream in streams if stream.type == "audio"]
@@ -4195,7 +4265,6 @@ class MainWindow(QMainWindow):
         if self.makemkv_reset_button:
             self.makemkv_reset_button.setEnabled(not running)
         self.audio_sync_check_button.setEnabled(not running)
-        self.audio_sync_load_button.setEnabled(not running)
         self.audio_sync_analyze_button.setEnabled(not running)
         if self.audio_sync_clear_button:
             self.audio_sync_clear_button.setEnabled(not running)
@@ -4223,7 +4292,6 @@ class MainWindow(QMainWindow):
         self.preview_button.setEnabled(not running)
         self.run_button.setEnabled(not running)
         self.audio_sync_check_button.setEnabled(not running)
-        self.audio_sync_load_button.setEnabled(not running)
         self.audio_sync_analyze_button.setEnabled(not running)
         if self.audio_sync_clear_button:
             self.audio_sync_clear_button.setEnabled(not running)
@@ -4240,7 +4308,6 @@ class MainWindow(QMainWindow):
         if self.organizer_reset_button:
             self.organizer_reset_button.setEnabled(not running)
         self.audio_sync_check_button.setEnabled(not running)
-        self.audio_sync_load_button.setEnabled(not running)
         self.audio_sync_analyze_button.setEnabled(not running)
         if self.audio_sync_clear_button:
             self.audio_sync_clear_button.setEnabled(not running)

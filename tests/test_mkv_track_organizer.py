@@ -1022,9 +1022,10 @@ def test_mkvmerge_command_applies_audio_and_subtitle_delays(tmp_path: Path) -> N
 
 
 def test_mkvmerge_command_disables_track_statistics_tags_by_default(tmp_path: Path) -> None:
+    input_path = tmp_path / "in.mkv"
     command = m.build_mkvmerge_command(
         mkvmerge=Path("mkvmerge"),
-        input_path=tmp_path / "in.mkv",
+        input_path=input_path,
         output_path=tmp_path / "out.mkv",
         videos=[video_track(0)],
         audio_tracks=[],
@@ -1032,6 +1033,8 @@ def test_mkvmerge_command_disables_track_statistics_tags_by_default(tmp_path: Pa
     )
 
     assert "--disable-track-statistics-tags" in command
+    assert "--no-track-tags" in command
+    assert command.index("--no-track-tags") < command.index(str(input_path))
 
 
 def test_mkvmerge_command_can_write_track_statistics_tags(tmp_path: Path) -> None:
@@ -1046,6 +1049,7 @@ def test_mkvmerge_command_can_write_track_statistics_tags(tmp_path: Path) -> Non
     )
 
     assert "--disable-track-statistics-tags" not in command
+    assert "--no-track-tags" not in command
 
 
 def test_merge_output_path_defaults_to_merged_suffix(tmp_path: Path) -> None:
@@ -1094,6 +1098,10 @@ def test_mkvmerge_command_can_merge_multiple_sources(tmp_path: Path) -> None:
 
     assert str(first_input) in command
     assert str(second_input) in command
+    assert command.count("--no-track-tags") == 2
+    assert command.index("--no-track-tags") < command.index(str(first_input))
+    second_tag_index = command.index("--no-track-tags", command.index(str(first_input)) + 1)
+    assert second_tag_index < command.index(str(second_input))
     assert "--no-video" in command
     assert command[command.index("--track-order") + 1] == "0:0,0:1,1:1"
 

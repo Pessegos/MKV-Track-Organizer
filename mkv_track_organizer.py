@@ -5595,6 +5595,8 @@ def build_mkvmerge_command(
             if track.delay_ms:
                 command.extend(["--sync", f"{track.id}:{track.delay_ms}"])
 
+        if disable_track_statistics_tags:
+            command.append("--no-track-tags")
         command.append(str(source_path))
 
     ordered = ordered_tracks(
@@ -7265,13 +7267,13 @@ def build_parser(config_defaults: dict[str, Any] | None = None) -> argparse.Argu
         dest="disable_track_statistics_tags",
         action="store_true",
         default=default("disable_track_statistics_tags", True),
-        help="Do not write mkvmerge per-track statistics tags. Enabled by default.",
+        help="Do not copy per-track tags from inputs and do not write mkvmerge statistics tags. Enabled by default.",
     )
     parser.add_argument(
         "--write-track-statistics-tags",
         dest="disable_track_statistics_tags",
         action="store_false",
-        help="Allow mkvmerge to write per-track statistics tags.",
+        help="Allow mkvmerge to copy per-track tags and write per-track statistics tags.",
     )
     parser.add_argument(
         "--language-order-style",
