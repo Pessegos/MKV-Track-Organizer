@@ -10,7 +10,7 @@ import traceback
 from pathlib import Path
 
 try:
-    from PySide6.QtCore import QEvent, QObject, QThread, Qt, Signal, Slot
+    from PySide6.QtCore import QEvent, QObject, QThread, QTimer, Qt, Signal, Slot
     from PySide6.QtGui import QColor, QCloseEvent, QDragEnterEvent, QDropEvent, QTextCursor
     from PySide6.QtWidgets import (
         QApplication,
@@ -343,6 +343,25 @@ class AudioSyncExportWorker(QObject):
         return self._cancel_requested.is_set()
 
 
+class AudioSyncProbeWorker(QObject):
+    completed = Signal(object, object, object, object)
+    failed = Signal(str)
+
+    def __init__(self, reference_path: Path, source_path: Path) -> None:
+        super().__init__()
+        self.reference_path = reference_path
+        self.source_path = source_path
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            reference_streams = audio_sync.probe_media_streams(self.reference_path)
+            source_streams = audio_sync.probe_media_streams(self.source_path)
+            self.completed.emit(self.reference_path, self.source_path, reference_streams, source_streams)
+        except Exception:
+            self.failed.emit(traceback.format_exc())
+
+
 class MainWindow(QMainWindow):
     PROFILE_NONE_LABEL = "Custom"
     PROFILE_STORE_VERSION = 1
@@ -499,6 +518,14 @@ class MainWindow(QMainWindow):
         self.makemkv_worker: MakeMkvWorker | None = None
         self.audio_sync_worker_thread: QThread | None = None
         self.audio_sync_worker: AudioSyncWorker | AudioSyncExportWorker | None = None
+        self.audio_sync_probe_thread: QThread | None = None
+        self.audio_sync_probe_worker: AudioSyncProbeWorker | None = None
+        self.audio_sync_stream_paths: tuple[Path, Path] | None = None
+        self.audio_sync_probe_automatic = True
+        self.audio_sync_probe_retry_after_finish = False
+        self.start_audio_sync_analysis_after_probe = False
+        self.audio_sync_auto_load_timer = QTimer(self)
+        self.audio_sync_auto_load_timer.setSingleShot(True)
         self.default_args, self.default_config_path = self._load_default_args()
         self.profile_store_path = gui_profile_store_path()
         self.profiles: dict[str, dict] = {}
@@ -1275,7 +1302,6 @@ class MainWindow(QMainWindow):
         top_bar = QHBoxLayout()
         top_bar.addStretch(1)
         top_bar.addWidget(self.audio_sync_check_button)
-        top_bar.addWidget(self.audio_sync_load_button)
         top_bar.addWidget(self.audio_sync_analyze_button)
         top_bar.addWidget(self.audio_sync_apply_organizer_button)
         top_bar.addWidget(self.audio_sync_export_button)
@@ -1337,7 +1363,6 @@ class MainWindow(QMainWindow):
             self.makemkv_reset_button.clicked.connect(self.reset_makemkv_tab)
         self.makemkv_cancel_button.clicked.connect(self.cancel_makemkv_run)
         self.audio_sync_check_button.clicked.connect(self.check_audio_sync_tools)
-        self.audio_sync_load_button.clicked.connect(self.load_audio_sync_streams)
         self.audio_sync_analyze_button.clicked.connect(self.start_audio_sync_analysis)
         self.audio_sync_apply_organizer_button.clicked.connect(self.apply_audio_sync_delay_to_organizer)
         self.audio_sync_export_button.clicked.connect(self.start_audio_sync_export)
@@ -1348,8 +1373,9 @@ class MainWindow(QMainWindow):
         if self.audio_sync_reset_button:
             self.audio_sync_reset_button.clicked.connect(self.reset_audio_sync_tab)
         self.audio_sync_cancel_button.clicked.connect(self.cancel_audio_sync_task)
-        self.audio_sync_reference_edit.textEdited.connect(lambda _text: self._clear_audio_sync_loaded_streams())
-        self.audio_sync_source_edit.textEdited.connect(lambda _text: self._clear_audio_sync_loaded_streams())
+        self.audio_sync_reference_edit.textEdited.connect(lambda _text: self._audio_sync_path_text_edited())
+        self.audio_sync_source_edit.textEdited.connect(lambda _text: self._audio_sync_path_text_edited())
+        self.audio_sync_auto_load_timer.timeout.connect(self.start_audio_sync_stream_auto_load)
         self.audio_sync_duration_combo.activated.connect(self._audio_sync_duration_preset_activated)
         self.audio_sync_spacing_combo.activated.connect(self._audio_sync_spacing_preset_activated)
         self.audio_sync_checkpoints_combo.activated.connect(self._audio_sync_checkpoints_preset_activated)
@@ -1438,6 +1464,12 @@ class MainWindow(QMainWindow):
                 background: {palette['button_hover']};
                 border-color: {palette['border_strong']};
             }}
+            QPushButton:pressed, QToolButton:pressed {{
+                background: {palette['button_pressed']};
+                border-color: {palette['primary']};
+                padding-top: 7px;
+                padding-bottom: 5px;
+            }}
             QPushButton#primaryButton {{
                 background: {palette['primary']};
                 border-color: {palette['primary_strong']};
@@ -1446,6 +1478,10 @@ class MainWindow(QMainWindow):
             }}
             QPushButton#primaryButton:hover {{
                 background: {palette['primary_strong']};
+            }}
+            QPushButton#primaryButton:pressed {{
+                background: {palette['primary_pressed']};
+                border-color: {palette['primary_pressed']};
             }}
             QPushButton#dangerButton {{
                 background: {palette['danger_bg']};
@@ -1456,10 +1492,18 @@ class MainWindow(QMainWindow):
             QPushButton#dangerButton:hover {{
                 background: {palette['danger_hover']};
             }}
+            QPushButton#dangerButton:pressed {{
+                background: {palette['danger_pressed']};
+                border-color: {palette['danger_text']};
+            }}
             QPushButton#secondaryButton {{
                 background: {palette['secondary_bg']};
                 border-color: {palette['secondary_border']};
                 color: {palette['secondary_text']};
+            }}
+            QPushButton#secondaryButton:pressed {{
+                background: {palette['secondary_pressed']};
+                border-color: {palette['secondary_text']};
             }}
             QTabWidget::pane {{
                 border: 1px solid {palette['border']};
@@ -1536,15 +1580,19 @@ class MainWindow(QMainWindow):
                 "grid": "#e2e8f0",
                 "button": "#ffffff",
                 "button_hover": "#f1f5f9",
+                "button_pressed": "#e2e8f0",
                 "primary": "#2563eb",
                 "primary_strong": "#1d4ed8",
+                "primary_pressed": "#1e40af",
                 "secondary_bg": "#eef6ff",
                 "secondary_border": "#bfdbfe",
                 "secondary_text": "#1e3a8a",
+                "secondary_pressed": "#dbeafe",
                 "danger_bg": "#fff5f5",
                 "danger_border": "#f1a5a5",
                 "danger_text": "#9f1239",
                 "danger_hover": "#ffe4e6",
+                "danger_pressed": "#fecdd3",
                 "progress_bg": "#e8edf3",
                 "progress": "#16a34a",
             }
@@ -1564,15 +1612,19 @@ class MainWindow(QMainWindow):
             "grid": "#2a3340",
             "button": "#1d2430",
             "button_hover": "#273142",
+            "button_pressed": "#334155",
             "primary": "#2f81f7",
             "primary_strong": "#1f6feb",
+            "primary_pressed": "#1158c7",
             "secondary_bg": "#172536",
             "secondary_border": "#315170",
             "secondary_text": "#9bd1ff",
+            "secondary_pressed": "#203a56",
             "danger_bg": "#331c22",
             "danger_border": "#7f2d3a",
             "danger_text": "#ffb4bd",
             "danger_hover": "#44232b",
+            "danger_pressed": "#5b2631",
             "progress_bg": "#222b36",
             "progress": "#2fb170",
         }
@@ -2127,10 +2179,12 @@ class MainWindow(QMainWindow):
         if edit is self.audio_sync_source_edit and not self.audio_sync_output_edit.text().strip():
             self.audio_sync_output_edit.setText(str(resolved_path.parent / "synced"))
         self._clear_audio_sync_loaded_streams()
+        self._schedule_audio_sync_auto_load()
 
     def _clear_audio_sync_loaded_streams(self) -> None:
         self.audio_sync_reference_streams = []
         self.audio_sync_source_streams = []
+        self.audio_sync_stream_paths = None
         self.audio_sync_result = None
         self.audio_sync_ref_combo.clear()
         self.audio_sync_source_combo.clear()
@@ -2138,6 +2192,128 @@ class MainWindow(QMainWindow):
         self.audio_sync_apply_organizer_button.setEnabled(False)
         self.audio_sync_export_button.setEnabled(False)
         self._set_audio_sync_selection_controls_enabled(False)
+
+    def _audio_sync_path_text_edited(self) -> None:
+        self._clear_audio_sync_loaded_streams()
+        self._schedule_audio_sync_auto_load()
+
+    def _current_audio_sync_valid_paths(self) -> tuple[Path, Path] | None:
+        if not self.audio_sync_reference_edit.text().strip() or not self.audio_sync_source_edit.text().strip():
+            return None
+        try:
+            return self._audio_sync_paths()
+        except Exception:
+            return None
+
+    def _audio_sync_streams_loaded_for_current_paths(self) -> bool:
+        paths = self._current_audio_sync_valid_paths()
+        return bool(
+            paths
+            and self.audio_sync_stream_paths == paths
+            and self.audio_sync_reference_streams
+            and self.audio_sync_source_streams
+        )
+
+    def _schedule_audio_sync_auto_load(self) -> None:
+        if self._workflow_is_running():
+            return
+        if self._audio_sync_streams_loaded_for_current_paths():
+            return
+        if not self._current_audio_sync_valid_paths():
+            self.audio_sync_auto_load_timer.stop()
+            return
+        if self.audio_sync_probe_thread and self.audio_sync_probe_thread.isRunning():
+            self.audio_sync_probe_retry_after_finish = True
+            return
+        self.audio_sync_auto_load_timer.start(350)
+
+    @Slot()
+    def start_audio_sync_stream_auto_load(self) -> None:
+        self.start_audio_sync_stream_probe(automatic=True)
+
+    def start_audio_sync_stream_probe(self, automatic: bool = True) -> bool:
+        if self.audio_sync_probe_thread and self.audio_sync_probe_thread.isRunning():
+            return False
+
+        paths = self._current_audio_sync_valid_paths()
+        if not paths:
+            if not automatic:
+                QMessageBox.information(
+                    self,
+                    "Audio Sync",
+                    "Choose valid reference and source media files first.",
+                )
+            return False
+
+        self.audio_sync_auto_load_timer.stop()
+        self.audio_sync_probe_automatic = automatic
+        self.audio_sync_probe_retry_after_finish = False
+        self.statusBar().showMessage("Loading Audio Sync streams...")
+        self._set_progress_label("Loading Audio Sync streams")
+        self._set_audio_sync_probe_running(True)
+
+        reference_path, source_path = paths
+        self.audio_sync_probe_thread = QThread(self)
+        self.audio_sync_probe_worker = AudioSyncProbeWorker(reference_path, source_path)
+        self.audio_sync_probe_worker.moveToThread(self.audio_sync_probe_thread)
+        self.audio_sync_probe_thread.started.connect(self.audio_sync_probe_worker.run)
+        self.audio_sync_probe_worker.completed.connect(self.handle_audio_sync_probe_completed)
+        self.audio_sync_probe_worker.failed.connect(self.handle_audio_sync_probe_failed)
+        self.audio_sync_probe_worker.completed.connect(self.audio_sync_probe_thread.quit)
+        self.audio_sync_probe_worker.failed.connect(self.audio_sync_probe_thread.quit)
+        self.audio_sync_probe_thread.finished.connect(self._audio_sync_probe_thread_finished)
+        self.audio_sync_probe_thread.start()
+        return True
+
+    @Slot(object, object, object, object)
+    def handle_audio_sync_probe_completed(
+        self,
+        reference_path: Path,
+        source_path: Path,
+        reference_streams: list[audio_sync.MediaStream],
+        source_streams: list[audio_sync.MediaStream],
+    ) -> None:
+        current_paths = self._current_audio_sync_valid_paths()
+        if current_paths != (reference_path, source_path):
+            self.audio_sync_probe_retry_after_finish = True
+            return
+
+        try:
+            self._apply_audio_sync_streams(reference_path, source_path, reference_streams, source_streams)
+        except Exception as error:
+            self.append_audio_sync_summary_line(f"Auto-load failed: {error}")
+            if self.start_audio_sync_analysis_after_probe or not self.audio_sync_probe_automatic:
+                QMessageBox.critical(self, "Audio Sync load failed", str(error))
+            self.start_audio_sync_analysis_after_probe = False
+
+    @Slot(str)
+    def handle_audio_sync_probe_failed(self, details: str) -> None:
+        self.append_audio_sync_log(details)
+        first_line = details.splitlines()[-1] if details else "Audio Sync stream load failed."
+        self.append_audio_sync_summary_line(f"Auto-load failed: {first_line}")
+        if self.start_audio_sync_analysis_after_probe or not self.audio_sync_probe_automatic:
+            QMessageBox.critical(self, "Audio Sync load failed", details)
+        self.start_audio_sync_analysis_after_probe = False
+
+    @Slot()
+    def _audio_sync_probe_thread_finished(self) -> None:
+        if self.audio_sync_probe_worker:
+            self.audio_sync_probe_worker.deleteLater()
+        if self.audio_sync_probe_thread:
+            self.audio_sync_probe_thread.deleteLater()
+        self.audio_sync_probe_worker = None
+        self.audio_sync_probe_thread = None
+        self._set_audio_sync_probe_running(False)
+
+        if self.audio_sync_probe_retry_after_finish:
+            self.audio_sync_probe_retry_after_finish = False
+            self._schedule_audio_sync_auto_load()
+            return
+
+        if self.start_audio_sync_analysis_after_probe:
+            self.start_audio_sync_analysis_after_probe = False
+            if self._audio_sync_streams_loaded_for_current_paths():
+                QTimer.singleShot(0, self.start_audio_sync_analysis)
 
     @Slot()
     def select_all_audio_sync_streams(self) -> None:
@@ -2379,6 +2555,9 @@ class MainWindow(QMainWindow):
     def clear_audio_sync_inputs(self) -> None:
         if self._reset_or_clear_blocked("Clear Audio Sync inputs"):
             return
+        self.audio_sync_auto_load_timer.stop()
+        self.audio_sync_probe_retry_after_finish = False
+        self.start_audio_sync_analysis_after_probe = False
         self.audio_sync_reference_edit.clear()
         self.audio_sync_source_edit.clear()
         self._clear_audio_sync_loaded_streams()
@@ -2474,6 +2653,9 @@ class MainWindow(QMainWindow):
         self.cancel_button.setEnabled(False)
 
     def _reset_audio_sync_tab(self) -> None:
+        self.audio_sync_auto_load_timer.stop()
+        self.audio_sync_probe_retry_after_finish = False
+        self.start_audio_sync_analysis_after_probe = False
         self.audio_sync_reference_edit.clear()
         self.audio_sync_source_edit.clear()
         self.audio_sync_output_edit.clear()
@@ -2650,21 +2832,32 @@ class MainWindow(QMainWindow):
     def load_audio_sync_streams(self) -> bool:
         try:
             reference_path, source_path = self._audio_sync_paths()
-            self.audio_sync_reference_streams = audio_sync.probe_media_streams(reference_path)
-            self.audio_sync_source_streams = audio_sync.probe_media_streams(source_path)
+            reference_streams = audio_sync.probe_media_streams(reference_path)
+            source_streams = audio_sync.probe_media_streams(source_path)
+            self._apply_audio_sync_streams(reference_path, source_path, reference_streams, source_streams)
         except Exception as error:
             self.append_audio_sync_summary_line(f"Load failed: {error}")
             QMessageBox.critical(self, "Audio Sync load failed", str(error))
             return False
 
+        return True
+
+    def _apply_audio_sync_streams(
+        self,
+        reference_path: Path,
+        source_path: Path,
+        reference_streams: list[audio_sync.MediaStream],
+        source_streams: list[audio_sync.MediaStream],
+    ) -> None:
+        self.audio_sync_reference_streams = reference_streams
+        self.audio_sync_source_streams = source_streams
+        self.audio_sync_stream_paths = (reference_path, source_path)
         reference_audio = [stream for stream in self.audio_sync_reference_streams if stream.type == "audio"]
         source_audio = [stream for stream in self.audio_sync_source_streams if stream.type == "audio"]
         if not reference_audio:
-            QMessageBox.critical(self, "Audio Sync load failed", "Reference file has no audio streams.")
-            return False
+            raise ValueError("Reference file has no audio streams.")
         if not source_audio:
-            QMessageBox.critical(self, "Audio Sync load failed", "Source file has no audio streams.")
-            return False
+            raise ValueError("Source file has no audio streams.")
 
         self._populate_audio_sync_combo(self.audio_sync_ref_combo, reference_audio)
         self._populate_audio_sync_combo(self.audio_sync_source_combo, source_audio)
@@ -2682,7 +2875,6 @@ class MainWindow(QMainWindow):
         )
         self.append_audio_sync_summary_line()
         self.statusBar().showMessage("Audio Sync streams loaded")
-        return True
 
     @Slot()
     def start_audio_sync_analysis(self) -> None:
@@ -2693,7 +2885,11 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            if not self.audio_sync_reference_streams or not self.audio_sync_source_streams:
+            if not self._audio_sync_streams_loaded_for_current_paths():
+                if self.audio_sync_probe_thread and self.audio_sync_probe_thread.isRunning():
+                    self.start_audio_sync_analysis_after_probe = True
+                    self.statusBar().showMessage("Audio Sync streams are still loading; analysis will start after that")
+                    return
                 if not self.load_audio_sync_streams():
                     return
             settings = self._build_audio_sync_settings()
@@ -3029,9 +3225,9 @@ class MainWindow(QMainWindow):
         reference_stream = self.audio_sync_ref_combo.currentData()
         source_stream = self.audio_sync_source_combo.currentData()
         if reference_stream is None:
-            raise ValueError("Load streams and choose a reference audio stream.")
+            raise ValueError("Choose a reference audio stream.")
         if source_stream is None:
-            raise ValueError("Load streams and choose a source audio stream.")
+            raise ValueError("Choose a source audio stream.")
         return audio_sync.AudioSyncSettings(
             reference_path=reference_path,
             source_path=source_path,
@@ -3971,6 +4167,17 @@ class MainWindow(QMainWindow):
             return ""
         return f"{delay_ms:+d} ms" if delay_ms else ""
 
+    def _set_audio_sync_probe_running(self, running: bool) -> None:
+        self.audio_sync_check_button.setEnabled(not running)
+        self.audio_sync_analyze_button.setEnabled(not running)
+        self.audio_sync_apply_organizer_button.setEnabled(bool(self.audio_sync_result) and not running)
+        self.audio_sync_export_button.setEnabled(bool(self.audio_sync_result) and not running)
+        if self.audio_sync_clear_button:
+            self.audio_sync_clear_button.setEnabled(not running)
+        if self.audio_sync_reset_button:
+            self.audio_sync_reset_button.setEnabled(not running)
+        self._set_audio_sync_selection_controls_enabled(self.audio_sync_tracks_table.rowCount() > 0 and not running)
+
     def _set_running(self, running: bool) -> None:
         if self.organizer_clear_button:
             self.organizer_clear_button.setEnabled(not running)
@@ -4149,7 +4356,8 @@ class MainWindow(QMainWindow):
         organizer_running = self.worker_thread and self.worker_thread.isRunning()
         makemkv_running = self.makemkv_worker_thread and self.makemkv_worker_thread.isRunning()
         audio_sync_running = self.audio_sync_worker_thread and self.audio_sync_worker_thread.isRunning()
-        if organizer_running or makemkv_running or audio_sync_running:
+        audio_sync_probe_running = self.audio_sync_probe_thread and self.audio_sync_probe_thread.isRunning()
+        if organizer_running or makemkv_running or audio_sync_running or audio_sync_probe_running:
             answer = QMessageBox.question(
                 self,
                 "Close",
