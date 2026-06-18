@@ -852,6 +852,15 @@ DEFAULT_LANGUAGE_VARIANTS = {
     "chi": "zh-Hant",
 }
 
+SUBTITLE_LANGUAGE_DUPLICATE_DEFAULT_VARIANTS = {
+    "por": "pt-PT",
+    "spa": "es-ES",
+    "fre": "fr-FR",
+    "ger": "de-DE",
+    "ita": "it-IT",
+    "chi": "zh-Hant",
+}
+
 
 ORDERED_PGS_LANGUAGE_VARIANTS = {
     "por": ("pt-BR", "pt-PT"),
@@ -4932,15 +4941,34 @@ def subtitle_duplicate_key(track: TrackInfo) -> tuple[Any, ...] | None:
 def subtitle_language_duplicate_key(track: TrackInfo) -> tuple[Any, ...] | None:
     if track.drop:
         return None
-    language_code = duplicate_language_key(track)
+    language_code = subtitle_language_duplicate_language_key(track)
     if not language_code:
         return None
     return (
         "subtitle-language",
         language_code,
-        track.role or "normal",
+        subtitle_language_duplicate_role_key(track, language_code),
         bool(track.forced),
     )
+
+
+def subtitle_language_duplicate_language_key(track: TrackInfo) -> str:
+    language_code = duplicate_language_key(track)
+    if not language_code:
+        return ""
+    if language_code in LANGUAGE_VARIANT_BASES:
+        return language_code
+    return SUBTITLE_LANGUAGE_DUPLICATE_DEFAULT_VARIANTS.get(language_code, language_code)
+
+
+def subtitle_language_duplicate_role_key(track: TrackInfo, language_code: str) -> str:
+    if is_forced_subtitle(track):
+        return "forced"
+    if track.role == "commentary":
+        return "commentary"
+    if track.role == "sdh" and base_language_code(language_code) == "eng":
+        return "sdh"
+    return "normal"
 
 
 def subtitle_language_duplicate_format_rank(track: TrackInfo) -> int:
@@ -4952,6 +4980,17 @@ def subtitle_language_duplicate_format_rank(track: TrackInfo) -> int:
     if subtitle_extension(track) == ".srt" or is_text_subtitle(track):
         return 2
     return 3
+
+
+def subtitle_language_duplicate_sdh_rank(track: TrackInfo, language_code: str) -> int:
+    if base_language_code(language_code) == "eng":
+        return 0
+    return 1 if track.role == "sdh" else 0
+
+
+def subtitle_language_duplicate_specificity_rank(track: TrackInfo, language_code: str) -> int:
+    track_language = duplicate_language_key(track)
+    return 0 if track_language == language_code else 1
 
 
 def duplicate_metric(track: TrackInfo) -> float | None:
@@ -5060,15 +5099,21 @@ def detect_duplicate_tracks(
             if key:
                 tracks_by_language.setdefault(key, []).append(track)
 
-        reason = "same subtitle language and role; preferred format order ASS > PGS > SRT"
-        for tracks in tracks_by_language.values():
+        reason = "same subtitle language and compatible role; non-SDH preferred except English; format order ASS > PGS > SRT"
+        for key, tracks in tracks_by_language.items():
             if len(tracks) < 2:
                 continue
+            language_code = str(key[1])
             mark_duplicate_group(
                 input_path,
                 tracks,
                 reason=reason,
-                leader_key=lambda item: (subtitle_language_duplicate_format_rank(item), item.order),
+                leader_key=lambda item, code=language_code: (
+                    subtitle_language_duplicate_sdh_rank(item, code),
+                    subtitle_language_duplicate_format_rank(item),
+                    subtitle_language_duplicate_specificity_rank(item, code),
+                    item.order,
+                ),
             )
 
 

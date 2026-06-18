@@ -1504,6 +1504,65 @@ def test_subtitle_language_duplicate_detection_is_opt_in() -> None:
     assert not pgs.duplicate_group
 
 
+def test_subtitle_language_duplicate_detection_keeps_english_sdh_with_normal() -> None:
+    normal = subtitle_track(1, "eng")
+    sdh = subtitle_track(2, "eng")
+    sdh.role = "sdh"
+
+    m.detect_duplicate_tracks(
+        Path("source-e.mkv"),
+        [],
+        [normal, sdh],
+        detect_exact_duplicates=False,
+        detect_subtitle_language_duplicates=True,
+    )
+
+    assert not normal.duplicate_group
+    assert not sdh.duplicate_group
+
+
+def test_subtitle_language_duplicate_detection_prefers_non_english_non_sdh() -> None:
+    sdh = subtitle_track(1, "pt-PT")
+    sdh.role = "sdh"
+    normal = subtitle_track(2, "pt-PT")
+
+    m.detect_duplicate_tracks(
+        Path("source-f.mkv"),
+        [],
+        [sdh, normal],
+        detect_exact_duplicates=False,
+        detect_subtitle_language_duplicates=True,
+    )
+
+    assert normal.duplicate_group
+    assert normal.duplicate_of_id is None
+    assert sdh.duplicate_of_id == normal.id
+
+
+def test_subtitle_language_duplicate_detection_collapses_generic_default_variants() -> None:
+    generic_spanish = subtitle_track(4, "es")
+    castilian = subtitle_track(5, "es-ES")
+    latin_american = subtitle_track(6, "es-419")
+    generic_french = subtitle_track(7, "fr")
+    parisian = subtitle_track(8, "fr-FR")
+    canadian = subtitle_track(9, "fr-CA")
+
+    m.detect_duplicate_tracks(
+        Path("source-g.mkv"),
+        [],
+        [generic_spanish, castilian, latin_american, generic_french, parisian, canadian],
+        detect_exact_duplicates=False,
+        detect_subtitle_language_duplicates=True,
+    )
+
+    assert castilian.duplicate_group
+    assert generic_spanish.duplicate_of_id == castilian.id
+    assert not latin_american.duplicate_group
+    assert parisian.duplicate_group
+    assert generic_french.duplicate_of_id == parisian.id
+    assert not canadian.duplicate_group
+
+
 def test_ordered_tracks_can_group_audio_by_region() -> None:
     video = video_track(0)
     cantonese = audio_track(1, "yue")
