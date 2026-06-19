@@ -1,0 +1,26 @@
+{
+  "case": "Ratatouille stable negative source offset",
+  "settings": {
+    "start_seconds": 600.0,
+    "spacing_seconds": 900.0,
+    "duration_seconds": 120.0,
+    "max_offset_seconds": 5.0
+  },
+  "estimates": [
+    {"offset": -0.97513, "coarse": -0.98, "confidence": 2.2},
+    {"offset": -0.97545, "coarse": -0.98, "confidence": 2.0},
+    {"offset": -0.97513, "coarse": -0.98, "confidence": 2.1},
+    {"offset": -0.97480, "coarse": -0.98, "confidence": 1.9},
+    {"offset": -0.97445, "coarse": -0.98, "confidence": 2.0},
+    {"offset": -0.97520, "coarse": -0.98, "confidence": 2.1},
+    {"offset": -0.97495, "coarse": -0.98, "confidence": 2.0},
+    {"offset": -0.97505, "coarse": -0.98, "confidence": 2.1}
+  ],
+  "expected": {
+    "offset_ms": -975,
+    "timeline_shift_ms": 975,
+    "consistency": "excellent",
+    "used_checkpoints": 8,
+    "ignored_checkpoints": 0
+  }
+}

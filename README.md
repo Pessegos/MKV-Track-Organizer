@@ -167,6 +167,8 @@ Run the test suite:
 python -m pytest -q
 ```
 
+Real-world regression cases live under `tests/fixtures/real_world`. These are small, sanitized metadata snapshots with no media or subtitle content. Add a fixture and a focused test in `tests/test_real_world_regressions.py` whenever a real release exposes a bug that must not return.
+
 Run syntax checks:
 
 ```powershell

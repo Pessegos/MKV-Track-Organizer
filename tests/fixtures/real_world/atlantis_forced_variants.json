@@ -1,0 +1,64 @@
+{
+  "case": "Atlantis forced regional subtitles",
+  "source": {
+    "file": "atlantis.mkv",
+    "metadata": {
+      "tracks": [
+        {
+          "id": 35,
+          "type": "subtitles",
+          "codec": "SubRip/SRT",
+          "properties": {
+            "codec_id": "S_TEXT/UTF8",
+            "language_ietf": "es-419",
+            "track_name": "Spanish (Forced)",
+            "forced_track": true
+          }
+        },
+        {
+          "id": 36,
+          "type": "subtitles",
+          "codec": "SubRip/SRT",
+          "properties": {
+            "codec_id": "S_TEXT/UTF8",
+            "language_ietf": "es-ES",
+            "track_name": "Spanish (Forced)",
+            "forced_track": true
+          }
+        },
+        {
+          "id": 40,
+          "type": "subtitles",
+          "codec": "SubRip/SRT",
+          "properties": {
+            "codec_id": "S_TEXT/UTF8",
+            "language_ietf": "nl",
+            "track_name": "Dutch"
+          }
+        },
+        {
+          "id": 41,
+          "type": "subtitles",
+          "codec": "SubRip/SRT",
+          "properties": {
+            "codec_id": "S_TEXT/UTF8",
+            "language_ietf": "nl-BE",
+            "track_name": "Dutch (Flemish)"
+          }
+        }
+      ]
+    }
+  },
+  "expected_languages": {
+    "35": "es-419",
+    "36": "es-ES",
+    "40": "dut",
+    "41": "nl-BE"
+  },
+  "expected_roles": {
+    "35": "forced",
+    "36": "forced",
+    "40": "normal",
+    "41": "normal"
+  }
+}

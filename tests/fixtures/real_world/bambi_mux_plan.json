@@ -1,0 +1,85 @@
+{
+  "case": "Bambi preserved commentary and synchronized Disney+ tracks",
+  "source": {
+    "file": "bambi-smart-regional.mkv",
+    "metadata": {
+      "tracks": [
+        {
+          "id": 0,
+          "type": "video",
+          "codec": "HEVC",
+          "properties": {"codec_id": "V_MPEGH/ISO/HEVC", "language": "und"}
+        },
+        {
+          "id": 1,
+          "type": "audio",
+          "codec": "TrueHD Atmos",
+          "properties": {
+            "codec_id": "A_TRUEHD",
+            "audio_channels": 8,
+            "language_ietf": "en",
+            "track_name": "English - TrueHD Atmos 7.1",
+            "default_track": true
+          }
+        },
+        {
+          "id": 2,
+          "type": "audio",
+          "codec": "AC-3",
+          "properties": {
+            "codec_id": "A_AC3",
+            "audio_channels": 2,
+            "language_ietf": "en",
+            "track_name": "Commentary by Producer and Directors"
+          }
+        },
+        {
+          "id": 3,
+          "type": "audio",
+          "codec": "E-AC-3",
+          "properties": {
+            "codec_id": "A_EAC3",
+            "audio_channels": 6,
+            "language_ietf": "pt-PT",
+            "track_name": "Portuguese (Iberian)"
+          }
+        },
+        {
+          "id": 4,
+          "type": "subtitles",
+          "codec": "SubRip/SRT",
+          "properties": {
+            "codec_id": "S_TEXT/UTF8",
+            "language_ietf": "en",
+            "track_name": "English"
+          }
+        },
+        {
+          "id": 5,
+          "type": "subtitles",
+          "codec": "SubRip/SRT",
+          "properties": {
+            "codec_id": "S_TEXT/UTF8",
+            "language_ietf": "en",
+            "track_name": "English (SDH)"
+          }
+        },
+        {
+          "id": 6,
+          "type": "subtitles",
+          "codec": "SubRip/SRT",
+          "properties": {
+            "codec_id": "S_TEXT/UTF8",
+            "language_ietf": "pt-PT",
+            "track_name": "Portuguese (Iberian) (Forced)",
+            "forced_track": true
+          }
+        }
+      ]
+    }
+  },
+  "delays_ms": {"audio:3": 975, "subtitles:6": 975},
+  "expected_audio_order": [1, 3, 2],
+  "expected_commentary_name": "Commentary by Producer and Directors",
+  "expected_roles": {"4": "normal", "5": "sdh", "6": "forced"}
+}

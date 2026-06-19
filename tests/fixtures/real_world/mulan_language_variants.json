@@ -1,0 +1,66 @@
+{
+  "case": "Mulan Disney+ audio language variants",
+  "source": {
+    "file": "mulanv2-tagless.mka",
+    "metadata": {
+      "tracks": [
+        {
+          "id": 8,
+          "type": "audio",
+          "codec": "E-AC-3",
+          "properties": {
+            "codec_id": "A_EAC3",
+            "audio_channels": 6,
+            "language_ietf": "fr",
+            "track_name": "French"
+          }
+        },
+        {
+          "id": 9,
+          "type": "audio",
+          "codec": "E-AC-3",
+          "properties": {
+            "codec_id": "A_EAC3",
+            "audio_channels": 6,
+            "language_ietf": "fr",
+            "track_name": "French (Canada)"
+          }
+        },
+        {
+          "id": 17,
+          "type": "audio",
+          "codec": "E-AC-3",
+          "properties": {
+            "codec_id": "A_EAC3",
+            "audio_channels": 6,
+            "language": "chi",
+            "track_name": "Mandarin"
+          }
+        },
+        {
+          "id": 27,
+          "type": "audio",
+          "codec": "E-AC-3",
+          "properties": {
+            "codec_id": "A_EAC3",
+            "audio_channels": 6,
+            "language": "chi",
+            "track_name": "Taiwanese Mandarin"
+          }
+        }
+      ]
+    }
+  },
+  "expected_languages": {
+    "8": "fre",
+    "9": "fr-CA",
+    "17": "cmn",
+    "27": "zh-TW"
+  },
+  "expected_names": {
+    "8": "French",
+    "9": "French (Canadian)",
+    "17": "Mandarin Chinese",
+    "27": "Chinese (Taiwan)"
+  }
+}
