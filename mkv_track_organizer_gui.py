@@ -365,7 +365,7 @@ class AudioSyncProbeWorker(QObject):
 
 class MainWindow(QMainWindow):
     PROFILE_NONE_LABEL = "Custom"
-    PROFILE_STORE_VERSION = 1
+    PROFILE_STORE_VERSION = 2
     PROFILE_FIELDS = (
         "output_suffix",
         "existing_output_mode",
@@ -392,6 +392,30 @@ class MainWindow(QMainWindow):
         "preferred_subtitle_first",
         "preferred_forced_subtitle_default",
     )
+    PROFILE_BOOL_FIELDS = {
+        "merge_inputs",
+        "smart_sub_detection",
+        "drop_empty_subs",
+        "detect_duplicate_tracks",
+        "detect_subtitle_language_duplicates",
+        "disable_track_statistics_tags",
+        "detect_language_variants",
+        "auto_pgs_ocr",
+        "auto_commentary_ocr",
+        "report",
+        "preserve_commentary_names",
+        "preferred_audio_first",
+        "preferred_audio_default",
+        "preferred_subtitle_first",
+        "preferred_forced_subtitle_default",
+    }
+    PROFILE_ENUM_FIELDS = {
+        "existing_output_mode": {"stop", "overwrite", "skip"},
+        "metadata_edit_mode": organizer.METADATA_EDIT_MODES,
+        "audio_name_style": organizer.AUDIO_NAME_STYLES,
+        "language_order_style": organizer.LANGUAGE_ORDER_STYLES,
+        "report_format": {"json", "txt", "both"},
+    }
     FILE_COLUMNS = ["Status", "Input", "Output", "Message"]
     MAKEMKV_COLUMNS = ["Status", "Source", "Output", "Message"]
     AUDIO_SYNC_COLUMNS = ["Export", "Type", "Index", "Codec", "Language", "Title"]
@@ -484,7 +508,7 @@ class MainWindow(QMainWindow):
         "keep": "Keeps the existing audio track names from the input file.",
     }
     LANGUAGE_ORDER_STYLE_HELP = {
-        "custom": "Uses the language-code order saved in the Config tab.",
+        "custom": "Uses the active language-code order shown below and saved with Organizer profiles.",
         "default": "Uses the existing organizer order rules.",
         "regional": "Groups languages by broad regions, with Europe before Americas and Asia.",
     }
@@ -546,6 +570,13 @@ class MainWindow(QMainWindow):
         self.profile_store_path = gui_profile_store_path()
         self.profiles: dict[str, dict] = {}
         self.last_profile_name = ""
+        self.saved_theme = "dark"
+        self._loaded_profile_name = ""
+        self._applying_profile = False
+        self._applying_config = False
+        self._profile_store_needs_migration = False
+        self._profile_default_payload: dict[str, object] = {}
+        self._config_baseline: dict[str, object] = {}
         self.input_paths: list[Path] = []
         self.current_reports: list[dict] = []
         self.makemkv_reports: list[dict] = []
@@ -594,14 +625,18 @@ class MainWindow(QMainWindow):
 
         self.profile_combo = QComboBox()
         self.profile_combo.setToolTip("Saved Organizer option profile")
-        self.update_profile_button = QPushButton("Update")
+        self.update_profile_button = QPushButton("Save changes")
         self.save_profile_button = QPushButton("Save as")
+        self.revert_profile_button = QPushButton("Revert")
         self.delete_profile_button = QPushButton("Delete")
+        self.profile_status_label = QLabel("Custom settings")
         self.update_profile_button.setObjectName("secondaryButton")
         self.save_profile_button.setObjectName("secondaryButton")
+        self.revert_profile_button.setObjectName("secondaryButton")
         self.delete_profile_button.setObjectName("secondaryButton")
-        self.update_profile_button.setToolTip("Update the selected profile with the current Organizer options")
-        self.save_profile_button.setToolTip("Save the current Organizer options as a new or renamed profile")
+        self.update_profile_button.setToolTip("Save the current Organizer options into the selected profile")
+        self.save_profile_button.setToolTip("Save the current Organizer options as a new profile or replace an existing one")
+        self.revert_profile_button.setToolTip("Discard unsaved changes and reload the selected profile")
         self.delete_profile_button.setToolTip("Delete the selected saved profile")
 
         self.metadata_combo = QComboBox()
@@ -624,6 +659,8 @@ class MainWindow(QMainWindow):
             "Middle East/Africa first",
             "middle-east-africa,europe,americas,asia,oceania",
         )
+        self.custom_language_order_edit = QLineEdit()
+        self.custom_language_order_edit.setPlaceholderText("eng, pt-PT, por, es-ES, es-419, fr-FR, fr-CA")
         self.report_format_combo = QComboBox()
         self.report_format_combo.addItems(["both", "json", "txt"])
         self.existing_output_combo = QComboBox()
@@ -637,10 +674,22 @@ class MainWindow(QMainWindow):
         self.config_status_label = QLabel("")
         self.config_reload_button = QPushButton("Reload")
         self.config_save_button = QPushButton("Save config")
-        self.config_apply_button = QPushButton("Use custom order")
+        self.config_apply_button = QPushButton("Use in Organizer")
+        self.config_reset_button = QPushButton("Reset defaults")
+        self.profile_store_path_label = QLabel(str(self.profile_store_path))
+        self.profile_library_status_label = QLabel("")
+        self.profile_import_button = QPushButton("Import")
+        self.profile_export_button = QPushButton("Export")
         self.config_reload_button.setObjectName("secondaryButton")
         self.config_save_button.setObjectName("primaryButton")
         self.config_apply_button.setObjectName("secondaryButton")
+        self.config_reset_button.setObjectName("secondaryButton")
+        self.profile_import_button.setObjectName("secondaryButton")
+        self.profile_export_button.setObjectName("secondaryButton")
+        self.config_reset_button.setToolTip("Restore the built-in values in this Config panel")
+        self.profile_store_path_label.setToolTip("Per-user file containing saved Organizer profiles")
+        self.profile_import_button.setToolTip("Import profiles from a profile library JSON file")
+        self.profile_export_button.setToolTip("Export all saved profiles to a JSON file")
 
         self.advanced_button = QToolButton()
         self.advanced_panel = QWidget()
@@ -812,10 +861,18 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._apply_theme()
         self._apply_default_args(self.default_args)
+        self._profile_default_payload = self._profile_payload_from_ui()
         self._load_profile_store()
+        self._apply_theme(self.saved_theme)
         self._refresh_profile_combo(self.last_profile_name)
         if self.last_profile_name in self.profiles:
             self._apply_profile_payload(self.profiles[self.last_profile_name])
+            self._loaded_profile_name = self.last_profile_name
+        self._capture_config_baseline()
+        self._update_profile_state()
+        self._update_profile_library_status()
+        if self._profile_store_needs_migration and self._write_profile_store():
+            self.append_summary_line("Saved profile library migration to schema v2.")
         self._connect_signals()
         self._refresh_file_list()
 
@@ -902,13 +959,16 @@ class MainWindow(QMainWindow):
         self.subtitle_delays_edit.setToolTip("Manual subtitle delays in milliseconds. Example: 5:-250")
         self.preferred_language_edit.setToolTip("Language code used by the optional preferred-language rules, for example pt-PT")
         self.config_custom_language_order_edit.setToolTip(
-            "Comma- or semicolon-separated language codes used by Language order = Custom."
+            "App-wide default copied into the Organizer when requested."
         )
-        self.config_use_custom_order_check.setToolTip("Open the Organizer with Language order set to Custom")
+        self.custom_language_order_edit.setToolTip(
+            "Active comma-separated language order saved with Organizer profiles."
+        )
+        self.config_use_custom_order_check.setToolTip("Use the custom order as the app-wide default")
         self.config_path_label.setToolTip("Config file used for app-wide defaults")
         self.config_reload_button.setToolTip("Reload the config file from disk")
         self.config_save_button.setToolTip("Save these app-wide defaults to the config file")
-        self.config_apply_button.setToolTip("Switch the Organizer to Language order = Custom")
+        self.config_apply_button.setToolTip("Copy this default order into the active Organizer settings")
         self.merge_inputs_check.setToolTip(
             "Mux selected Matroska inputs into one output. The first source with video supplies video; audio/subtitles come from all sources."
         )
@@ -960,8 +1020,10 @@ class MainWindow(QMainWindow):
         profile_actions = QHBoxLayout()
         profile_actions.addWidget(self.update_profile_button)
         profile_actions.addWidget(self.save_profile_button)
+        profile_actions.addWidget(self.revert_profile_button)
         profile_actions.addWidget(self.delete_profile_button)
         profile_actions.addStretch(1)
+        profile_actions.addWidget(self.profile_status_label)
 
         advanced_layout.addWidget(profile_label, 0, 0)
         advanced_layout.addWidget(self.profile_combo, 0, 1)
@@ -978,16 +1040,18 @@ class MainWindow(QMainWindow):
         advanced_layout.addWidget(self.language_order_style_combo, 3, 1)
         advanced_layout.addWidget(regional_order_label, 3, 2)
         advanced_layout.addWidget(self.regional_order_combo, 3, 3)
-        advanced_layout.addWidget(QLabel("Language overrides"), 4, 0)
-        advanced_layout.addWidget(self.subtitle_language_edit, 4, 1)
-        advanced_layout.addWidget(QLabel("Forced IDs"), 4, 2)
-        advanced_layout.addWidget(self.forced_ids_edit, 4, 3)
-        advanced_layout.addWidget(QLabel("Audio delays"), 5, 0)
-        advanced_layout.addWidget(self.audio_delays_edit, 5, 1)
-        advanced_layout.addWidget(QLabel("Subtitle delays"), 5, 2)
-        advanced_layout.addWidget(self.subtitle_delays_edit, 5, 3)
-        advanced_layout.addWidget(preferred_language_label, 6, 0)
-        advanced_layout.addWidget(self.preferred_language_edit, 6, 1)
+        advanced_layout.addWidget(QLabel("Custom order"), 4, 0)
+        advanced_layout.addWidget(self.custom_language_order_edit, 4, 1, 1, 3)
+        advanced_layout.addWidget(QLabel("Language overrides"), 5, 0)
+        advanced_layout.addWidget(self.subtitle_language_edit, 5, 1)
+        advanced_layout.addWidget(QLabel("Forced IDs"), 5, 2)
+        advanced_layout.addWidget(self.forced_ids_edit, 5, 3)
+        advanced_layout.addWidget(QLabel("Audio delays"), 6, 0)
+        advanced_layout.addWidget(self.audio_delays_edit, 6, 1)
+        advanced_layout.addWidget(QLabel("Subtitle delays"), 6, 2)
+        advanced_layout.addWidget(self.subtitle_delays_edit, 6, 3)
+        advanced_layout.addWidget(preferred_language_label, 7, 0)
+        advanced_layout.addWidget(self.preferred_language_edit, 7, 1)
 
         preferred_toggles = QHBoxLayout()
         for checkbox in [
@@ -998,9 +1062,9 @@ class MainWindow(QMainWindow):
         ]:
             preferred_toggles.addWidget(checkbox)
         preferred_toggles.addStretch(1)
-        advanced_layout.addLayout(preferred_toggles, 6, 2, 1, 2)
-        advanced_layout.addWidget(existing_output_label, 7, 0)
-        advanced_layout.addWidget(self.existing_output_combo, 7, 1)
+        advanced_layout.addLayout(preferred_toggles, 7, 2, 1, 2)
+        advanced_layout.addWidget(existing_output_label, 8, 0)
+        advanced_layout.addWidget(self.existing_output_combo, 8, 1)
 
         advanced_toggles = QHBoxLayout()
         for checkbox in [
@@ -1018,7 +1082,7 @@ class MainWindow(QMainWindow):
         ]:
             advanced_toggles.addWidget(checkbox)
         advanced_toggles.addStretch(1)
-        advanced_layout.addLayout(advanced_toggles, 8, 0, 1, 4)
+        advanced_layout.addLayout(advanced_toggles, 9, 0, 1, 4)
         self.advanced_panel.setVisible(False)
         root.addWidget(self.advanced_panel)
 
@@ -1152,6 +1216,9 @@ class MainWindow(QMainWindow):
         self.config_reload_button.clicked.connect(self.reload_config_tab)
         self.config_save_button.clicked.connect(self.save_config_tab)
         self.config_apply_button.clicked.connect(self.apply_custom_config_to_organizer)
+        self.config_reset_button.clicked.connect(self.reset_config_defaults)
+        self.profile_import_button.clicked.connect(self.import_profile_library)
+        self.profile_export_button.clicked.connect(self.export_profile_library)
 
     def _build_makemkv_tab(self) -> QWidget:
         style = self.style()
@@ -1267,7 +1334,7 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(12, 12, 12, 10)
         root.setSpacing(10)
 
-        config_group = QGroupBox("Organizer defaults")
+        config_group = QGroupBox("App defaults")
         config_layout = QGridLayout(config_group)
         config_layout.setColumnStretch(1, 1)
         config_layout.addWidget(QLabel("Config file"), 0, 0)
@@ -1279,12 +1346,26 @@ class MainWindow(QMainWindow):
         actions = QHBoxLayout()
         actions.addWidget(self.config_reload_button)
         actions.addWidget(self.config_save_button)
+        actions.addWidget(self.config_reset_button)
         actions.addWidget(self.config_apply_button)
         actions.addStretch(1)
         config_layout.addLayout(actions, 3, 1, 1, 3)
         config_layout.addWidget(self.config_status_label, 4, 1, 1, 3)
 
         root.addWidget(config_group)
+
+        profiles_group = QGroupBox("Profile library")
+        profiles_layout = QGridLayout(profiles_group)
+        profiles_layout.setColumnStretch(1, 1)
+        profiles_layout.addWidget(QLabel("Profile file"), 0, 0)
+        profiles_layout.addWidget(self.profile_store_path_label, 0, 1, 1, 3)
+        library_actions = QHBoxLayout()
+        library_actions.addWidget(self.profile_import_button)
+        library_actions.addWidget(self.profile_export_button)
+        library_actions.addStretch(1)
+        profiles_layout.addLayout(library_actions, 1, 1, 1, 3)
+        profiles_layout.addWidget(self.profile_library_status_label, 2, 1, 1, 3)
+        root.addWidget(profiles_group)
         root.addStretch(1)
         return tab
 
@@ -1495,7 +1576,43 @@ class MainWindow(QMainWindow):
         self.profile_combo.currentIndexChanged.connect(self._profile_combo_changed)
         self.update_profile_button.clicked.connect(self.update_current_profile)
         self.save_profile_button.clicked.connect(self.save_current_profile)
+        self.revert_profile_button.clicked.connect(self.revert_current_profile)
         self.delete_profile_button.clicked.connect(self.delete_current_profile)
+        self.config_custom_language_order_edit.textChanged.connect(self._config_ui_changed)
+        self.config_use_custom_order_check.toggled.connect(self._config_ui_changed)
+        for widget in [
+            self.suffix_edit,
+            self.preferred_language_edit,
+            self.custom_language_order_edit,
+        ]:
+            widget.textChanged.connect(self._profile_ui_changed)
+        for widget in [
+            self.existing_output_combo,
+            self.metadata_combo,
+            self.audio_name_style_combo,
+            self.language_order_style_combo,
+            self.regional_order_combo,
+            self.report_format_combo,
+        ]:
+            widget.currentIndexChanged.connect(self._profile_ui_changed)
+        for widget in [
+            self.merge_inputs_check,
+            self.smart_subs_check,
+            self.drop_empty_check,
+            self.duplicate_check,
+            self.subtitle_language_duplicates_check,
+            self.disable_track_statistics_tags_check,
+            self.variant_check,
+            self.auto_pgs_ocr_check,
+            self.auto_commentary_ocr_check,
+            self.report_check,
+            self.preserve_commentary_names_check,
+            self.preferred_audio_first_check,
+            self.preferred_audio_default_check,
+            self.preferred_subtitle_first_check,
+            self.preferred_forced_subtitle_default_check,
+        ]:
+            widget.toggled.connect(self._profile_ui_changed)
         self.metadata_combo.currentIndexChanged.connect(
             lambda _index: self._sync_combo_tooltip(self.metadata_combo, self.METADATA_MODE_HELP)
         )
@@ -1638,10 +1755,17 @@ class MainWindow(QMainWindow):
     @Slot()
     def change_theme(self) -> None:
         self._apply_theme(str(self.theme_combo.currentData() or "dark"))
+        self._write_profile_store()
 
     def _apply_theme(self, theme: str | None = None) -> None:
         theme = theme or self.current_theme
         self.current_theme = "light" if theme == "light" else "dark"
+        self.saved_theme = self.current_theme
+        theme_index = self.theme_combo.findData(self.current_theme)
+        if theme_index >= 0 and theme_index != self.theme_combo.currentIndex():
+            previous_block_state = self.theme_combo.blockSignals(True)
+            self.theme_combo.setCurrentIndex(theme_index)
+            self.theme_combo.blockSignals(previous_block_state)
         palette = self._theme_palette(self.current_theme)
         self.setStyleSheet(
             f"""
@@ -1882,7 +2006,9 @@ class MainWindow(QMainWindow):
     def _language_order_style_changed(self) -> None:
         self._clear_manual_track_order()
         self._sync_combo_tooltip(self.language_order_style_combo, self.LANGUAGE_ORDER_STYLE_HELP)
-        self.regional_order_combo.setEnabled(self.language_order_style_combo.currentData() == "regional")
+        style = self.language_order_style_combo.currentData()
+        self.regional_order_combo.setEnabled(style == "regional")
+        self.custom_language_order_edit.setEnabled(style == "custom")
         self._sync_combo_tooltip(self.regional_order_combo, self.REGIONAL_ORDER_HELP)
 
     def _regional_order_changed(self) -> None:
@@ -2045,20 +2171,57 @@ class MainWindow(QMainWindow):
             order_text = ", ".join(str(item) for item in raw_order if str(item).strip())
         else:
             order_text = str(raw_order or "")
-        self.config_custom_language_order_edit.setText(order_text)
-        self.config_use_custom_order_check.setChecked(
-            str(config.get("language_order_style", getattr(self.default_args, "language_order_style", ""))) == "custom"
-        )
+        self._applying_config = True
+        try:
+            self.config_custom_language_order_edit.setText(order_text)
+            self.config_use_custom_order_check.setChecked(
+                str(config.get("language_order_style", getattr(self.default_args, "language_order_style", ""))) == "custom"
+            )
+        finally:
+            self._applying_config = False
         self.config_path_label.setText(str(self._config_file_path()))
         self.config_status_label.setText("Config loaded.")
+        self._capture_config_baseline()
 
-    def save_config_tab(self) -> None:
+    def _config_payload_from_ui(self) -> dict[str, object]:
+        order_text = self.config_custom_language_order_edit.text().strip()
+        try:
+            order_value: object = list(organizer.parse_custom_language_order(order_text))
+        except organizer.OrganizerError:
+            order_value = order_text
+        return {
+            "custom_language_order": order_value,
+            "language_order_style": "custom" if self.config_use_custom_order_check.isChecked() else "default",
+        }
+
+    def _capture_config_baseline(self) -> None:
+        self._config_baseline = self._config_payload_from_ui()
+        self._update_config_state()
+
+    def _config_is_dirty(self) -> bool:
+        return self._config_payload_from_ui() != self._config_baseline
+
+    @Slot()
+    def _config_ui_changed(self) -> None:
+        if self._applying_config:
+            return
+        self._update_config_state()
+
+    def _update_config_state(self) -> None:
+        dirty = self._config_is_dirty()
+        self.config_save_button.setEnabled(dirty)
+        if dirty:
+            self.config_status_label.setText("Unsaved changes")
+        elif not self.config_status_label.text():
+            self.config_status_label.setText("Saved")
+
+    def save_config_tab(self) -> bool:
         order_text = self.config_custom_language_order_edit.text().strip()
         try:
             parsed_order = organizer.parse_custom_language_order(order_text)
         except organizer.OrganizerError as error:
             self.config_status_label.setText(str(error))
-            return
+            return False
 
         config = self._read_raw_config()
         if parsed_order:
@@ -2068,34 +2231,52 @@ class MainWindow(QMainWindow):
         if self.config_use_custom_order_check.isChecked():
             if not parsed_order:
                 self.config_status_label.setText("Custom order is required when custom order is the default.")
-                return
+                return False
             config["language_order_style"] = "custom"
         elif config.get("language_order_style") == "custom":
             config["language_order_style"] = "default"
 
         path = self._config_file_path()
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
+            self._write_json_atomic(path, config)
         except OSError as error:
             self.config_status_label.setText(f"Could not save config: {error}")
-            return
+            return False
 
         self.default_args, self.default_config_path = self._load_default_args()
         self.config_path_label.setText(str(self._config_file_path()))
         self.config_status_label.setText("Config saved.")
+        self._capture_config_baseline()
+        return True
+
+    @Slot()
+    def reset_config_defaults(self) -> None:
+        self.config_custom_language_order_edit.clear()
+        self.config_use_custom_order_check.setChecked(False)
+        self._update_config_state()
 
     def apply_custom_config_to_organizer(self) -> None:
+        order_text = self.config_custom_language_order_edit.text().strip()
+        try:
+            parsed_order = organizer.parse_custom_language_order(order_text)
+        except organizer.OrganizerError as error:
+            self.config_status_label.setText(str(error))
+            return
+        if not parsed_order:
+            self.config_status_label.setText("Set a custom language order first.")
+            return
+        self.custom_language_order_edit.setText(", ".join(parsed_order))
         index = self.language_order_style_combo.findData("custom")
         if index >= 0:
             self.language_order_style_combo.setCurrentIndex(index)
-        self.config_use_custom_order_check.setChecked(True)
         self._clear_manual_track_order()
-        self.config_status_label.setText("Organizer will use the custom language order.")
+        self.config_status_label.setText("Custom order copied to Organizer.")
 
     def _load_profile_store(self) -> None:
         self.profiles = {}
         self.last_profile_name = ""
+        self.saved_theme = "dark"
+        self._profile_store_needs_migration = False
         if not self.profile_store_path.exists():
             return
 
@@ -2105,40 +2286,163 @@ class MainWindow(QMainWindow):
             self.append_summary_line(f"Profile store ignored: {error}")
             return
 
-        raw_profiles = raw_store.get("profiles", {}) if isinstance(raw_store, dict) else {}
+        if not isinstance(raw_store, dict):
+            self.append_summary_line("Profile store ignored: root value must be an object.")
+            return
+
+        try:
+            version = int(raw_store.get("version", 1))
+        except (TypeError, ValueError):
+            self.append_summary_line("Profile store ignored: version must be a number.")
+            return
+        if version < 1 or version > self.PROFILE_STORE_VERSION:
+            self.append_summary_line(
+                f"Profile store ignored: unsupported version {version} (supports up to {self.PROFILE_STORE_VERSION})."
+            )
+            return
+        self._profile_store_needs_migration = version != self.PROFILE_STORE_VERSION
+
+        raw_ui = raw_store.get("ui") or {}
+        if isinstance(raw_ui, dict) and str(raw_ui.get("theme") or "") in {"dark", "light"}:
+            self.saved_theme = str(raw_ui["theme"])
+
+        raw_profiles = raw_store.get("profiles", {})
         if isinstance(raw_profiles, dict):
             for raw_name, raw_payload in raw_profiles.items():
                 name = str(raw_name).strip()
                 if not name or not isinstance(raw_payload, dict):
+                    self._profile_store_needs_migration = True
                     continue
-                payload = {
-                    key: raw_payload[key]
-                    for key in self.PROFILE_FIELDS
-                    if key in raw_payload
-                }
-                if payload:
-                    self.profiles[name] = payload
+                try:
+                    normalized_payload = self._normalize_profile_payload(
+                        raw_payload,
+                        strict=version >= self.PROFILE_STORE_VERSION,
+                    )
+                    self.profiles[name] = normalized_payload
+                    if normalized_payload != raw_payload:
+                        self._profile_store_needs_migration = True
+                except ValueError as error:
+                    self.append_summary_line(f"Profile ignored ({name}): {error}")
+                    self._profile_store_needs_migration = True
 
-        raw_last_profile = raw_store.get("last_profile", "") if isinstance(raw_store, dict) else ""
+        raw_last_profile = raw_store.get("last_profile", "")
         if str(raw_last_profile) in self.profiles:
             self.last_profile_name = str(raw_last_profile)
 
-    def _write_profile_store(self) -> None:
-        selected_profile = self._current_profile_name()
-        self.last_profile_name = selected_profile
-        payload = {
+    @staticmethod
+    def _write_json_atomic(path: Path, payload: dict) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = path.with_suffix(path.suffix + ".tmp")
+        try:
+            temp_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+            temp_path.replace(path)
+        finally:
+            if temp_path.exists():
+                temp_path.unlink()
+
+    def _profile_store_payload(self, last_profile: str | None = None) -> dict:
+        selected_profile = self._current_profile_name() if last_profile is None else last_profile
+        return {
             "version": self.PROFILE_STORE_VERSION,
-            "last_profile": selected_profile,
+            "last_profile": selected_profile if selected_profile in self.profiles else "",
+            "ui": {"theme": self.current_theme},
             "profiles": {
                 name: self.profiles[name]
                 for name in sorted(self.profiles, key=str.casefold)
             },
         }
+
+    def _write_profile_store(self) -> bool:
+        selected_profile = self._current_profile_name()
+        previous_last_profile = self.last_profile_name
+        self.last_profile_name = selected_profile
         try:
-            self.profile_store_path.parent.mkdir(parents=True, exist_ok=True)
-            self.profile_store_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+            self._write_json_atomic(self.profile_store_path, self._profile_store_payload(selected_profile))
         except OSError as error:
+            self.last_profile_name = previous_last_profile
             self.append_summary_line(f"Could not save profiles: {error}")
+            return False
+        self._profile_store_needs_migration = False
+        self._update_profile_library_status()
+        return True
+
+    @staticmethod
+    def _coerce_profile_bool(value: object, key: str, strict: bool, default: object = False) -> bool:
+        try:
+            return organizer.config_bool(value, key)
+        except organizer.OrganizerError as error:
+            if strict:
+                raise ValueError(str(error)) from error
+            return bool(default)
+
+    def _normalize_profile_payload(self, raw_payload: dict, strict: bool = True) -> dict:
+        baseline = dict(self._profile_default_payload)
+        if not baseline:
+            baseline = {key: "" for key in self.PROFILE_FIELDS}
+        payload = {key: baseline.get(key) for key in self.PROFILE_FIELDS}
+        raw = dict(raw_payload)
+
+        if "existing_output_mode" not in raw:
+            if raw.get("overwrite"):
+                raw["existing_output_mode"] = "overwrite"
+            elif raw.get("skip_existing"):
+                raw["existing_output_mode"] = "skip"
+
+        for key in self.PROFILE_FIELDS:
+            if key not in raw:
+                continue
+            value = raw[key]
+            if key in self.PROFILE_BOOL_FIELDS:
+                payload[key] = self._coerce_profile_bool(value, key, strict, payload.get(key, False))
+                continue
+            if key in self.PROFILE_ENUM_FIELDS:
+                normalized = str(value or "").strip().lower().replace("_", "-")
+                if normalized == "skip-existing" and key == "existing_output_mode":
+                    normalized = "skip"
+                if normalized not in self.PROFILE_ENUM_FIELDS[key]:
+                    if strict:
+                        allowed = ", ".join(sorted(self.PROFILE_ENUM_FIELDS[key]))
+                        raise ValueError(f"Invalid {key}: {value!r}. Expected one of: {allowed}.")
+                    continue
+                payload[key] = normalized
+                continue
+            if key == "regional_order":
+                try:
+                    payload[key] = ",".join(organizer.parse_regional_order(value))
+                except organizer.OrganizerError as error:
+                    if strict:
+                        raise ValueError(str(error)) from error
+                continue
+            if key == "custom_language_order":
+                try:
+                    payload[key] = ", ".join(organizer.parse_custom_language_order(value))
+                except organizer.OrganizerError as error:
+                    if strict:
+                        raise ValueError(str(error)) from error
+                continue
+            if key == "preferred_language":
+                payload[key] = organizer.normalize_preferred_language(value)
+                continue
+            payload[key] = str(value or "").strip()
+
+        if payload.get("language_order_style") == "custom" and not payload.get("custom_language_order"):
+            if strict:
+                raise ValueError("Custom language order is required when Language order is Custom.")
+            payload["language_order_style"] = "default"
+
+        preferred_flags = [
+            "preferred_audio_first",
+            "preferred_audio_default",
+            "preferred_subtitle_first",
+            "preferred_forced_subtitle_default",
+        ]
+        if not payload.get("preferred_language") and any(payload.get(key) for key in preferred_flags):
+            if strict:
+                raise ValueError("Preferred language is required when preferred-language rules are enabled.")
+            for key in preferred_flags:
+                payload[key] = False
+
+        return payload
 
     def _refresh_profile_combo(self, selected_name: str = "") -> None:
         previous_block_state = self.profile_combo.blockSignals(True)
@@ -2149,17 +2453,167 @@ class MainWindow(QMainWindow):
                 self.profile_combo.addItem(name, name)
             selected_index = self.profile_combo.findData(selected_name)
             self.profile_combo.setCurrentIndex(selected_index if selected_index >= 0 else 0)
-            self._update_profile_buttons()
         finally:
             self.profile_combo.blockSignals(previous_block_state)
+        self._update_profile_state()
 
     def _current_profile_name(self) -> str:
         return str(self.profile_combo.currentData() or "")
 
-    def _update_profile_buttons(self) -> None:
-        has_profile = bool(self._current_profile_name())
-        self.update_profile_button.setEnabled(has_profile)
+    def _profile_is_dirty(self) -> bool:
+        profile_name = self._loaded_profile_name
+        if not profile_name or profile_name not in self.profiles or self._applying_profile:
+            return False
+        try:
+            current_payload = self._normalize_profile_payload(self._profile_payload_from_ui(), strict=True)
+        except ValueError:
+            return True
+        return current_payload != self.profiles[profile_name]
+
+    def _update_profile_state(self) -> None:
+        profile_name = self._loaded_profile_name
+        has_profile = bool(profile_name and profile_name in self.profiles)
+        dirty = self._profile_is_dirty()
+        self.update_profile_button.setEnabled(has_profile and dirty)
+        self.revert_profile_button.setEnabled(has_profile and dirty)
         self.delete_profile_button.setEnabled(has_profile)
+        if not has_profile:
+            status = "Custom settings"
+        elif dirty:
+            status = "Unsaved changes"
+        else:
+            status = "Saved"
+        self.profile_status_label.setText(status)
+        self.profile_status_label.setToolTip(
+            f"Loaded profile: {profile_name}" if has_profile else "No saved profile is currently loaded"
+        )
+
+    def _update_profile_library_status(self, message: str = "") -> None:
+        count = len(self.profiles)
+        summary = f"{count} saved profile{'s' if count != 1 else ''}"
+        self.profile_library_status_label.setText(f"{message} | {summary}" if message else summary)
+        self.profile_store_path_label.setText(str(self.profile_store_path))
+
+    def _read_profile_library_file(self, path: Path) -> dict[str, dict]:
+        try:
+            raw_store = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as error:
+            raise ValueError(f"Invalid profile JSON: {error}") from error
+        except OSError as error:
+            raise ValueError(f"Could not read profile library: {error}") from error
+        if not isinstance(raw_store, dict):
+            raise ValueError("Profile library root must be an object.")
+        try:
+            version = int(raw_store.get("version", 1))
+        except (TypeError, ValueError) as error:
+            raise ValueError("Profile library version must be a number.") from error
+        if version > self.PROFILE_STORE_VERSION:
+            raise ValueError(
+                f"Profile library version {version} is newer than supported version {self.PROFILE_STORE_VERSION}."
+            )
+        raw_profiles = raw_store.get("profiles")
+        if not isinstance(raw_profiles, dict):
+            raise ValueError("Profile library does not contain a profiles object.")
+
+        imported: dict[str, dict] = {}
+        seen_names: set[str] = set()
+        for raw_name, raw_payload in raw_profiles.items():
+            name = str(raw_name).strip()
+            if not name or name.casefold() == self.PROFILE_NONE_LABEL.casefold():
+                raise ValueError(f"Invalid or reserved profile name: {raw_name!r}.")
+            if name.casefold() in seen_names:
+                raise ValueError(f"Duplicate profile name: {name}.")
+            if not isinstance(raw_payload, dict):
+                raise ValueError(f"Profile '{name}' must be an object.")
+            try:
+                imported[name] = self._normalize_profile_payload(raw_payload, strict=True)
+            except ValueError as error:
+                raise ValueError(f"Profile '{name}': {error}") from error
+            seen_names.add(name.casefold())
+        return imported
+
+    def _merge_imported_profiles(self, imported: dict[str, dict], overwrite: bool) -> tuple[int, int]:
+        imported_count = 0
+        skipped_count = 0
+        for name, payload in imported.items():
+            existing_name = next(
+                (saved_name for saved_name in self.profiles if saved_name.casefold() == name.casefold()),
+                "",
+            )
+            if existing_name and not overwrite:
+                skipped_count += 1
+                continue
+            target_name = existing_name or name
+            self.profiles[target_name] = payload
+            imported_count += 1
+        return imported_count, skipped_count
+
+    @Slot()
+    def import_profile_library(self) -> None:
+        input_path, _selected_filter = QFileDialog.getOpenFileName(
+            self,
+            "Import profile library",
+            "",
+            "Profile libraries (*.json);;All files (*)",
+        )
+        if not input_path:
+            return
+        try:
+            imported = self._read_profile_library_file(Path(input_path))
+        except ValueError as error:
+            QMessageBox.critical(self, "Import profiles failed", str(error))
+            return
+        conflicts = [
+            name
+            for name in imported
+            if any(saved_name.casefold() == name.casefold() for saved_name in self.profiles)
+        ]
+        overwrite = False
+        if conflicts:
+            answer = QMessageBox.question(
+                self,
+                "Import profile library",
+                f"{len(conflicts)} profile name(s) already exist. Replace them?\n"
+                "Choose No to import only new profiles.",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+                QMessageBox.Cancel,
+            )
+            if answer == QMessageBox.Cancel:
+                return
+            overwrite = answer == QMessageBox.Yes
+        previous_profiles = dict(self.profiles)
+        previous_loaded_profile = self._loaded_profile_name
+        imported_count, skipped_count = self._merge_imported_profiles(imported, overwrite)
+        self._refresh_profile_combo(self._loaded_profile_name)
+        if not self._write_profile_store():
+            self.profiles = previous_profiles
+            self._loaded_profile_name = previous_loaded_profile
+            self._refresh_profile_combo(previous_loaded_profile)
+            QMessageBox.warning(self, "Import profiles failed", "Could not save the imported profile library.")
+            return
+        message = f"Imported {imported_count}"
+        if skipped_count:
+            message += f", kept {skipped_count} existing"
+        self._update_profile_library_status(message)
+        self.statusBar().showMessage(message)
+
+    @Slot()
+    def export_profile_library(self) -> None:
+        output_path, _selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Export profile library",
+            "mkv-track-organizer-profiles.json",
+            "Profile libraries (*.json);;All files (*)",
+        )
+        if not output_path:
+            return
+        try:
+            self._write_json_atomic(Path(output_path), self._profile_store_payload(self._loaded_profile_name))
+        except OSError as error:
+            QMessageBox.critical(self, "Export profiles failed", str(error))
+            return
+        self._update_profile_library_status(f"Exported {len(self.profiles)}")
+        self.statusBar().showMessage(f"Profiles exported: {output_path}")
 
     def _existing_output_mode(self) -> str:
         mode = str(self.existing_output_combo.currentData() or "stop")
@@ -2191,7 +2645,7 @@ class MainWindow(QMainWindow):
             "audio_name_style": self.audio_name_style_combo.currentData() or "auto",
             "language_order_style": self.language_order_style_combo.currentData() or "default",
             "regional_order": self.regional_order_combo.currentData() or "",
-            "custom_language_order": self.config_custom_language_order_edit.text().strip(),
+            "custom_language_order": self.custom_language_order_edit.text().strip(),
             "report_format": self.report_format_combo.currentText(),
             "smart_sub_detection": self.smart_subs_check.isChecked(),
             "drop_empty_subs": self.drop_empty_check.isChecked(),
@@ -2209,6 +2663,9 @@ class MainWindow(QMainWindow):
             "preferred_subtitle_first": self.preferred_subtitle_first_check.isChecked(),
             "preferred_forced_subtitle_default": self.preferred_forced_subtitle_default_check.isChecked(),
         }
+
+    def _validated_profile_payload_from_ui(self) -> dict:
+        return self._normalize_profile_payload(self._profile_payload_from_ui(), strict=True)
 
     def _apply_profile_payload(self, payload: dict) -> None:
         if "output_suffix" in payload:
@@ -2238,11 +2695,11 @@ class MainWindow(QMainWindow):
         if "custom_language_order" in payload:
             raw_order = payload["custom_language_order"]
             if isinstance(raw_order, (list, tuple)):
-                self.config_custom_language_order_edit.setText(
+                self.custom_language_order_edit.setText(
                     ", ".join(str(item) for item in raw_order if str(item).strip())
                 )
             else:
-                self.config_custom_language_order_edit.setText(str(raw_order or ""))
+                self.custom_language_order_edit.setText(str(raw_order or ""))
         if "report_format" in payload:
             self.report_format_combo.setCurrentText(str(payload["report_format"]))
 
@@ -2299,13 +2756,43 @@ class MainWindow(QMainWindow):
     def _apply_current_profile(self) -> None:
         profile_name = self._current_profile_name()
         if profile_name:
-            self._apply_profile_payload(self.profiles.get(profile_name, {}))
+            self._applying_profile = True
+            try:
+                self._apply_profile_payload(self.profiles.get(profile_name, {}))
+            finally:
+                self._applying_profile = False
+        self._loaded_profile_name = profile_name
+        self._update_profile_state()
+
+    @Slot()
+    def _profile_ui_changed(self) -> None:
+        if self._applying_profile:
+            return
+        self._update_profile_state()
 
     @Slot()
     def _profile_combo_changed(self) -> None:
+        requested_profile = self._current_profile_name()
+        if requested_profile == self._loaded_profile_name:
+            return
+        if self._profile_is_dirty():
+            answer = QMessageBox.question(
+                self,
+                "Unsaved profile changes",
+                f"Discard unsaved changes to '{self._loaded_profile_name}'?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                previous_block_state = self.profile_combo.blockSignals(True)
+                try:
+                    index = self.profile_combo.findData(self._loaded_profile_name)
+                    self.profile_combo.setCurrentIndex(index if index >= 0 else 0)
+                finally:
+                    self.profile_combo.blockSignals(previous_block_state)
+                return
         self._clear_manual_track_order()
         self._apply_current_profile()
-        self._update_profile_buttons()
         self._write_profile_store()
         profile_name = self._current_profile_name()
         self.statusBar().showMessage(f"Profile loaded: {profile_name}" if profile_name else "Custom profile")
@@ -2317,9 +2804,27 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Update profile", "Choose a saved profile first, or use Save as.")
             return
 
-        self.profiles[profile_name] = self._profile_payload_from_ui()
-        self._write_profile_store()
-        self.statusBar().showMessage(f"Profile updated: {profile_name}")
+        if self._save_loaded_profile_changes():
+            self.statusBar().showMessage(f"Profile updated: {profile_name}")
+
+    def _save_loaded_profile_changes(self) -> bool:
+        profile_name = self._loaded_profile_name
+        if not profile_name or profile_name not in self.profiles:
+            return False
+        try:
+            payload = self._validated_profile_payload_from_ui()
+        except ValueError as error:
+            QMessageBox.warning(self, "Save profile changes", str(error))
+            return False
+        previous_payload = self.profiles[profile_name]
+        self.profiles[profile_name] = payload
+        if not self._write_profile_store():
+            self.profiles[profile_name] = previous_payload
+            self._update_profile_state()
+            QMessageBox.warning(self, "Save profile changes", "Could not write the profile library.")
+            return False
+        self._update_profile_state()
+        return True
 
     @Slot()
     def save_current_profile(self) -> None:
@@ -2348,10 +2853,38 @@ class MainWindow(QMainWindow):
                 return
             name = existing_name
 
-        self.profiles[name] = self._profile_payload_from_ui()
+        try:
+            payload = self._validated_profile_payload_from_ui()
+        except ValueError as error:
+            QMessageBox.warning(self, "Save profile as", str(error))
+            return
+        previous_profiles = dict(self.profiles)
+        previous_loaded_profile = self._loaded_profile_name
+        self.profiles[name] = payload
+        self._loaded_profile_name = name
         self._refresh_profile_combo(name)
-        self._write_profile_store()
+        if not self._write_profile_store():
+            self.profiles = previous_profiles
+            self._loaded_profile_name = previous_loaded_profile
+            self._refresh_profile_combo(previous_loaded_profile)
+            QMessageBox.warning(self, "Save profile as", "Could not write the profile library.")
+            return
+        self._update_profile_state()
         self.statusBar().showMessage(f"Profile saved: {name}")
+
+    @Slot()
+    def revert_current_profile(self) -> None:
+        profile_name = self._loaded_profile_name
+        if not profile_name or profile_name not in self.profiles:
+            return
+        self._applying_profile = True
+        try:
+            self._apply_profile_payload(self.profiles[profile_name])
+        finally:
+            self._applying_profile = False
+        self._clear_manual_track_order()
+        self._update_profile_state()
+        self.statusBar().showMessage(f"Profile reverted: {profile_name}")
 
     @Slot()
     def delete_current_profile(self) -> None:
@@ -2367,9 +2900,18 @@ class MainWindow(QMainWindow):
         )
         if answer != QMessageBox.Yes:
             return
+        previous_profiles = dict(self.profiles)
+        previous_loaded_profile = self._loaded_profile_name
         self.profiles.pop(profile_name, None)
+        self._loaded_profile_name = ""
         self._refresh_profile_combo("")
-        self._write_profile_store()
+        if not self._write_profile_store():
+            self.profiles = previous_profiles
+            self._loaded_profile_name = previous_loaded_profile
+            self._refresh_profile_combo(previous_loaded_profile)
+            QMessageBox.warning(self, "Delete profile", "Could not write the profile library.")
+            return
+        self._update_profile_state()
         self.statusBar().showMessage(f"Profile deleted: {profile_name}")
 
     def _apply_default_args(self, args) -> None:
@@ -2423,6 +2965,7 @@ class MainWindow(QMainWindow):
         if isinstance(custom_order, (list, tuple)):
             custom_order = ", ".join(str(item) for item in custom_order if str(item).strip())
         self.config_custom_language_order_edit.setText(str(custom_order))
+        self.custom_language_order_edit.setText(str(custom_order))
         self.config_use_custom_order_check.setChecked(
             str(getattr(args, "language_order_style", "") or "") == "custom"
         )
@@ -3543,7 +4086,7 @@ class MainWindow(QMainWindow):
         args.audio_name_style = self.audio_name_style_combo.currentData() or "auto"
         args.language_order_style = self.language_order_style_combo.currentData() or "default"
         args.regional_order = self.regional_order_combo.currentData() or ""
-        args.custom_language_order = self.config_custom_language_order_edit.text().strip()
+        args.custom_language_order = self.custom_language_order_edit.text().strip()
         args.report_format = self.report_format_combo.currentText()
         return args, config_path
 
@@ -5302,6 +5845,34 @@ class MainWindow(QMainWindow):
                 QMessageBox.No,
             )
             if answer != QMessageBox.Yes:
+                event.ignore()
+                return
+        if self._profile_is_dirty():
+            answer = QMessageBox.question(
+                self,
+                "Unsaved profile changes",
+                f"Save changes to '{self._loaded_profile_name}' before closing?",
+                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+                QMessageBox.Save,
+            )
+            if answer == QMessageBox.Cancel:
+                event.ignore()
+                return
+            if answer == QMessageBox.Save and not self._save_loaded_profile_changes():
+                event.ignore()
+                return
+        if self._config_is_dirty():
+            answer = QMessageBox.question(
+                self,
+                "Unsaved app defaults",
+                "Save changes to the Config tab before closing?",
+                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+                QMessageBox.Save,
+            )
+            if answer == QMessageBox.Cancel:
+                event.ignore()
+                return
+            if answer == QMessageBox.Save and not self.save_config_tab():
                 event.ignore()
                 return
         self._write_profile_store()

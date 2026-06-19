@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 
@@ -17,6 +18,14 @@ import mkv_track_organizer_gui as gui
 def qapp():
     app = QApplication.instance() or QApplication([])
     return app
+
+
+@pytest.fixture(autouse=True)
+def isolated_profile_store(tmp_path, monkeypatch):
+    profile_path = tmp_path / "profiles.json"
+    monkeypatch.setattr(gui, "gui_profile_store_path", lambda: profile_path)
+    monkeypatch.setattr(organizer, "DEFAULT_CONFIG_PATH", tmp_path / "config.json")
+    return profile_path
 
 
 def report_track(track_id: int, track_type: str, language: str = "eng", **overrides):
@@ -307,5 +316,160 @@ def test_raw_log_timestamps_chunks_and_output_tools(qapp):
         window._clear_output_text(window.output_tabs)
 
         assert not window.log_edit.toPlainText()
+    finally:
+        window.close()
+
+
+def test_profile_v1_migrates_to_complete_v2_payload(qapp, isolated_profile_store):
+    isolated_profile_store.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "last_profile": "Legacy",
+                "profiles": {
+                    "Legacy": {
+                        "output_suffix": "-legacy",
+                        "overwrite": True,
+                        "language_order_style": "regional",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    window = gui.MainWindow()
+    try:
+        legacy = window.profiles["Legacy"]
+
+        assert set(legacy) == set(window.PROFILE_FIELDS)
+        assert legacy["output_suffix"] == "-legacy"
+        assert legacy["existing_output_mode"] == "overwrite"
+        assert legacy["language_order_style"] == "regional"
+        assert window._loaded_profile_name == "Legacy"
+
+        stored = json.loads(window.profile_store_path.read_text(encoding="utf-8"))
+
+        assert stored["version"] == 2
+        assert stored["ui"]["theme"] == "dark"
+        assert set(stored["profiles"]["Legacy"]) == set(window.PROFILE_FIELDS)
+    finally:
+        window.close()
+
+
+def test_profile_dirty_state_and_revert(qapp):
+    window = gui.MainWindow()
+    try:
+        payload = window._validated_profile_payload_from_ui()
+        payload["output_suffix"] = "-cinema"
+        window.profiles = {"Cinema": payload}
+        window._refresh_profile_combo("Cinema")
+        window._apply_current_profile()
+
+        assert window.profile_status_label.text() == "Saved"
+        assert not window.update_profile_button.isEnabled()
+
+        window.suffix_edit.setText("-changed")
+
+        assert window.profile_status_label.text() == "Unsaved changes"
+        assert window.update_profile_button.isEnabled()
+        assert window.revert_profile_button.isEnabled()
+
+        window.revert_current_profile()
+
+        assert window.suffix_edit.text() == "-cinema"
+        assert window.profile_status_label.text() == "Saved"
+        assert not window.update_profile_button.isEnabled()
+    finally:
+        window.close()
+
+
+def test_profile_update_rolls_back_when_store_write_fails(qapp, monkeypatch):
+    window = gui.MainWindow()
+    try:
+        payload = window._validated_profile_payload_from_ui()
+        payload["output_suffix"] = "-saved"
+        window.profiles = {"Cinema": payload}
+        window._refresh_profile_combo("Cinema")
+        window._apply_current_profile()
+        window.suffix_edit.setText("-unsaved")
+        monkeypatch.setattr(window, "_write_profile_store", lambda: False)
+        monkeypatch.setattr(gui.QMessageBox, "warning", lambda *args: gui.QMessageBox.Ok)
+
+        assert not window._save_loaded_profile_changes()
+        assert window.profiles["Cinema"]["output_suffix"] == "-saved"
+        assert window.suffix_edit.text() == "-unsaved"
+        assert window._profile_is_dirty()
+
+        window.revert_current_profile()
+    finally:
+        window.close()
+
+
+def test_config_custom_order_is_separate_from_active_profile_order(qapp):
+    window = gui.MainWindow()
+    try:
+        original_active_order = window.custom_language_order_edit.text()
+        window.config_custom_language_order_edit.setText("jpn, eng")
+
+        assert window.config_save_button.isEnabled()
+        assert window.custom_language_order_edit.text() == original_active_order
+
+        window.apply_custom_config_to_organizer()
+
+        assert window.custom_language_order_edit.text() == "jpn, eng"
+        assert window.language_order_style_combo.currentData() == "custom"
+
+        window.reset_config_defaults()
+
+        assert not window.config_custom_language_order_edit.text()
+        assert window.custom_language_order_edit.text() == "jpn, eng"
+    finally:
+        window.close()
+
+
+def test_config_save_updates_the_global_baseline(qapp):
+    window = gui.MainWindow()
+    try:
+        window.config_custom_language_order_edit.setText("jpn, eng")
+        window.config_use_custom_order_check.setChecked(True)
+
+        assert window._config_is_dirty()
+        assert window.save_config_tab()
+        assert not window._config_is_dirty()
+
+        stored = json.loads(window._config_file_path().read_text(encoding="utf-8"))
+        assert stored["custom_language_order"] == ["jpn", "eng"]
+        assert stored["language_order_style"] == "custom"
+    finally:
+        window.close()
+
+
+def test_imported_profiles_can_keep_or_replace_conflicts(qapp):
+    window = gui.MainWindow()
+    try:
+        original = window._validated_profile_payload_from_ui()
+        original["output_suffix"] = "-old"
+        replacement = dict(original)
+        replacement["output_suffix"] = "-new"
+        extra = dict(original)
+        extra["output_suffix"] = "-extra"
+        window.profiles = {"Cinema": original}
+
+        imported_count, skipped_count = window._merge_imported_profiles(
+            {"cinema": replacement, "Extra": extra},
+            overwrite=False,
+        )
+
+        assert (imported_count, skipped_count) == (1, 1)
+        assert window.profiles["Cinema"]["output_suffix"] == "-old"
+        assert window.profiles["Extra"]["output_suffix"] == "-extra"
+
+        imported_count, skipped_count = window._merge_imported_profiles(
+            {"cinema": replacement},
+            overwrite=True,
+        )
+
+        assert (imported_count, skipped_count) == (1, 0)
+        assert window.profiles["Cinema"]["output_suffix"] == "-new"
     finally:
         window.close()
