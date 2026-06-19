@@ -12,7 +12,7 @@ from pathlib import Path
 
 try:
     from PySide6.QtCore import QEvent, QObject, QThread, QTimer, Qt, Signal, Slot
-    from PySide6.QtGui import QBrush, QColor, QCloseEvent, QDragEnterEvent, QDropEvent, QTextCursor
+    from PySide6.QtGui import QAction, QBrush, QColor, QCloseEvent, QDragEnterEvent, QDropEvent, QTextCursor
     from PySide6.QtWidgets import (
         QApplication,
         QAbstractItemView,
@@ -53,6 +53,7 @@ except ModuleNotFoundError as error:
 import mkv_track_organizer as organizer
 import makemkv_batch as makemkv
 import audio_sync
+from app_metadata import APP_DESCRIPTION, APP_NAME, APP_VERSION, DOCUMENTATION_URL, ISSUES_URL
 
 
 def gui_profile_store_path() -> Path:
@@ -536,7 +537,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("MKV Track Organizer")
+        self.setWindowTitle(APP_NAME)
         self.resize(1240, 820)
         self.setAcceptDrops(True)
 
@@ -878,6 +879,11 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self) -> None:
         style = self.style()
+        help_menu = self.menuBar().addMenu("&Help")
+        self.about_action = QAction(f"About {APP_NAME}", self)
+        self.about_action.triggered.connect(self.show_about_dialog)
+        help_menu.addAction(self.about_action)
+
         self.tabs = QTabWidget()
         organizer_tab = QWidget()
         organizer_tab.setAcceptDrops(True)
@@ -1219,6 +1225,21 @@ class MainWindow(QMainWindow):
         self.config_reset_button.clicked.connect(self.reset_config_defaults)
         self.profile_import_button.clicked.connect(self.import_profile_library)
         self.profile_export_button.clicked.connect(self.export_profile_library)
+
+    @Slot()
+    def show_about_dialog(self) -> None:
+        QMessageBox.about(
+            self,
+            f"About {APP_NAME}",
+            (
+                f"<h3>{APP_NAME} {APP_VERSION}</h3>"
+                f"<p>{APP_DESCRIPTION}</p>"
+                "<p>Built for MKVToolNix workflows with optional FFmpeg, MakeMKV, "
+                "Tesseract, and Subtitle Edit integrations.</p>"
+                f'<p><a href="{DOCUMENTATION_URL}">Documentation</a> &nbsp; '
+                f'<a href="{ISSUES_URL}">Report an issue</a></p>'
+            ),
+        )
 
     def _build_makemkv_tab(self) -> QWidget:
         style = self.style()
@@ -5879,9 +5900,19 @@ class MainWindow(QMainWindow):
         event.accept()
 
 
-def main() -> int:
-    app = QApplication(sys.argv)
+def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv if argv is None else argv)
+    if "--version" in argv:
+        print(f"{APP_NAME} {APP_VERSION}")
+        return 0
+
+    app = QApplication.instance() or QApplication(argv)
     window = MainWindow()
+    if "--smoke-test" in argv:
+        window.show()
+        app.processEvents()
+        window.close()
+        return 0
     window.show()
     return app.exec()
 

@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QApplication
 
 import mkv_track_organizer as organizer
 import mkv_track_organizer_gui as gui
+from app_metadata import APP_NAME, APP_VERSION
 
 
 @pytest.fixture(scope="module")
@@ -473,3 +474,27 @@ def test_imported_profiles_can_keep_or_replace_conflicts(qapp):
         assert window.profiles["Cinema"]["output_suffix"] == "-new"
     finally:
         window.close()
+
+
+def test_about_dialog_uses_release_identity(qapp, monkeypatch):
+    window = gui.MainWindow()
+    captured: dict[str, str] = {}
+    try:
+        monkeypatch.setattr(
+            gui.QMessageBox,
+            "about",
+            lambda _parent, title, text: captured.update(title=title, text=text),
+        )
+
+        window.show_about_dialog()
+
+        assert captured["title"] == f"About {APP_NAME}"
+        assert APP_VERSION in captured["text"]
+        assert "Documentation" in captured["text"]
+    finally:
+        window.close()
+
+
+def test_gui_version_mode_does_not_start_the_event_loop(capsys):
+    assert gui.main(["mkv-track-organizer", "--version"]) == 0
+    assert f"{APP_NAME} {APP_VERSION}" in capsys.readouterr().out

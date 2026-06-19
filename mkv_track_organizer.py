@@ -19,6 +19,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from app_metadata import APP_DESCRIPTION, APP_VERSION
+
 
 APP_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG_PATH = APP_DIR / "mkv_track_organizer.config.json"
@@ -7865,8 +7867,9 @@ def build_parser(config_defaults: dict[str, Any] | None = None) -> argparse.Argu
         return config_defaults.get(name, fallback)
 
     parser = argparse.ArgumentParser(
-        description="Organize Matroska track metadata and order in batch using MKVToolNix.",
+        description=APP_DESCRIPTION,
     )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {APP_VERSION}")
     parser.set_defaults(
         smart_sub_detection=default("smart_sub_detection", True),
         detect_duplicate_tracks=default("detect_duplicate_tracks", True),

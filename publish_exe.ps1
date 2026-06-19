@@ -11,10 +11,19 @@ $ErrorActionPreference = "Stop"
 
 $tag = $Version.Trim()
 if (-not $tag) {
-    throw "Version is required, for example: .\publish_exe.ps1 -Version v0.1.0"
+    throw "Version is required, for example: .\publish_exe.ps1 -Version v1.0.0"
 }
 if (-not $tag.StartsWith("v")) {
     $tag = "v$tag"
+}
+
+$metadataSource = Get-Content -LiteralPath ".\app_metadata.py" -Raw
+if ($metadataSource -notmatch 'APP_VERSION\s*=\s*"(?<version>\d+\.\d+\.\d+)"') {
+    throw "Could not read APP_VERSION from app_metadata.py."
+}
+$expectedTag = "v$($Matches.version)"
+if ($tag -ne $expectedTag) {
+    throw "Release tag $tag does not match APP_VERSION $($Matches.version). Expected $expectedTag."
 }
 
 $gh = Get-Command gh -ErrorAction SilentlyContinue
@@ -50,11 +59,24 @@ if (-not (Test-Path -LiteralPath $asset)) {
     throw "Release asset was not created: $asset"
 }
 
+if (-not $OneFile) {
+    & .\smoke_test_exe.ps1
+    if ($LASTEXITCODE -ne 0) {
+        throw "EXE smoke test failed with exit code ${LASTEXITCODE}."
+    }
+}
+
 gh release view $tag *> $null
 if ($LASTEXITCODE -eq 0) {
     gh release upload $tag $asset --clobber
 } else {
-    $releaseArgs = @("release", "create", $tag, $asset, "--title", "MKV Track Organizer $tag", "--generate-notes")
+    $releaseArgs = @("release", "create", $tag, $asset, "--title", "MKV Track Organizer $tag")
+    $releaseNotesFile = ".\.github\release-notes\$tag.md"
+    if (Test-Path -LiteralPath $releaseNotesFile) {
+        $releaseArgs += @("--notes-file", $releaseNotesFile)
+    } else {
+        $releaseArgs += "--generate-notes"
+    }
     if ($Draft) {
         $releaseArgs += "--draft"
     }

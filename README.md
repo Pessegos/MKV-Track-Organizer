@@ -1,8 +1,10 @@
 # MKV Track Organizer
 
-MKV Track Organizer is a Python tool for batch-cleaning Matroska track metadata and order with MKVToolNix. It can analyze audio, video, and subtitle tracks, rename them consistently, detect common subtitle roles, and write organized outputs without touching the original files by default.
+MKV Track Organizer 1.0 is a Windows desktop and command-line tool for cleaning, inspecting, synchronizing, and remuxing Matroska tracks with MKVToolNix. It can analyze audio, video, and subtitle tracks, rename them consistently, detect common subtitle roles, and write organized outputs without touching the original files by default.
 
-The project currently includes a command-line interface, a desktop UI, an early MakeMKV batch workflow, and an audio sync helper for fixed-delay corrections.
+It includes an Organizer, reusable profiles, a MakeMKV batch workflow, and an Audio Sync helper for fixed-delay corrections.
+
+[Download the latest stable release](https://github.com/Pessegos/MKV-Track-Organizer/releases/latest) | [Changelog](CHANGELOG.md) | [Troubleshooting](docs/TROUBLESHOOTING.md)
 
 ## Features
 
@@ -30,13 +32,13 @@ The project currently includes a command-line interface, a desktop UI, an early 
 
 ## Requirements
 
-- Python 3.10 or newer.
+- 64-bit Windows for the packaged desktop build.
 - MKVToolNix, especially `mkvmerge`, `mkvextract`, and optionally `mkvpropedit`.
-- PySide6 for the desktop UI.
-- NumPy for the Audio Sync analyzer.
 - Optional: MakeMKV for the batch disc backup to MKV workflow.
 - Optional: FFmpeg and FFprobe for the Audio Sync workflow.
 - Optional: Tesseract and `seconv` for automatic PGS OCR.
+
+Running from source additionally requires Python 3.10.1 or newer, PySide6, and NumPy.
 
 Install the Python UI dependency:
 
@@ -49,6 +51,15 @@ For tests, install pytest if needed:
 ```powershell
 python -m pip install pytest
 ```
+
+## Quick Start
+
+1. Install [MKVToolNix](https://mkvtoolnix.download/) and download the latest stable ZIP from the Releases page.
+2. Extract the complete ZIP and launch `MKV Track Organizer.exe`. Do not move only the EXE out of its folder.
+3. Use **Check tools**, add one or more `.mkv`/`.mka` sources, and run **Preview** before **Run**.
+4. Review duplicate warnings and manual selections. Originals remain untouched unless you explicitly choose an existing-output overwrite mode.
+
+The executable is not code-signed, so Windows may show a SmartScreen warning. Verify that the ZIP came from this repository's Releases page before running it.
 
 ## Windows EXE
 
@@ -70,17 +81,17 @@ Use `.\build_exe.ps1 -OneFile` for a single-file executable. Use `-SkipInstall` 
 
 Every push to `main` builds a fresh Windows ZIP automatically and uploads it to the rolling prerelease `latest-dev`. This is the easiest way to grab the newest build after normal development commits.
 
-Pushing a tag named `v*` creates a stable numbered release:
+Pushing a tag that matches `APP_VERSION` creates a stable numbered release:
 
 ```powershell
-git tag v0.1.1
-git push origin v0.1.1
+git tag v1.0.0
+git push origin v1.0.0
 ```
 
 To publish a GitHub release from your PC instead, install GitHub CLI, run `gh auth login`, then:
 
 ```powershell
-.\publish_exe.ps1 -Version v0.1.0
+.\publish_exe.ps1 -Version v1.0.0
 ```
 
 ## Desktop UI
@@ -159,6 +170,8 @@ Copy-Item .\mkv_track_organizer.config.example.json .\mkv_track_organizer.config
 
 The local `mkv_track_organizer.config.json` file is ignored by git so personal paths and preferences do not get committed.
 
+Saved GUI profiles live in `%APPDATA%\MKV Track Organizer\profiles.json`. Use the Config tab's profile-library export before moving to another PC or making substantial manual edits.
+
 ## Development
 
 Run the test suite:
@@ -177,4 +190,8 @@ python -m py_compile .\mkv_track_organizer.py .\mkv_track_organizer_gui.py .\mak
 
 ## Project Status
 
-This is still a work in progress. The core organizer is usable from the CLI, and the desktop UI is being shaped into a more polished app for publishing. The MakeMKV batch and Audio Sync tabs are new workflows and should be tested across more real media before release builds are treated as stable.
+Version 1.0 is the stable baseline for the Organizer, profiles, MakeMKV Batch, and fixed-delay Audio Sync workflows. Releases are protected by unit, GUI, command-generation, packaging, and sanitized real-world regression tests.
+
+Track-role, language-variant, and duplicate detection remain evidence-based heuristics. Always inspect Preview before remuxing unusual releases. PGS OCR can be slow, Audio Sync corrects fixed offsets rather than gradual drift, and the application does not translate subtitles.
+
+For common failures and the information to include in a useful bug report, see [Troubleshooting](docs/TROUBLESHOOTING.md).
