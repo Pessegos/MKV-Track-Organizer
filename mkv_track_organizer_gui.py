@@ -4667,25 +4667,54 @@ class MainWindow(QMainWindow):
         self._finish_progress_session("Analysis completed")
         self.append_audio_sync_summary_line()
         self.append_audio_sync_summary_line("Result")
-        self.append_audio_sync_summary_line(
-            f"Checkpoints used: {result.used_checkpoints or len(result.estimates)}/{len(result.estimates)}"
-        )
+        requested_checkpoints = result.attempted_checkpoints or len(result.estimates)
+        used_checkpoints = result.used_checkpoints or len(result.estimates)
+        offset_ms = abs(result.median_offset_seconds * 1000)
+        shift_ms = abs(result.timeline_shift_seconds * 1000)
+        if abs(result.median_offset_seconds) < 0.0005:
+            source_timing = "Source is aligned with the reference"
+        else:
+            timing_direction = "late" if result.median_offset_seconds > 0 else "early"
+            source_timing = f"Source is {offset_ms:.2f} ms {timing_direction} relative to the reference"
+        if abs(result.timeline_shift_seconds) < 0.0005:
+            correction = "No practical source shift is needed"
+        else:
+            correction_action = "Delay" if result.timeline_shift_seconds > 0 else "Advance"
+            correction = f"{correction_action} source by {shift_ms:.2f} ms"
+
+        self.append_audio_sync_summary_line(f"Recommended correction: {correction}")
         self.append_audio_sync_summary_line(
             f"Source offset vs reference: {audio_sync.format_delay_ms(result.median_offset_seconds)}"
         )
         self.append_audio_sync_summary_line(
             f"Timeline shift to apply: {audio_sync.format_delay_ms(result.timeline_shift_seconds)}"
         )
-        self.append_audio_sync_summary_line(f"Checkpoint spread: {result.spread_seconds * 1000:.2f} ms")
-        if result.ignored_checkpoints:
-            self.append_audio_sync_summary_line(f"All-checkpoint spread: {result.all_spread_seconds * 1000:.2f} ms")
-            self.append_audio_sync_summary_line(f"Ignored outliers: {result.ignored_checkpoints}")
+        self.append_audio_sync_summary_line(f"Measured timing: {source_timing}")
         self.append_audio_sync_summary_line(
-            f"Correlation confidence: {result.confidence_summary or audio_sync.confidence_label(result.average_confidence)} "
-            f"({result.average_confidence:.2f})"
+            f"Delay reliability: {(result.delay_reliability or 'unknown').capitalize()}"
         )
-        self.append_audio_sync_summary_line(f"Consistency: {result.consistency}")
+        if result.reliability_reason:
+            self.append_audio_sync_summary_line(f"Why: {result.reliability_reason}")
+        self.append_audio_sync_summary_line(
+            f"Checkpoint coverage: {used_checkpoints} used / {requested_checkpoints} requested"
+        )
+        if result.unavailable_checkpoints:
+            self.append_audio_sync_summary_line(f"Unavailable checkpoints: {result.unavailable_checkpoints}")
+        if result.ignored_checkpoints:
+            self.append_audio_sync_summary_line(f"Ignored outliers: {result.ignored_checkpoints}")
+            self.append_audio_sync_summary_line(f"All-checkpoint spread: {result.all_spread_seconds * 1000:.2f} ms")
+        self.append_audio_sync_summary_line(
+            f"Timing agreement: {result.consistency.capitalize()} "
+            f"(max deviation {result.spread_seconds * 1000:.2f} ms)"
+        )
+        self.append_audio_sync_summary_line(
+            "Signal match strength: "
+            f"{(result.confidence_summary or audio_sync.confidence_label(result.average_confidence)).capitalize()} "
+            f"({result.average_confidence:.2f} average; diagnostic only)"
+        )
         self.append_audio_sync_summary_line(f"Verdict: {result.verdict}")
+        for note in result.notes:
+            self.append_audio_sync_summary_line(f"Note: {note}.")
         for warning in result.warnings:
             self.append_audio_sync_summary_line(f"Warning: {warning}.")
         self.append_audio_sync_summary_line()

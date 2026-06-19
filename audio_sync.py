@@ -82,11 +82,19 @@ class AudioSyncResult:
     ignored_checkpoints: int = 0
     all_spread_seconds: float = 0.0
     confidence_summary: str = ""
+    delay_reliability: str = ""
+    reliability_reason: str = ""
+    attempted_checkpoints: int = 0
+    notes: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
 
     @property
     def timeline_shift_seconds(self) -> float:
         return -self.median_offset_seconds
+
+    @property
+    def unavailable_checkpoints(self) -> int:
+        return max(0, self.attempted_checkpoints - len(self.estimates))
 
 
 @dataclass(frozen=True)
@@ -249,7 +257,7 @@ def estimate_offset(
             (
                 f"  offset={format_delay_ms(estimate.offset_seconds)} "
                 f"(coarse={estimate.coarse_seconds * 1000:+.0f} ms, "
-                f"confidence={confidence_label(estimate.confidence)})"
+                f"match strength={confidence_label(estimate.confidence)})"
             ),
         )
         if progress_callback:
@@ -269,26 +277,54 @@ def estimate_offset(
     average_confidence = float(np.mean([estimate.confidence for estimate in selected_estimates]))
     consistency = consistency_label(spread, len(selected_estimates))
     confidence_summary = confidence_label(average_confidence)
+    reliability = delay_reliability_label(
+        spread,
+        average_confidence,
+        len(selected_estimates),
+        ignored_checkpoints,
+        len(checkpoints),
+    )
+    reliability_reason = delay_reliability_reason(
+        reliability,
+        spread,
+        len(selected_estimates),
+        ignored_checkpoints,
+    )
+    notes = result_notes(
+        reliability=reliability,
+        average_confidence=average_confidence,
+    )
     warnings = result_warnings(
         selected_estimates=selected_estimates,
         ignored_checkpoints=ignored_checkpoints,
         spread_seconds=spread,
         all_spread_seconds=all_spread,
         average_confidence=average_confidence,
+        attempted_checkpoints=len(checkpoints),
     )
-    verdict = verdict_label(spread, average_confidence, len(selected_estimates), ignored_checkpoints)
-    return AudioSyncResult(
-        estimates,
-        median,
+    verdict = verdict_label(
         spread,
         average_confidence,
-        consistency,
-        verdict,
         len(selected_estimates),
         ignored_checkpoints,
-        all_spread,
-        confidence_summary,
-        warnings,
+        len(checkpoints),
+    )
+    return AudioSyncResult(
+        estimates=estimates,
+        median_offset_seconds=median,
+        spread_seconds=spread,
+        average_confidence=average_confidence,
+        consistency=consistency,
+        verdict=verdict,
+        used_checkpoints=len(selected_estimates),
+        ignored_checkpoints=ignored_checkpoints,
+        all_spread_seconds=all_spread,
+        confidence_summary=confidence_summary,
+        delay_reliability=reliability,
+        reliability_reason=reliability_reason,
+        attempted_checkpoints=len(checkpoints),
+        notes=notes,
+        warnings=warnings,
     )
 
 
@@ -607,6 +643,62 @@ def consistency_label(spread_seconds: float, checkpoints: int) -> str:
     return "poor"
 
 
+def delay_reliability_label(
+    spread_seconds: float,
+    average_confidence: float,
+    checkpoints: int,
+    ignored_checkpoints: int = 0,
+    attempted_checkpoints: int = 0,
+) -> str:
+    if checkpoints < 2:
+        return "low"
+
+    total = attempted_checkpoints or (checkpoints + ignored_checkpoints)
+    coverage = checkpoints / max(1, total)
+    if checkpoints >= 4 and coverage >= 0.5 and spread_seconds <= 0.005 and average_confidence >= 1.0:
+        return "high"
+    if checkpoints >= 3 and coverage >= 0.4 and spread_seconds <= 0.020 and average_confidence >= 0.75:
+        return "medium"
+    if checkpoints >= 2 and spread_seconds <= 0.020 and average_confidence >= 4.0:
+        return "medium"
+    return "low"
+
+
+def delay_reliability_reason(
+    reliability: str,
+    spread_seconds: float,
+    checkpoints: int,
+    ignored_checkpoints: int = 0,
+) -> str:
+    spread_ms = spread_seconds * 1000
+    if reliability == "high":
+        reason = f"{checkpoints} independent checkpoints agree within +/-{spread_ms:.2f} ms"
+    elif reliability == "medium":
+        reason = f"{checkpoints} checkpoints form a plausible cluster within +/-{spread_ms:.2f} ms"
+    elif checkpoints < 2:
+        reason = "only one usable checkpoint contributed to the delay"
+    else:
+        reason = f"checkpoint evidence is too weak or dispersed (+/-{spread_ms:.2f} ms)"
+    if ignored_checkpoints:
+        reason += f" after ignoring {ignored_checkpoints} outlier(s)"
+    return reason
+
+
+def result_notes(
+    *,
+    reliability: str,
+    average_confidence: float,
+) -> tuple[str, ...]:
+    notes: list[str] = []
+    if average_confidence < 2.0 and reliability in {"high", "medium"}:
+        notes.append(
+            "individual correlation peaks are weak, but repeated checkpoints independently agree on the delay"
+        )
+    elif average_confidence < 4.0 and reliability == "high":
+        notes.append("individual correlation peaks are modest, but checkpoint consensus is strong")
+    return tuple(notes)
+
+
 def result_warnings(
     *,
     selected_estimates: list[OffsetEstimate],
@@ -614,12 +706,18 @@ def result_warnings(
     spread_seconds: float,
     all_spread_seconds: float,
     average_confidence: float,
+    attempted_checkpoints: int = 0,
 ) -> tuple[str, ...]:
     warnings: list[str] = []
-    if average_confidence < 2.0:
-        warnings.append("correlation confidence is very low; verify manually before applying the delay")
-    elif average_confidence < 4.0:
-        warnings.append("correlation confidence is low; spot-check the result before applying the delay")
+    reliability = delay_reliability_label(
+        spread_seconds,
+        average_confidence,
+        len(selected_estimates),
+        ignored_checkpoints,
+        attempted_checkpoints,
+    )
+    if reliability == "low":
+        warnings.append("delay reliability is low; verify manually before applying the correction")
     if ignored_checkpoints:
         warnings.append(f"{ignored_checkpoints} outlier checkpoint(s) were ignored outside the main delay cluster")
     if len(selected_estimates) < 2:
@@ -636,26 +734,26 @@ def verdict_label(
     average_confidence: float,
     checkpoints: int,
     ignored_checkpoints: int = 0,
+    attempted_checkpoints: int = 0,
 ) -> str:
     if checkpoints < 2:
         return "single checkpoint; verify manually"
-    if average_confidence < 2.0:
-        return "uncertain: very low correlation confidence"
-    if average_confidence < 4.0:
-        if spread_seconds <= 0.020:
-            return "consistent but low-confidence; verify manually"
-        return "uncertain: low confidence and inconsistent checkpoints"
-    if ignored_checkpoints:
-        if spread_seconds <= 0.020:
-            return "plausible after ignoring outliers; verify manually"
-        return "uncertain: outliers and inconsistent checkpoints"
-    if checkpoints >= 2 and spread_seconds <= 0.005 and average_confidence >= 8.0:
-        return "high fixed-delay confidence"
-    if checkpoints >= 2 and spread_seconds <= 0.020:
-        return "likely fixed delay"
-    if average_confidence >= 4.0:
-        return "plausible, but check more points"
-    return "uncertain"
+    reliability = delay_reliability_label(
+        spread_seconds,
+        average_confidence,
+        checkpoints,
+        ignored_checkpoints,
+        attempted_checkpoints,
+    )
+    if reliability == "high":
+        return "reliable fixed delay: strong checkpoint consensus"
+    if reliability == "medium":
+        if ignored_checkpoints:
+            return "likely fixed delay after rejecting outliers; spot-check recommended"
+        return "likely fixed delay; spot-check recommended"
+    if spread_seconds > 0.020:
+        return "uncertain: checkpoints do not agree on one fixed delay"
+    return "uncertain: insufficient evidence for a reliable delay"
 
 
 def build_export_plan(

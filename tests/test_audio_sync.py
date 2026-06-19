@@ -112,7 +112,7 @@ def test_estimate_offset_rejects_when_all_checkpoints_decode_no_audio(monkeypatc
         raise AssertionError("Expected all-empty checkpoints to fail")
 
 
-def test_estimate_offset_marks_consistent_low_confidence_result_as_uncertain(monkeypatch, tmp_path: Path) -> None:
+def test_estimate_offset_uses_checkpoint_consensus_when_match_strength_is_weak(monkeypatch, tmp_path: Path) -> None:
     reference = tmp_path / "reference.mkv"
     source = tmp_path / "source.mkv"
     reference.touch()
@@ -133,8 +133,30 @@ def test_estimate_offset_marks_consistent_low_confidence_result_as_uncertain(mon
 
     assert result.consistency == "excellent"
     assert result.confidence_summary == "very low"
-    assert result.verdict == "uncertain: very low correlation confidence"
-    assert any("very low" in warning for warning in result.warnings)
+    assert result.delay_reliability == "medium"
+    assert result.verdict == "likely fixed delay; spot-check recommended"
+    assert any("independently agree" in note for note in result.notes)
+    assert not result.warnings
+
+
+def test_estimate_offset_keeps_two_very_weak_checkpoints_low_reliability(monkeypatch, tmp_path: Path) -> None:
+    reference = tmp_path / "reference.mkv"
+    source = tmp_path / "source.mkv"
+    settings = sync.AudioSyncSettings(reference, source, checkpoints=2)
+    estimates = iter(
+        [
+            sync.OffsetEstimate(600.0, -0.975, -0.980, 0.3),
+            sync.OffsetEstimate(1500.0, -0.974, -0.980, 0.4),
+        ]
+    )
+    monkeypatch.setattr(sync, "validate_settings", lambda _settings: None)
+    monkeypatch.setattr(sync, "estimate_at_checkpoint", lambda *_args, **_kwargs: next(estimates))
+
+    result = sync.estimate_offset(settings)
+
+    assert result.delay_reliability == "low"
+    assert result.verdict == "uncertain: insufficient evidence for a reliable delay"
+    assert any("verify manually" in warning for warning in result.warnings)
 
 
 def test_estimate_offset_ignores_main_cluster_outliers(monkeypatch, tmp_path: Path) -> None:

@@ -2,6 +2,13 @@
 
 All notable user-facing changes are recorded here.
 
+## 1.0.1 - 2026-06-19
+
+- Reworked Audio Sync conclusions to separate individual signal match strength from practical delay reliability.
+- Added consensus-based reliability using checkpoint agreement, coverage, outliers, and usable checkpoint count.
+- Improved the result summary with a recommended correction, timing direction, requested/used/unavailable checkpoints, and an explainable verdict.
+- Added a Hercules regression where six weak individual matches agree within less than one millisecond and correctly produce high delay reliability.
+
 ## 1.0.0 - 2026-06-19
 
 ### Organizer

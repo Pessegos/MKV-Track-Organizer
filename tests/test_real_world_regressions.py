@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 import audio_sync
 import mkv_track_organizer as organizer
 
@@ -99,15 +101,24 @@ def test_mulan_merged_sources_flag_regional_pairs_as_probable_only() -> None:
     assert summary["counts"]["regional_duplicate"] == 4
 
 
-def test_ratatouille_audio_sync_keeps_the_stable_offset(monkeypatch, tmp_path: Path) -> None:
-    case = load_case("ratatouille_audio_sync.json")
+@pytest.mark.parametrize(
+    "fixture_name",
+    ["ratatouille_audio_sync.json", "hercules_audio_sync.json"],
+)
+def test_real_world_audio_sync_keeps_stable_offsets(
+    fixture_name: str,
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    case = load_case(fixture_name)
     raw_settings = case["settings"]
+    requested_checkpoints = raw_settings.get("requested_checkpoints", len(case["estimates"]))
     settings = audio_sync.AudioSyncSettings(
         reference_path=tmp_path / "reference.mkv",
         source_path=tmp_path / "source.mka",
         start_seconds=raw_settings["start_seconds"],
         duration_seconds=raw_settings["duration_seconds"],
-        checkpoints=len(case["estimates"]),
+        checkpoints=requested_checkpoints,
         checkpoint_spacing_seconds=raw_settings["spacing_seconds"],
         max_offset_seconds=raw_settings["max_offset_seconds"],
     )
@@ -116,7 +127,10 @@ def test_ratatouille_audio_sync_keeps_the_stable_offset(monkeypatch, tmp_path: P
     monkeypatch.setattr(audio_sync, "validate_settings", lambda _settings: None)
 
     def fake_estimate(*_args, checkpoint_seconds: float, **_kwargs):
-        raw_estimate = next(estimates)
+        try:
+            raw_estimate = next(estimates)
+        except StopIteration as error:
+            raise audio_sync.AudioSyncNoAudio("no audio decoded near the end of the reference") from error
         return audio_sync.OffsetEstimate(
             checkpoint_seconds=checkpoint_seconds,
             offset_seconds=raw_estimate["offset"],
@@ -131,8 +145,10 @@ def test_ratatouille_audio_sync_keeps_the_stable_offset(monkeypatch, tmp_path: P
     assert round(result.median_offset_seconds * 1000) == expected["offset_ms"]
     assert round(result.timeline_shift_seconds * 1000) == expected["timeline_shift_ms"]
     assert result.consistency == expected["consistency"]
+    assert result.delay_reliability == expected.get("delay_reliability", "high")
     assert result.used_checkpoints == expected["used_checkpoints"]
     assert result.ignored_checkpoints == expected["ignored_checkpoints"]
+    assert result.unavailable_checkpoints == expected.get("unavailable_checkpoints", 0)
 
 
 def test_bambi_mux_plan_preserves_roles_order_delays_and_commentary_name(tmp_path: Path) -> None:

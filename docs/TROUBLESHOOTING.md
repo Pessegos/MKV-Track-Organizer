@@ -24,7 +24,8 @@ Do not cancel merely because one percentage remains visible for several minutes.
 - Select the same language and equivalent mix in Reference and Source.
 - Avoid commentary, audio description, different edits/cuts, and logo-heavy opening sections.
 - Use more checkpoints or wider spacing for long films.
-- Low correlation confidence means the number may be consistent but still unreliable.
+- **Signal match strength** describes each correlation peak in isolation. It is diagnostic and can remain low across different encodes or mixes.
+- **Delay reliability** is the practical conclusion. It combines agreement across independent checkpoints, coverage, outliers, and signal match strength. Several weak peaks that repeatedly converge on the same delay can still produce high reliability.
 - Audio Sync corrects one fixed offset; it cannot repair gradual drift or different edits.
 
 The displayed timeline shift is the delay applied to the source. Exported shifted MKA tracks already contain that correction. Organizer remuxes audio and subtitle delays with `mkvmerge`; Matroska tags do not store or control those delays.

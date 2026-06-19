@@ -498,3 +498,40 @@ def test_about_dialog_uses_release_identity(qapp, monkeypatch):
 def test_gui_version_mode_does_not_start_the_event_loop(capsys):
     assert gui.main(["mkv-track-organizer", "--version"]) == 0
     assert f"{APP_NAME} {APP_VERSION}" in capsys.readouterr().out
+
+
+def test_audio_sync_summary_prioritizes_delay_reliability(qapp):
+    window = gui.MainWindow()
+    try:
+        estimates = [
+            gui.audio_sync.OffsetEstimate(600.0 + index * 900, -0.98145, -0.980, 1.5)
+            for index in range(6)
+        ]
+        result = gui.audio_sync.AudioSyncResult(
+            estimates=estimates,
+            median_offset_seconds=-0.98145,
+            spread_seconds=0.00034,
+            average_confidence=1.5,
+            consistency="excellent",
+            verdict="reliable fixed delay: strong checkpoint consensus",
+            used_checkpoints=6,
+            confidence_summary="very low",
+            delay_reliability="high",
+            reliability_reason="6 independent checkpoints agree within +/-0.34 ms",
+            attempted_checkpoints=8,
+            notes=(
+                "individual correlation peaks are weak, but repeated checkpoints independently agree on the delay",
+            ),
+        )
+
+        window.handle_audio_sync_completed(result)
+
+        summary = window.audio_sync_summary_edit.toPlainText()
+        assert "Recommended correction: Delay source by 981.45 ms" in summary
+        assert "Delay reliability: High" in summary
+        assert "Checkpoint coverage: 6 used / 8 requested" in summary
+        assert "Unavailable checkpoints: 2" in summary
+        assert "Signal match strength: Very low (1.50 average; diagnostic only)" in summary
+        assert "Warning:" not in summary
+    finally:
+        window.close()
