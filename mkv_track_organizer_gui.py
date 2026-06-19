@@ -4209,6 +4209,8 @@ class MainWindow(QMainWindow):
                     tooltips.append(plan_tooltip)
                 if track.get("duplicate_reason"):
                     tooltips.append(str(track["duplicate_reason"]))
+                if track.get("probable_duplicate_reason"):
+                    tooltips.append(str(track["probable_duplicate_reason"]))
                 if tooltips:
                     item.setToolTip("\n".join(tooltips))
                 self._style_track_item(item, track, column)
@@ -4338,6 +4340,16 @@ class MainWindow(QMainWindow):
             labels.append("Duplicate group")
             categories.append("duplicate")
 
+        has_regional_duplicate_item = any(
+            str(item.get("category") or "") == "regional_duplicate"
+            for item in items
+        )
+        if track.get("probable_duplicate_group") and not has_regional_duplicate_item:
+            labels.append("Regional duplicate?")
+            categories.append("regional_duplicate")
+            if track.get("probable_duplicate_reason"):
+                tooltip_lines.append(str(track["probable_duplicate_reason"]))
+
         for item in items:
             category = str(item.get("category") or "other")
             if category == "drop":
@@ -4362,6 +4374,8 @@ class MainWindow(QMainWindow):
     def _short_plan_label(self, category: str, item: dict, track: dict) -> str:
         if category == "duplicate":
             return "Duplicate"
+        if category == "regional_duplicate":
+            return "Regional duplicate?"
         if category == "language":
             input_language = str(track.get("input_language") or "")
             output_language = str(track.get("output_language") or "")
@@ -4667,11 +4681,18 @@ class MainWindow(QMainWindow):
         included = sum(1 for track in tracks if not track.get("drop"))
         excluded = total - included
         duplicates = sum(1 for track in tracks if track.get("duplicate_group"))
+        regional_duplicates = sum(
+            1
+            for track in tracks
+            if track.get("probable_duplicate_group") and not track.get("duplicate_group")
+        )
         parts = [f"{included}/{total} included"]
         if excluded:
             parts.append(f"{excluded} excluded")
         if duplicates:
             parts.append(f"{duplicates} duplicate warning(s)")
+        if regional_duplicates:
+            parts.append(f"{regional_duplicates} regional warning(s)")
         if manual_selection_count:
             parts.append(f"{manual_selection_count} manual selection edit(s)")
         if self.manual_track_order_active:
@@ -4688,7 +4709,11 @@ class MainWindow(QMainWindow):
         return track_type.title() if track_type else ""
 
     def _track_reason(self, track: dict) -> str:
-        reasons = [track.get("duplicate_reason") or "", track.get("role_reason") or ""]
+        reasons = [
+            track.get("duplicate_reason") or "",
+            track.get("probable_duplicate_reason") or "",
+            track.get("role_reason") or "",
+        ]
         reason_text = " | ".join(reason for reason in reasons if reason)
         if reason_text:
             return reason_text
@@ -4726,6 +4751,14 @@ class MainWindow(QMainWindow):
         if track.get("drop"):
             item.setForeground(QColor("#64748b") if self.current_theme == "light" else QColor("#94a3b8"))
 
+        if track.get("probable_duplicate_group"):
+            if self.current_theme == "light":
+                item.setBackground(QColor("#ffedd5"))
+                item.setForeground(QColor("#9a3412"))
+            else:
+                item.setBackground(QColor("#3b2a14"))
+                item.setForeground(QColor("#fdba74"))
+
         if column == self.TRACK_PLAN_COLUMN:
             self._style_plan_item(item, track)
 
@@ -4745,6 +4778,12 @@ class MainWindow(QMainWindow):
                 ("#fff1f2", "#9f1239")
                 if self.current_theme == "light"
                 else ("#3a1f27", "#ffb4bd")
+            )
+        elif "regional_duplicate" in categories:
+            background, foreground = (
+                ("#ffedd5", "#9a3412")
+                if self.current_theme == "light"
+                else ("#3b2a14", "#fdba74")
             )
         elif "manual" in categories:
             background, foreground = (

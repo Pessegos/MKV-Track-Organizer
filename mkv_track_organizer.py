@@ -205,6 +205,12 @@ class TrackInfo:
     duplicate_reason: str = ""
     duplicate_source: str = ""
     duplicate_of_source: str = ""
+    probable_duplicate_group: str = ""
+    probable_duplicate_member_ids: list[int] = field(default_factory=list)
+    probable_duplicate_of_id: int | None = None
+    probable_duplicate_reason: str = ""
+    probable_duplicate_source: str = ""
+    probable_duplicate_of_source: str = ""
     source_index: int = 0
     source_path: str = ""
     source_name: str = ""
@@ -735,6 +741,8 @@ LANGUAGE_VARIANT_BASES = {
 
 LANGUAGE_VARIANT_BASE_ALIASES = {
     "cmn": "chi",
+    "nob": "nor",
+    "nno": "nor",
 }
 
 
@@ -4870,6 +4878,12 @@ def reset_duplicate_tracking(tracks: Iterable[TrackInfo]) -> None:
         track.duplicate_reason = ""
         track.duplicate_source = ""
         track.duplicate_of_source = ""
+        track.probable_duplicate_group = ""
+        track.probable_duplicate_member_ids = []
+        track.probable_duplicate_of_id = None
+        track.probable_duplicate_reason = ""
+        track.probable_duplicate_source = ""
+        track.probable_duplicate_of_source = ""
 
 
 def duplicate_source_label(input_path: Path | None = None, track: TrackInfo | None = None) -> str:
@@ -4994,6 +5008,66 @@ def subtitle_language_duplicate_specificity_rank(track: TrackInfo, language_code
     return 0 if track_language == language_code else 1
 
 
+def probable_subtitle_language_duplicate_info(track: TrackInfo) -> tuple[str, str, bool, str, bool] | None:
+    if track.drop or track.duplicate_group:
+        return None
+    language_code = duplicate_language_key(track)
+    if not language_code:
+        return None
+    base_code = variant_base_language_code(language_code)
+    if not base_code or base_code in {"und", "zxx", "mul"}:
+        return None
+    is_variant = language_code != base_code
+    return (
+        base_code,
+        subtitle_language_duplicate_role_key(track, base_code),
+        bool(track.forced),
+        language_code,
+        is_variant,
+    )
+
+
+def probable_subtitle_language_duplicate_key(track: TrackInfo) -> tuple[Any, ...] | None:
+    info = probable_subtitle_language_duplicate_info(track)
+    if not info:
+        return None
+    base_code, role_key, forced, _language_code, _is_variant = info
+    return ("probable-subtitle-language", base_code, role_key, forced)
+
+
+def has_generic_and_variant_language_tags(tracks: list[TrackInfo]) -> bool:
+    has_generic = False
+    has_variant = False
+    for track in tracks:
+        info = probable_subtitle_language_duplicate_info(track)
+        if not info:
+            continue
+        _base_code, _role_key, _forced, _language_code, is_variant = info
+        has_variant = has_variant or is_variant
+        has_generic = has_generic or not is_variant
+    return has_generic and has_variant
+
+
+def probable_duplicate_group_reason(tracks: list[TrackInfo]) -> str:
+    language_codes = sorted(
+        {
+            duplicate_language_key(track)
+            for track in tracks
+            if duplicate_language_key(track)
+        },
+        key=lambda code: (variant_base_language_code(code), code),
+    )
+    language_text = ", ".join(
+        f"{code} ({language_display_name(code)})" for code in language_codes
+    )
+    if language_text:
+        return (
+            "generic and regional subtitle language tags share the same base language "
+            f"({language_text}); verify manually before dropping"
+        )
+    return "generic and regional subtitle language tags share the same base language; verify manually before dropping"
+
+
 def duplicate_metric(track: TrackInfo) -> float | None:
     if track.type != "subtitles":
         return None
@@ -5065,6 +5139,39 @@ def mark_duplicate_group(
             track.duplicate_reason = f"Possible duplicate of {leader_label}; {reason}"
 
 
+def mark_probable_duplicate_group(
+    input_path: Path,
+    tracks: list[TrackInfo],
+    reason: str | None = None,
+    leader_key: Callable[[TrackInfo], Any] | None = None,
+) -> None:
+    if len(tracks) < 2:
+        return
+    leader = min(tracks, key=leader_key or (lambda item: item.order))
+    member_ids = [track.id for track in sorted(tracks, key=lambda item: item.order)]
+    member_text = ", ".join(
+        duplicate_track_label(track, input_path)
+        for track in sorted(tracks, key=lambda item: item.order)
+    )
+    group_id = f"{duplicate_source_label(input_path, leader)}:{leader.type}:{leader.id}:probable"
+    reason = reason or probable_duplicate_group_reason(tracks)
+    leader_label = duplicate_track_label(leader, input_path)
+
+    for track in tracks:
+        source = duplicate_source_label(input_path, track)
+        track.probable_duplicate_group = group_id
+        track.probable_duplicate_member_ids = member_ids
+        track.probable_duplicate_source = source
+        if track is leader:
+            track.probable_duplicate_of_id = None
+            track.probable_duplicate_of_source = ""
+            track.probable_duplicate_reason = f"Possible regional duplicate group: {member_text}; {reason}"
+        else:
+            track.probable_duplicate_of_id = leader.id
+            track.probable_duplicate_of_source = duplicate_source_label(input_path, leader)
+            track.probable_duplicate_reason = f"Possible regional duplicate of {leader_label}; {reason}"
+
+
 def detect_duplicate_tracks(
     input_path: Path,
     audio_tracks: list[TrackInfo],
@@ -5113,6 +5220,30 @@ def detect_duplicate_tracks(
                     subtitle_language_duplicate_sdh_rank(item, code),
                     subtitle_language_duplicate_format_rank(item),
                     subtitle_language_duplicate_specificity_rank(item, code),
+                    item.order,
+                ),
+            )
+
+        probable_tracks_by_language: dict[tuple[Any, ...], list[TrackInfo]] = {}
+        for track in subtitles:
+            key = probable_subtitle_language_duplicate_key(track)
+            if key:
+                probable_tracks_by_language.setdefault(key, []).append(track)
+
+        for tracks in probable_tracks_by_language.values():
+            if len(tracks) < 2 or not has_generic_and_variant_language_tags(tracks):
+                continue
+            mark_probable_duplicate_group(
+                input_path,
+                tracks,
+                reason=probable_duplicate_group_reason(tracks),
+                leader_key=lambda item: (
+                    subtitle_language_duplicate_sdh_rank(item, variant_base_language_code(duplicate_language_key(item))),
+                    subtitle_language_duplicate_format_rank(item),
+                    subtitle_language_duplicate_specificity_rank(
+                        item,
+                        variant_base_language_code(duplicate_language_key(item)),
+                    ),
                     item.order,
                 ),
             )
@@ -5846,7 +5977,11 @@ def report_counts_as_failure(report: dict[str, Any]) -> bool:
 
 
 def track_note_text(track: TrackInfo) -> str:
-    notes = [note for note in [track.duplicate_reason, track.role_reason] if note]
+    notes = [
+        note
+        for note in [track.duplicate_reason, track.probable_duplicate_reason, track.role_reason]
+        if note
+    ]
     return f" | {' | '.join(notes)}" if notes else ""
 
 
@@ -6048,6 +6183,19 @@ def plan_summary_for_tracks(
                 f"Flag {label} as a possible duplicate",
                 track.duplicate_reason,
             )
+        elif track.probable_duplicate_group:
+            message = (
+                f"Flag {label} as a possible regional duplicate group"
+                if track.probable_duplicate_of_id is None
+                else f"Flag {label} as a possible regional duplicate"
+            )
+            plan_add_item(
+                items,
+                track,
+                "regional_duplicate",
+                message,
+                track.probable_duplicate_reason,
+            )
 
         if track.type in {"audio", "subtitles"}:
             input_language = normalize_language_code(track.language)
@@ -6138,7 +6286,7 @@ def format_plan_summary_counts(summary: dict[str, Any]) -> str:
     counts = summary.get("counts") or {}
     if not counts:
         return "no planned metadata/selection changes"
-    ordered_keys = ["drop", "delay", "language", "role", "flag", "name", "duplicate"]
+    ordered_keys = ["drop", "delay", "language", "role", "flag", "name", "duplicate", "regional_duplicate"]
     parts = [f"{key}={counts[key]}" for key in ordered_keys if counts.get(key)]
     parts.extend(
         f"{key}={value}"
@@ -6193,6 +6341,12 @@ def track_report_data(track: TrackInfo) -> dict[str, Any]:
         "duplicate_reason": track.duplicate_reason,
         "duplicate_source": track.duplicate_source,
         "duplicate_of_source": track.duplicate_of_source,
+        "probable_duplicate_group": track.probable_duplicate_group,
+        "probable_duplicate_member_ids": track.probable_duplicate_member_ids,
+        "probable_duplicate_of_id": track.probable_duplicate_of_id,
+        "probable_duplicate_reason": track.probable_duplicate_reason,
+        "probable_duplicate_source": track.probable_duplicate_source,
+        "probable_duplicate_of_source": track.probable_duplicate_of_source,
         "role_scores": {
             "forced": score.forced,
             "commentary": score.commentary,
@@ -6338,6 +6492,10 @@ def write_batch_report(
                 track for track in [*audio_tracks, *subtitles]
                 if track.get("duplicate_group")
             ]
+            regional_duplicates = [
+                track for track in subtitles
+                if track.get("probable_duplicate_group") and not track.get("duplicate_group")
+            ]
             dropped = [track for track in subtitles if track.get("drop")]
             special = [
                 track for track in subtitles
@@ -6348,6 +6506,12 @@ def write_batch_report(
                 lines.extend(
                     f"    - {track['id']}: {track['name']} ({track['duplicate_reason']})"
                     for track in duplicates
+                )
+            if regional_duplicates:
+                lines.append("  possible regional duplicates:")
+                lines.extend(
+                    f"    - {track['id']}: {track['name']} ({track['probable_duplicate_reason']})"
+                    for track in regional_duplicates
                 )
             if dropped:
                 lines.append("  removed:")

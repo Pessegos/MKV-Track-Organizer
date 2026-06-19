@@ -39,6 +39,9 @@ def report_track(track_id: int, track_type: str, language: str = "eng", **overri
         "duplicate_group": "",
         "duplicate_of_id": None,
         "duplicate_reason": "",
+        "probable_duplicate_group": "",
+        "probable_duplicate_of_id": None,
+        "probable_duplicate_reason": "",
         "role_reason": "",
         "role_scores": {},
     }
@@ -155,5 +158,68 @@ def test_track_table_shows_plan_and_manual_exclude(qapp):
 
         assert not window.track_reset_button.isEnabled()
         assert "2/2 included" in window.track_status_label.text()
+    finally:
+        window.close()
+
+
+def test_track_table_shows_regional_duplicate_warning_without_drop_controls(qapp):
+    generic_dutch = report_track(
+        10,
+        "subtitles",
+        "dut",
+        codec="HDMV PGS",
+        probable_duplicate_group="source.mkv:subtitles:10:probable",
+        probable_duplicate_reason="Possible regional duplicate group: source.mkv track 10, source.mkv track 36",
+    )
+    flemish = report_track(
+        36,
+        "subtitles",
+        "nl-BE",
+        probable_duplicate_group="source.mkv:subtitles:10:probable",
+        probable_duplicate_of_id=10,
+        probable_duplicate_reason="Possible regional duplicate of source.mkv track 10",
+    )
+    report = {
+        "status": "dry-run",
+        "input": str(Path("C:/tmp/source.mkv")),
+        "output": str(Path("C:/tmp/out.mkv")),
+        "message": "",
+        "command": [],
+        "tracks": {"video": [], "audio": [], "subtitles": [generic_dutch, flemish]},
+        "plan_summary": {
+            "counts": {"regional_duplicate": 2},
+            "items": [
+                plan_item(
+                    10,
+                    "subtitles",
+                    "regional_duplicate",
+                    "Flag source.mkv: subtitle 10 Dutch as a possible regional duplicate group",
+                    "Possible regional duplicate group: source.mkv track 10, source.mkv track 36",
+                ),
+                plan_item(
+                    36,
+                    "subtitles",
+                    "regional_duplicate",
+                    "Flag source.mkv: subtitle 36 Dutch (Flemish) as a possible regional duplicate",
+                    "Possible regional duplicate of source.mkv track 10",
+                ),
+            ],
+        },
+    }
+
+    window = gui.MainWindow()
+    try:
+        window._populate_results([report])
+
+        assert window.tracks_table.item(0, window.TRACK_PLAN_COLUMN).text() == "Regional duplicate?"
+        assert window.tracks_table.item(1, window.TRACK_PLAN_COLUMN).text() == "Regional duplicate?"
+        assert "2 regional warning" in window.track_status_label.text()
+        assert not window.track_deselect_duplicates_button.isEnabled()
+        assert not window.track_deselect_duplicate_subtitles_button.isEnabled()
+
+        window.tracks_table.selectRow(1)
+        details = window.track_details_edit.toPlainText()
+        assert "Plan: Regional duplicate?" in details
+        assert "Possible regional duplicate of source.mkv track 10" in details
     finally:
         window.close()

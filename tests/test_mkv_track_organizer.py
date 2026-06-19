@@ -1763,6 +1763,55 @@ def test_subtitle_language_duplicate_detection_collapses_generic_default_variant
     assert not canadian.duplicate_group
 
 
+def test_subtitle_language_duplicate_detection_flags_regional_probables() -> None:
+    generic_dutch = pgs_subtitle_track(10, "dut")
+    flemish = subtitle_track(36, "nl-BE")
+    flemish.role = "sdh"
+    generic_norwegian = pgs_subtitle_track(13, "nor")
+    bokmal = subtitle_track(39, "nob")
+
+    m.detect_duplicate_tracks(
+        Path("mulan.mkv"),
+        [],
+        [generic_dutch, flemish, generic_norwegian, bokmal],
+        detect_exact_duplicates=False,
+        detect_subtitle_language_duplicates=True,
+    )
+
+    assert not generic_dutch.duplicate_group
+    assert not flemish.duplicate_group
+    assert generic_dutch.probable_duplicate_group
+    assert flemish.probable_duplicate_group == generic_dutch.probable_duplicate_group
+    assert "generic and regional" in flemish.probable_duplicate_reason
+    assert not generic_dutch.drop
+    assert not flemish.drop
+
+    assert not generic_norwegian.duplicate_group
+    assert not bokmal.duplicate_group
+    assert generic_norwegian.probable_duplicate_group
+    assert bokmal.probable_duplicate_group == generic_norwegian.probable_duplicate_group
+
+
+def test_plan_summary_includes_regional_duplicate_warnings() -> None:
+    generic_dutch = subtitle_track(10, "dut")
+    flemish = subtitle_track(36, "nl-BE")
+
+    m.detect_duplicate_tracks(
+        Path("mulan.mkv"),
+        [],
+        [generic_dutch, flemish],
+        detect_exact_duplicates=False,
+        detect_subtitle_language_duplicates=True,
+    )
+
+    summary = m.plan_summary_for_tracks([], [], [generic_dutch, flemish])
+    messages = [item["message"] for item in summary["items"]]
+
+    assert summary["counts"]["regional_duplicate"] == 2
+    assert any("possible regional duplicate group" in message for message in messages)
+    assert any("possible regional duplicate" in message for message in messages)
+
+
 def test_ordered_tracks_can_group_audio_by_region() -> None:
     video = video_track(0)
     cantonese = audio_track(1, "yue")
