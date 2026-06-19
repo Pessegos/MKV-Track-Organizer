@@ -6838,6 +6838,8 @@ def collect_mkv_files_from_paths(input_paths: list[Path], recursive: bool) -> tu
 def collect_batch_language_variant_consensus(
     input_files: list[Path],
     args: argparse.Namespace,
+    progress_callback: Callable[[str, int, int], None] | None = None,
+    cancel_callback: Callable[[], bool] | None = None,
 ) -> dict[str, str]:
     if (
         not args.detect_language_variants
@@ -6850,6 +6852,13 @@ def collect_batch_language_variant_consensus(
     votes: dict[str, list[str]] = {}
 
     for index, input_path in enumerate(input_files, start=1):
+        ensure_not_cancelled(cancel_callback)
+        if progress_callback:
+            progress_callback(
+                f"Analyzing language context: {input_path.name} ({index}/{len(input_files)})",
+                index,
+                len(input_files),
+            )
         try:
             print(f"  [{index}/{len(input_files)}] {input_path.name}")
             metadata = load_metadata(args.mkvmerge, input_path)
@@ -6869,6 +6878,15 @@ def collect_batch_language_variant_consensus(
 
             analyze_subtitle_sizes(input_path, variant_subtitles, args.mkvextract)
             cache_dir = args.ocr_cache_dir or (input_path.parent / OCR_CACHE_DIR_NAME)
+
+            def consensus_ocr_progress(message: str, _ocr_index: int, _ocr_total: int) -> None:
+                if progress_callback:
+                    progress_callback(
+                        f"{input_path.name}: {message}",
+                        index,
+                        len(input_files),
+                    )
+
             ensure_pgs_ocr_cache(
                 input_path=input_path,
                 subtitles=variant_subtitles,
@@ -6887,6 +6905,8 @@ def collect_batch_language_variant_consensus(
                 auto_download_tessdata=args.auto_download_tessdata,
                 tessdata_model=args.tessdata_model,
                 force_pgs_ocr=args.force_pgs_ocr,
+                progress_callback=consensus_ocr_progress,
+                cancel_callback=cancel_callback,
             )
             attach_cached_ocr_text(input_path, variant_subtitles, cache_dir)
 
@@ -6954,6 +6974,8 @@ def explicit_metadata_variant_votes(subtitles: list[TrackInfo]) -> dict[str, set
 def collect_sibling_metadata_variant_consensus(
     input_files: list[Path],
     args: argparse.Namespace,
+    progress_callback: Callable[[str, int, int], None] | None = None,
+    cancel_callback: Callable[[], bool] | None = None,
 ) -> dict[str, str]:
     if (
         not args.detect_language_variants
@@ -6992,7 +7014,14 @@ def collect_sibling_metadata_variant_consensus(
     print("\nAnalyzing sibling-file variant consensus from metadata...")
     votes: dict[str, list[str]] = {}
 
-    for input_path in context_files:
+    for index, input_path in enumerate(context_files, start=1):
+        ensure_not_cancelled(cancel_callback)
+        if progress_callback:
+            progress_callback(
+                f"Reading context metadata: {input_path.name} ({index}/{len(context_files)})",
+                index,
+                len(context_files),
+            )
         try:
             metadata = load_metadata(args.mkvmerge, input_path)
             tracks = build_tracks(metadata)
@@ -7168,7 +7197,7 @@ def process_file(
     print(f"Output:      {output_path}")
     print("====================================")
 
-    progress("Reading metadata", 5)
+    progress("Reading metadata", 5, 0)
     metadata = load_metadata(args.mkvmerge, input_path)
     tracks = build_tracks(metadata, source_index=0, source_path=input_path)
 
@@ -7204,7 +7233,7 @@ def process_file(
     preserve_commentary_names = bool(getattr(args, "preserve_commentary_names", False))
     apply_audio_names(audio_tracks, audio_name_style)
 
-    progress("Analyzing subtitle sizes", 15)
+    progress("Analyzing subtitle sizes", 15, 0)
     needs_subtitle_sizes = (
         args.analyze_sub_sizes
         or args.smart_sub_detection
@@ -7218,13 +7247,13 @@ def process_file(
     if args.detect_language_variants:
         apply_ordered_pgs_language_variants(subtitles)
 
-    progress("Preparing OCR cache", 30)
+    progress("Preparing OCR cache", 30, 0)
     needs_ocr_cache = args.detect_language_variants or args.auto_commentary_ocr or args.prepare_pgs_ocr
     if needs_ocr_cache:
         cache_dir = args.ocr_cache_dir or (input_path.parent / OCR_CACHE_DIR_NAME)
         def ocr_progress(message: str, index: int, total: int) -> None:
             step = 30 + int(max(0, index - 1) * 15 / max(1, total))
-            progress(message, min(step, 44))
+            progress(message, min(step, 44), 0)
 
         if args.prepare_pgs_ocr:
             extract_pgs_for_manual_ocr(
@@ -7256,12 +7285,12 @@ def process_file(
         )
         attach_cached_ocr_text(input_path, subtitles, cache_dir)
 
-    progress("Detecting language variants", 45)
+    progress("Detecting language variants", 45, 0)
     if args.detect_language_variants:
         cache_dir = args.ocr_cache_dir or (input_path.parent / OCR_CACHE_DIR_NAME)
         detect_language_variants(input_path, subtitles, cache_dir, batch_variant_consensus)
 
-    progress("Classifying tracks", 60)
+    progress("Classifying tracks", 60, 0)
     classify_subtitle_roles(
         subtitles=subtitles,
         audio_tracks=audio_tracks,
@@ -7298,7 +7327,7 @@ def process_file(
         preferred_forced_subtitle_default,
     )
 
-    progress("Building track plan", 70)
+    progress("Building track plan", 70, 0)
     if args.analyze_sub_sizes:
         print_subtitle_size_report(subtitles)
     if args.smart_sub_detection:
@@ -7420,7 +7449,7 @@ def process_file(
             plan_summary=plan_summary,
         )
 
-    progress("Building command", 80)
+    progress("Building command", 80, 0)
     command = build_mkvmerge_command(
         mkvmerge=args.mkvmerge,
         input_path=input_path,
@@ -7471,7 +7500,7 @@ def process_file(
     if result.returncode != 0:
         raise OrganizerError(f"mkvmerge failed with exit code {result.returncode}: {input_path}")
 
-    progress("Verifying output", 96)
+    progress("Verifying output", 96, 0)
     verification = verify_output_plan(
         mkvmerge=args.mkvmerge,
         output_path=output_path,
@@ -7542,7 +7571,7 @@ def process_merged_inputs(
     print(f"Output: {output_path}")
     print("====================================")
 
-    progress("Reading metadata", 5)
+    progress("Reading metadata", 5, 0)
     all_tracks: list[TrackInfo] = []
     for source_index, input_path in enumerate(input_files):
         metadata = load_metadata(args.mkvmerge, input_path)
@@ -7586,7 +7615,7 @@ def process_merged_inputs(
     preserve_commentary_names = bool(getattr(args, "preserve_commentary_names", False))
     apply_audio_names(audio_tracks, audio_name_style)
 
-    progress("Analyzing subtitle sizes", 15)
+    progress("Analyzing subtitle sizes", 15, 0)
     needs_subtitle_sizes = (
         args.analyze_sub_sizes
         or args.smart_sub_detection
@@ -7604,7 +7633,7 @@ def process_merged_inputs(
         for source_index in range(len(input_files)):
             apply_ordered_pgs_language_variants(tracks_for_source(subtitles, source_index, "subtitles"))
 
-    progress("Preparing OCR cache", 30)
+    progress("Preparing OCR cache", 30, 0)
     needs_ocr_cache = args.detect_language_variants or args.auto_commentary_ocr or args.prepare_pgs_ocr
     if needs_ocr_cache:
         for source_index, input_path in enumerate(input_files):
@@ -7615,7 +7644,7 @@ def process_merged_inputs(
 
             def ocr_progress(message: str, index: int, total: int, source_name: str = input_path.name) -> None:
                 step = 30 + int(max(0, index - 1) * 15 / max(1, total))
-                progress(f"{source_name}: {message}", min(step, 44))
+                progress(f"{source_name}: {message}", min(step, 44), 0)
 
             if args.prepare_pgs_ocr:
                 extract_pgs_for_manual_ocr(
@@ -7647,7 +7676,7 @@ def process_merged_inputs(
             )
             attach_cached_ocr_text(input_path, source_subtitles, cache_dir)
 
-    progress("Detecting language variants", 45)
+    progress("Detecting language variants", 45, 0)
     if args.detect_language_variants:
         for source_index, input_path in enumerate(input_files):
             source_subtitles = tracks_for_source(subtitles, source_index, "subtitles")
@@ -7655,7 +7684,7 @@ def process_merged_inputs(
                 cache_dir = args.ocr_cache_dir or (input_path.parent / OCR_CACHE_DIR_NAME)
                 detect_language_variants(input_path, source_subtitles, cache_dir, batch_variant_consensus)
 
-    progress("Classifying tracks", 60)
+    progress("Classifying tracks", 60, 0)
     for source_index in range(len(input_files)):
         classify_subtitle_roles(
             subtitles=tracks_for_source(subtitles, source_index, "subtitles"),
@@ -7693,7 +7722,7 @@ def process_merged_inputs(
         preferred_forced_subtitle_default,
     )
 
-    progress("Building track plan", 70)
+    progress("Building track plan", 70, 0)
     if args.analyze_sub_sizes:
         print_subtitle_size_report(subtitles)
     if args.smart_sub_detection:
@@ -7735,7 +7764,7 @@ def process_merged_inputs(
             plan_summary=plan_summary,
         )
 
-    progress("Building command", 80)
+    progress("Building command", 80, 0)
     command = build_mkvmerge_command(
         mkvmerge=args.mkvmerge,
         input_path=input_files,
@@ -7788,7 +7817,7 @@ def process_merged_inputs(
     if result.returncode != 0:
         raise OrganizerError(f"mkvmerge failed with exit code {result.returncode}: {output_path}")
 
-    progress("Verifying output", 96)
+    progress("Verifying output", 96, 0)
     verification = verify_output_plan(
         mkvmerge=args.mkvmerge,
         output_path=output_path,
@@ -8496,9 +8525,30 @@ def run_batch(
     emit_batch_event(event_callback, "batch-started", f"Matroska files found: {total_files}", total=total_files)
 
     try:
-        batch_variant_consensus = collect_batch_language_variant_consensus(input_files, args)
+        def emit_context_progress(message: str, index: int, total: int) -> None:
+            emit_batch_event(
+                event_callback,
+                "batch-progress",
+                message,
+                index=index,
+                total=total,
+                step=0,
+                steps=0,
+            )
+
+        batch_variant_consensus = collect_batch_language_variant_consensus(
+            input_files,
+            args,
+            progress_callback=emit_context_progress if event_callback else None,
+            cancel_callback=cancel_callback,
+        )
         ensure_not_cancelled(cancel_callback)
-        sibling_variant_consensus = collect_sibling_metadata_variant_consensus(input_files, args)
+        sibling_variant_consensus = collect_sibling_metadata_variant_consensus(
+            input_files,
+            args,
+            progress_callback=emit_context_progress if event_callback else None,
+            cancel_callback=cancel_callback,
+        )
         batch_variant_consensus = merge_variant_consensus(batch_variant_consensus, sibling_variant_consensus)
         ensure_not_cancelled(cancel_callback)
     except OrganizerCancelled:

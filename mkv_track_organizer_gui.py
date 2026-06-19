@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import threading
+import time
 import traceback
 from pathlib import Path
 
@@ -529,6 +530,18 @@ class MainWindow(QMainWindow):
         self.start_audio_sync_analysis_after_probe = False
         self.audio_sync_auto_load_timer = QTimer(self)
         self.audio_sync_auto_load_timer.setSingleShot(True)
+        self.progress_timer = QTimer(self)
+        self.progress_timer.setInterval(1000)
+        self.progress_timer.timeout.connect(self._refresh_progress_label)
+        self._progress_started_at: float | None = None
+        self._progress_scope = ""
+        self._progress_activity = "Idle"
+        self._progress_index = 0
+        self._progress_total = 0
+        self._progress_finished_elapsed: float | None = None
+        self._log_line_starts: dict[int, bool] = {}
+        self._output_follow_by_edit: dict[int, QCheckBox] = {}
+        self._output_controls: dict[int, dict[str, object]] = {}
         self.default_args, self.default_config_path = self._load_default_args()
         self.profile_store_path = gui_profile_store_path()
         self.profiles: dict[str, dict] = {}
@@ -643,6 +656,7 @@ class MainWindow(QMainWindow):
         self.track_deselect_duplicates_button = QPushButton("Drop duplicates")
         self.track_deselect_duplicate_audio_button = QPushButton("Drop dup audio")
         self.track_deselect_duplicate_subtitles_button = QPushButton("Drop dup subs")
+        self.track_deselect_probable_duplicates_button = QPushButton("Drop probable")
         self.track_reset_selection_button = QPushButton("Reset selection")
         self.track_reset_order_button = QPushButton("Reset order")
         self.track_reset_button = QPushButton("Reset all")
@@ -662,6 +676,7 @@ class MainWindow(QMainWindow):
         self.track_deselect_duplicates_button.setObjectName("secondaryButton")
         self.track_deselect_duplicate_audio_button.setObjectName("secondaryButton")
         self.track_deselect_duplicate_subtitles_button.setObjectName("secondaryButton")
+        self.track_deselect_probable_duplicates_button.setObjectName("secondaryButton")
         self.track_reset_selection_button.setObjectName("secondaryButton")
         self.track_reset_order_button.setObjectName("secondaryButton")
         self.track_reset_button.setObjectName("secondaryButton")
@@ -673,6 +688,9 @@ class MainWindow(QMainWindow):
         self.track_deselect_duplicates_button.setToolTip("Uncheck duplicate-group members and keep each group leader")
         self.track_deselect_duplicate_audio_button.setToolTip("Uncheck duplicate audio-group members")
         self.track_deselect_duplicate_subtitles_button.setToolTip("Uncheck duplicate subtitle-group members")
+        self.track_deselect_probable_duplicates_button.setToolTip(
+            "Uncheck probable regional duplicate members and keep each suggested group leader"
+        )
         self.track_reset_selection_button.setToolTip("Restore the preview include/exclude state")
         self.track_reset_order_button.setToolTip("Restore the automatic preview track order")
         self.track_reset_button.setToolTip("Restore the preview include state and automatic track order")
@@ -684,6 +702,7 @@ class MainWindow(QMainWindow):
         self.track_deselect_duplicates_button.setEnabled(False)
         self.track_deselect_duplicate_audio_button.setEnabled(False)
         self.track_deselect_duplicate_subtitles_button.setEnabled(False)
+        self.track_deselect_probable_duplicates_button.setEnabled(False)
         self.track_reset_selection_button.setEnabled(False)
         self.track_reset_order_button.setEnabled(False)
         self.track_reset_button.setEnabled(False)
@@ -1042,6 +1061,7 @@ class MainWindow(QMainWindow):
         track_cleanup_toolbar.addWidget(self.track_deselect_duplicates_button)
         track_cleanup_toolbar.addWidget(self.track_deselect_duplicate_audio_button)
         track_cleanup_toolbar.addWidget(self.track_deselect_duplicate_subtitles_button)
+        track_cleanup_toolbar.addWidget(self.track_deselect_probable_duplicates_button)
         track_cleanup_toolbar.addSpacing(8)
         track_cleanup_toolbar.addWidget(self.track_reset_selection_button)
         track_cleanup_toolbar.addWidget(self.track_reset_order_button)
@@ -1088,12 +1108,9 @@ class MainWindow(QMainWindow):
         tracks_layout.addWidget(self.track_details_edit)
 
         for edit in [self.summary_edit, self.log_edit]:
-            edit.setReadOnly(True)
-            edit.setLineWrapMode(QPlainTextEdit.NoWrap)
             edit.setAcceptDrops(True)
             edit.installEventFilter(self)
-        self.output_tabs.addTab(self.summary_edit, "Summary")
-        self.output_tabs.addTab(self.log_edit, "Raw log")
+        output_panel = self._build_output_panel(self.output_tabs, self.summary_edit, self.log_edit)
 
         work_splitter = QSplitter(Qt.Horizontal)
         work_splitter.addWidget(files_group)
@@ -1106,13 +1123,14 @@ class MainWindow(QMainWindow):
 
         splitter = QSplitter(Qt.Vertical)
         splitter.addWidget(work_splitter)
-        splitter.addWidget(self.output_tabs)
+        splitter.addWidget(output_panel)
         splitter.setSizes([500, 220])
         root.addWidget(splitter, 1)
 
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
-        self.progress_label.setMinimumWidth(220)
+        self.progress.setFormat("%p%")
+        self.progress_label.setMinimumWidth(320)
         self.theme_combo.setFixedWidth(92)
         self.statusBar().addPermanentWidget(self.theme_combo)
         self.statusBar().addPermanentWidget(self.progress_label)
@@ -1224,15 +1242,15 @@ class MainWindow(QMainWindow):
         self.makemkv_table.verticalHeader().setVisible(False)
         files_layout.addWidget(self.makemkv_table)
 
-        for edit in [self.makemkv_summary_edit, self.makemkv_log_edit]:
-            edit.setReadOnly(True)
-            edit.setLineWrapMode(QPlainTextEdit.NoWrap)
-        self.makemkv_output_tabs.addTab(self.makemkv_summary_edit, "Summary")
-        self.makemkv_output_tabs.addTab(self.makemkv_log_edit, "Raw log")
+        makemkv_output_panel = self._build_output_panel(
+            self.makemkv_output_tabs,
+            self.makemkv_summary_edit,
+            self.makemkv_log_edit,
+        )
 
         splitter = QSplitter(Qt.Vertical)
         splitter.addWidget(files_group)
-        splitter.addWidget(self.makemkv_output_tabs)
+        splitter.addWidget(makemkv_output_panel)
         splitter.setSizes([500, 220])
         root.addWidget(splitter, 1)
 
@@ -1410,15 +1428,15 @@ class MainWindow(QMainWindow):
         self.audio_sync_tracks_table.verticalHeader().setVisible(False)
         streams_layout.addWidget(self.audio_sync_tracks_table)
 
-        for edit in [self.audio_sync_summary_edit, self.audio_sync_log_edit]:
-            edit.setReadOnly(True)
-            edit.setLineWrapMode(QPlainTextEdit.NoWrap)
-        self.audio_sync_output_tabs.addTab(self.audio_sync_summary_edit, "Summary")
-        self.audio_sync_output_tabs.addTab(self.audio_sync_log_edit, "Raw log")
+        audio_sync_output_panel = self._build_output_panel(
+            self.audio_sync_output_tabs,
+            self.audio_sync_summary_edit,
+            self.audio_sync_log_edit,
+        )
 
         splitter = QSplitter(Qt.Vertical)
         splitter.addWidget(streams_group)
-        splitter.addWidget(self.audio_sync_output_tabs)
+        splitter.addWidget(audio_sync_output_panel)
         splitter.setSizes([460, 260])
         root.addWidget(splitter, 1)
 
@@ -1440,6 +1458,7 @@ class MainWindow(QMainWindow):
         self.track_deselect_duplicates_button.clicked.connect(self.deselect_duplicate_tracks)
         self.track_deselect_duplicate_audio_button.clicked.connect(self.deselect_duplicate_audio_tracks)
         self.track_deselect_duplicate_subtitles_button.clicked.connect(self.deselect_duplicate_subtitle_tracks)
+        self.track_deselect_probable_duplicates_button.clicked.connect(self.deselect_probable_duplicate_tracks)
         self.track_reset_selection_button.clicked.connect(self.reset_track_selection_edits)
         self.track_reset_order_button.clicked.connect(self.reset_track_order_edits)
         self.track_reset_button.clicked.connect(self.reset_track_edits)
@@ -1497,6 +1516,124 @@ class MainWindow(QMainWindow):
         button.setToolTip(tooltip)
         button.setAutoRaise(True)
         return button
+
+    def _build_output_panel(
+        self,
+        tabs: QTabWidget,
+        summary_edit: QPlainTextEdit,
+        log_edit: QPlainTextEdit,
+    ) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+
+        search_edit = QLineEdit()
+        search_edit.setPlaceholderText("Find in output")
+        search_edit.setMaximumWidth(260)
+        find_button = QPushButton("Find next")
+        find_button.setObjectName("secondaryButton")
+        copy_button = QPushButton("Copy all")
+        copy_button.setObjectName("secondaryButton")
+        save_button = self._tool_button(QStyle.SP_DialogSaveButton, "Save the visible output to a text file")
+        clear_button = self._tool_button(QStyle.SP_DialogResetButton, "Clear the visible output")
+        follow_check = QCheckBox("Follow")
+        follow_check.setChecked(True)
+        follow_check.setToolTip("Keep the visible output scrolled to the newest line")
+
+        toolbar = QHBoxLayout()
+        toolbar.setContentsMargins(0, 0, 0, 0)
+        toolbar.setSpacing(6)
+        toolbar.addWidget(search_edit)
+        toolbar.addWidget(find_button)
+        toolbar.addStretch(1)
+        toolbar.addWidget(follow_check)
+        toolbar.addWidget(copy_button)
+        toolbar.addWidget(save_button)
+        toolbar.addWidget(clear_button)
+        layout.addLayout(toolbar)
+
+        for edit in [summary_edit, log_edit]:
+            edit.setReadOnly(True)
+            edit.setLineWrapMode(QPlainTextEdit.NoWrap)
+            self._output_follow_by_edit[id(edit)] = follow_check
+        tabs.addTab(summary_edit, "Summary")
+        tabs.addTab(log_edit, "Raw log")
+        layout.addWidget(tabs)
+
+        controls = {
+            "search": search_edit,
+            "follow": follow_check,
+            "summary": summary_edit,
+            "log": log_edit,
+        }
+        self._output_controls[id(tabs)] = controls
+        search_edit.returnPressed.connect(lambda tabs=tabs: self._find_output_text(tabs))
+        find_button.clicked.connect(lambda _checked=False, tabs=tabs: self._find_output_text(tabs))
+        copy_button.clicked.connect(lambda _checked=False, tabs=tabs: self._copy_output_text(tabs))
+        save_button.clicked.connect(lambda _checked=False, tabs=tabs: self._save_output_text(tabs))
+        clear_button.clicked.connect(lambda _checked=False, tabs=tabs: self._clear_output_text(tabs))
+        return panel
+
+    @staticmethod
+    def _active_output_edit(tabs: QTabWidget) -> QPlainTextEdit | None:
+        widget = tabs.currentWidget()
+        return widget if isinstance(widget, QPlainTextEdit) else None
+
+    def _find_output_text(self, tabs: QTabWidget) -> None:
+        controls = self._output_controls.get(id(tabs), {})
+        search_edit = controls.get("search")
+        edit = self._active_output_edit(tabs)
+        if not isinstance(search_edit, QLineEdit) or edit is None:
+            return
+        query = search_edit.text().strip()
+        if not query:
+            search_edit.setFocus()
+            return
+        if edit.find(query):
+            return
+        cursor = edit.textCursor()
+        cursor.movePosition(QTextCursor.Start)
+        edit.setTextCursor(cursor)
+        if edit.find(query):
+            self.statusBar().showMessage("Search wrapped to the beginning")
+        else:
+            self.statusBar().showMessage(f"Not found: {query}")
+
+    def _copy_output_text(self, tabs: QTabWidget) -> None:
+        edit = self._active_output_edit(tabs)
+        if edit is None:
+            return
+        QApplication.clipboard().setText(edit.toPlainText())
+        self.statusBar().showMessage("Visible output copied")
+
+    def _save_output_text(self, tabs: QTabWidget) -> None:
+        edit = self._active_output_edit(tabs)
+        if edit is None:
+            return
+        tab_name = tabs.tabText(tabs.currentIndex()).lower().replace(" ", "-")
+        output_path, _selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Save output",
+            f"mkv-track-organizer-{tab_name}.txt",
+            "Text files (*.txt);;All files (*)",
+        )
+        if not output_path:
+            return
+        try:
+            Path(output_path).write_text(edit.toPlainText(), encoding="utf-8")
+        except OSError as error:
+            QMessageBox.critical(self, "Save output failed", str(error))
+            return
+        self.statusBar().showMessage(f"Output saved: {output_path}")
+
+    def _clear_output_text(self, tabs: QTabWidget) -> None:
+        edit = self._active_output_edit(tabs)
+        if edit is None:
+            return
+        edit.clear()
+        self._log_line_starts[id(edit)] = True
+        self.statusBar().showMessage("Visible output cleared")
 
     @Slot()
     def change_theme(self) -> None:
@@ -1753,9 +1890,40 @@ class MainWindow(QMainWindow):
         self._sync_combo_tooltip(self.regional_order_combo, self.REGIONAL_ORDER_HELP)
 
     def _append_text(self, edit: QPlainTextEdit, text: str) -> None:
-        edit.moveCursor(QTextCursor.End)
-        edit.insertPlainText(text)
-        edit.moveCursor(QTextCursor.End)
+        follow_check = self._output_follow_by_edit.get(id(edit))
+        follow = follow_check.isChecked() if follow_check else True
+        previous_cursor = edit.textCursor()
+        scroll_bar = edit.verticalScrollBar()
+        previous_scroll = scroll_bar.value()
+
+        end_cursor = edit.textCursor()
+        end_cursor.movePosition(QTextCursor.End)
+        end_cursor.insertText(text)
+        if follow:
+            edit.setTextCursor(end_cursor)
+            edit.ensureCursorVisible()
+        else:
+            edit.setTextCursor(previous_cursor)
+            scroll_bar.setValue(previous_scroll)
+
+    def _append_timestamped_log(self, edit: QPlainTextEdit, text: str) -> None:
+        if not text:
+            return
+        at_line_start = self._log_line_starts.get(id(edit), True)
+        output: list[str] = []
+        for segment in text.splitlines(keepends=True):
+            content = segment.rstrip("\r\n")
+            ending = segment[len(content):]
+            if content and at_line_start:
+                output.append(f"[{time.strftime('%H:%M:%S')}] ")
+            output.append(content)
+            output.append(ending)
+            at_line_start = bool(ending)
+        if text and not text.splitlines(keepends=True):
+            output.append(text)
+            at_line_start = text.endswith(("\n", "\r"))
+        self._log_line_starts[id(edit)] = at_line_start
+        self._append_text(edit, "".join(output))
 
     def append_summary_line(self, text: str = "") -> None:
         self._append_text(self.summary_edit, f"{text}\n")
@@ -1768,10 +1936,88 @@ class MainWindow(QMainWindow):
 
     @Slot(str)
     def append_audio_sync_log(self, text: str) -> None:
-        self._append_text(self.audio_sync_log_edit, f"{text}\n")
+        self._append_timestamped_log(self.audio_sync_log_edit, f"{text}\n")
+
+    @staticmethod
+    def _format_progress_elapsed(seconds: float) -> str:
+        total_seconds = max(0, int(seconds))
+        hours, remainder = divmod(total_seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        if hours:
+            return f"{hours:d}:{minutes:02d}:{seconds:02d}"
+        return f"{minutes:02d}:{seconds:02d}"
+
+    def _start_progress_session(self, scope: str, activity: str) -> None:
+        self._progress_started_at = time.monotonic()
+        self._progress_scope = scope
+        self._progress_activity = activity
+        self._progress_index = 0
+        self._progress_total = 0
+        self._progress_finished_elapsed = None
+        self.progress_timer.start()
+        self._refresh_progress_label()
+
+    def _set_progress_context(self, index: int = 0, total: int = 0) -> None:
+        self._progress_index = max(0, index)
+        self._progress_total = max(0, total)
+        self._refresh_progress_label()
 
     def _set_progress_label(self, text: str) -> None:
-        self.progress_label.setText(text[:120] if text else "Idle")
+        if text == "Idle":
+            self._reset_progress_session()
+            return
+        self._progress_activity = text or "Working"
+        self._refresh_progress_label()
+
+    def _finish_progress_session(self, activity: str) -> None:
+        if self._progress_started_at is not None:
+            self._progress_finished_elapsed = time.monotonic() - self._progress_started_at
+        self._progress_started_at = None
+        self._progress_activity = activity
+        self.progress_timer.stop()
+        self._refresh_progress_label()
+
+    def _reset_progress_session(self) -> None:
+        self.progress_timer.stop()
+        self._progress_started_at = None
+        self._progress_finished_elapsed = None
+        self._progress_scope = ""
+        self._progress_activity = "Idle"
+        self._progress_index = 0
+        self._progress_total = 0
+        self.progress.setRange(0, 1)
+        self.progress.setValue(0)
+        self.progress.setFormat("%p%")
+        self._refresh_progress_label()
+
+    @Slot()
+    def _refresh_progress_label(self) -> None:
+        parts: list[str] = []
+        if self._progress_scope:
+            parts.append(self._progress_scope)
+        if self._progress_total and self._progress_index:
+            parts.append(f"{self._progress_index}/{self._progress_total}")
+        parts.append(self._progress_activity or "Idle")
+
+        elapsed: float | None = self._progress_finished_elapsed
+        if self._progress_started_at is not None:
+            elapsed = time.monotonic() - self._progress_started_at
+        if elapsed is not None:
+            parts.append(self._format_progress_elapsed(elapsed))
+
+        full_text = " | ".join(parts)
+        self.progress_label.setText(full_text[:120])
+        self.progress_label.setToolTip(full_text)
+
+    def _set_progress_indeterminate(self) -> None:
+        self.progress.setRange(0, 0)
+        self.progress.setFormat("Working")
+
+    def _set_progress_value(self, maximum: int, value: int) -> None:
+        maximum = max(1, maximum)
+        self.progress.setRange(0, maximum)
+        self.progress.setValue(max(0, min(value, maximum)))
+        self.progress.setFormat("%p%")
 
     def _load_default_args(self):
         config_defaults, config_path = organizer.config_defaults_from_argv([])
@@ -2347,7 +2593,8 @@ class MainWindow(QMainWindow):
         self.audio_sync_probe_automatic = automatic
         self.audio_sync_probe_retry_after_finish = False
         self.statusBar().showMessage("Loading Audio Sync streams...")
-        self._set_progress_label("Loading Audio Sync streams")
+        self._start_progress_session("Audio Sync", "Loading streams")
+        self._set_progress_indeterminate()
         self._set_audio_sync_probe_running(True)
 
         reference_path, source_path = paths
@@ -2378,8 +2625,10 @@ class MainWindow(QMainWindow):
 
         try:
             self._apply_audio_sync_streams(reference_path, source_path, reference_streams, source_streams)
+            self._finish_progress_session("Streams loaded")
         except Exception as error:
             self.append_audio_sync_summary_line(f"Auto-load failed: {error}")
+            self._finish_progress_session("Stream load failed")
             if self.start_audio_sync_analysis_after_probe or not self.audio_sync_probe_automatic:
                 QMessageBox.critical(self, "Audio Sync load failed", str(error))
             self.start_audio_sync_analysis_after_probe = False
@@ -2389,6 +2638,7 @@ class MainWindow(QMainWindow):
         self.append_audio_sync_log(details)
         first_line = details.splitlines()[-1] if details else "Audio Sync stream load failed."
         self.append_audio_sync_summary_line(f"Auto-load failed: {first_line}")
+        self._finish_progress_session("Stream load failed")
         if self.start_audio_sync_analysis_after_probe or not self.audio_sync_probe_automatic:
             QMessageBox.critical(self, "Audio Sync load failed", details)
         self.start_audio_sync_analysis_after_probe = False
@@ -2737,6 +2987,7 @@ class MainWindow(QMainWindow):
         self._update_track_details_for_selection()
         self.summary_edit.clear()
         self.log_edit.clear()
+        self._log_line_starts[id(self.log_edit)] = True
         self.output_tabs.setCurrentIndex(0)
         self._apply_default_args(self.default_args)
         self._apply_current_profile()
@@ -2773,6 +3024,7 @@ class MainWindow(QMainWindow):
         self.audio_sync_previous_checkpoints_index = self.audio_sync_checkpoints_combo.currentIndex()
         self.audio_sync_summary_edit.clear()
         self.audio_sync_log_edit.clear()
+        self._log_line_starts[id(self.audio_sync_log_edit)] = True
         self.audio_sync_output_tabs.setCurrentIndex(0)
         self._clear_audio_sync_loaded_streams()
         self._set_audio_sync_running(False)
@@ -2792,6 +3044,7 @@ class MainWindow(QMainWindow):
         self.makemkv_table.setRowCount(0)
         self.makemkv_summary_edit.clear()
         self.makemkv_log_edit.clear()
+        self._log_line_starts[id(self.makemkv_log_edit)] = True
         self.makemkv_output_tabs.setCurrentIndex(0)
         self._makemkv_selection_changed()
         self._set_makemkv_running(False)
@@ -3006,6 +3259,7 @@ class MainWindow(QMainWindow):
         self.audio_sync_export_button.setEnabled(False)
         self.audio_sync_summary_edit.clear()
         self.audio_sync_log_edit.clear()
+        self._log_line_starts[id(self.audio_sync_log_edit)] = True
         self.append_audio_sync_summary_line("Analysis started.")
         self.append_audio_sync_summary_line(f"Reference: {settings.reference_path}")
         self.append_audio_sync_summary_line(f"Source: {settings.source_path}")
@@ -3013,9 +3267,8 @@ class MainWindow(QMainWindow):
             f"Streams: reference 0:a:{settings.reference_audio_stream}, source 0:a:{settings.source_audio_stream}"
         )
         self.append_audio_sync_summary_line()
-        self.progress.setRange(0, settings.checkpoints)
-        self.progress.setValue(0)
-        self._set_progress_label("Audio sync analysis")
+        self._start_progress_session("Audio Sync", "Starting analysis")
+        self._set_progress_value(settings.checkpoints, 0)
         self._set_audio_sync_running(True)
 
         self.audio_sync_worker_thread = QThread(self)
@@ -3063,8 +3316,8 @@ class MainWindow(QMainWindow):
         self.append_audio_sync_summary_line(
             f"Timeline shift baked into export: {audio_sync.format_delay_ms(self.audio_sync_result.timeline_shift_seconds)}"
         )
-        self.progress.setRange(0, 0)
-        self._set_progress_label("Audio sync export")
+        self._start_progress_session("Audio Sync", "Exporting shifted .mka")
+        self._set_progress_indeterminate()
         self._set_audio_sync_running(True)
 
         self.audio_sync_worker_thread = QThread(self)
@@ -3107,6 +3360,8 @@ class MainWindow(QMainWindow):
             return
         self.worker.cancel()
         self.cancel_button.setEnabled(False)
+        self._set_progress_indeterminate()
+        self._set_progress_label("Cancelling")
         self.statusBar().showMessage("Cancelling...")
 
     @Slot()
@@ -3132,6 +3387,8 @@ class MainWindow(QMainWindow):
             return
         self.makemkv_worker.cancel()
         self.makemkv_cancel_button.setEnabled(False)
+        self._set_progress_indeterminate()
+        self._set_progress_label("Cancelling")
         self.statusBar().showMessage("Cancelling MakeMKV batch...")
 
     @Slot()
@@ -3140,6 +3397,8 @@ class MainWindow(QMainWindow):
             return
         self.audio_sync_worker.cancel()
         self.audio_sync_cancel_button.setEnabled(False)
+        self._set_progress_indeterminate()
+        self._set_progress_label("Cancelling")
         self.statusBar().showMessage("Cancelling Audio Sync task...")
 
     def _start_run(self, dry_run: bool) -> None:
@@ -3161,13 +3420,14 @@ class MainWindow(QMainWindow):
 
         self.summary_edit.clear()
         self.log_edit.clear()
+        self._log_line_starts[id(self.log_edit)] = True
         self.current_reports = []
         self.tracks_table.setRowCount(0)
         self._set_track_selection_controls_enabled(False)
         self._update_track_details_for_selection()
         self._refresh_file_list(running=True)
-        self.progress.setRange(0, 0)
-        self._set_progress_label("Starting")
+        self._start_progress_session("Organizer", "Starting preview" if dry_run else "Starting run")
+        self._set_progress_indeterminate()
         self.append_summary_line("Preview started." if dry_run else "Run started.")
         self.statusBar().showMessage("Starting...")
         self._set_running(True)
@@ -3209,10 +3469,11 @@ class MainWindow(QMainWindow):
 
         self.makemkv_summary_edit.clear()
         self.makemkv_log_edit.clear()
+        self._log_line_starts[id(self.makemkv_log_edit)] = True
         self.makemkv_reports = []
         self.makemkv_table.setRowCount(0)
-        self.progress.setRange(0, 0)
-        self._set_progress_label("Starting MakeMKV")
+        self._start_progress_session("MakeMKV", "Starting preview" if dry_run else "Starting batch")
+        self._set_progress_indeterminate()
         self.append_makemkv_summary_line("Preview started." if dry_run else "Run started.")
         if job.run_organizer_after and not dry_run:
             self.append_makemkv_summary_line("Pipeline: Organizer will run after MakeMKV.")
@@ -3653,27 +3914,33 @@ class MainWindow(QMainWindow):
 
     @Slot(str)
     def append_log(self, text: str) -> None:
-        self._append_text(self.log_edit, text)
+        self._append_timestamped_log(self.log_edit, text)
 
     @Slot(str)
     def append_makemkv_log(self, text: str) -> None:
-        self._append_text(self.makemkv_log_edit, text)
+        self._append_timestamped_log(self.makemkv_log_edit, text)
 
     @Slot(str, str, str, int, int, int, int)
     def handle_event(self, kind: str, message: str, file_path: str, index: int, total: int, step: int, steps: int) -> None:
-        if total:
+        if index or total:
+            self._set_progress_context(index, total)
+        if kind in {"batch-progress", "file-progress"} and steps <= 0:
+            self._set_progress_indeterminate()
+        elif total:
             steps = steps or 100
             total_units = self._progress_total_units(total, steps)
-            self.progress.setRange(0, total_units)
             if kind == "file-started":
                 value = max(0, index - 1) * steps
             elif kind == "file-progress":
                 value = max(0, index - 1) * steps + max(0, min(step, steps))
-            elif kind in {"file-finished", "file-error"}:
+            elif kind in {"file-finished", "file-error", "file-cancelled"}:
                 value = index * steps
             else:
                 value = self.progress.value()
-            self.progress.setValue(min(value, total_units - self.FINALIZATION_PROGRESS_UNITS))
+            self._set_progress_value(
+                total_units,
+                min(value, total_units - self.FINALIZATION_PROGRESS_UNITS),
+            )
         if file_path:
             status = {
                 "file-started": "Running",
@@ -3701,13 +3968,16 @@ class MainWindow(QMainWindow):
         steps: int,
     ) -> None:
         if kind.startswith("organizer-"):
+            self._progress_scope = "Organizer pipeline"
             self.handle_event(kind.removeprefix("organizer-"), message, disc_path, index, total, step, steps)
             return
 
+        self._progress_scope = "MakeMKV"
+        if index or total:
+            self._set_progress_context(index, total)
         if total:
             steps = steps or 100
             total_units = self._progress_total_units(total, steps)
-            self.progress.setRange(0, total_units)
             if kind == "disc-started":
                 value = max(0, index - 1) * steps
             elif kind == "disc-progress":
@@ -3716,7 +3986,10 @@ class MainWindow(QMainWindow):
                 value = index * steps
             else:
                 value = self.progress.value()
-            self.progress.setValue(min(value, total_units - self.FINALIZATION_PROGRESS_UNITS))
+            self._set_progress_value(
+                total_units,
+                min(value, total_units - self.FINALIZATION_PROGRESS_UNITS),
+            )
 
         if disc_path:
             status = {
@@ -3739,17 +4012,18 @@ class MainWindow(QMainWindow):
     @Slot(object)
     def handle_completed(self, result: organizer.BatchRunResult) -> None:
         total_units = self._progress_total_units(len(result.input_files), 100)
-        self.progress.setRange(0, total_units)
-        self.progress.setValue(total_units)
+        self._set_progress_value(total_units, total_units)
         self._populate_results(result.reports)
         if result.cancelled:
             self.statusBar().showMessage("Cancelled")
-            self._set_progress_label("Cancelled")
+            self._finish_progress_session("Cancelled")
         else:
             self.statusBar().showMessage(
                 f"Completed with {result.failures} error(s)" if result.failures else "Completed without errors"
             )
-            self._set_progress_label("Completed")
+            self._finish_progress_session(
+                f"Completed with {result.failures} error(s)" if result.failures else "Completed"
+            )
         self._append_organizer_result_summary(result)
         self._set_running(False)
 
@@ -3757,8 +4031,11 @@ class MainWindow(QMainWindow):
     def handle_failed(self, details: str) -> None:
         self.append_log(details)
         self.statusBar().showMessage("Failed")
-        self._set_progress_label("Failed")
-        self.append_summary_line("Run failed.")
+        self._finish_progress_session("Failed")
+        first_line = details.strip().splitlines()[-1] if details.strip() else "Unknown error"
+        self.append_summary_line(f"Run failed: {first_line}")
+        self.append_summary_line("See Raw log for the full traceback.")
+        self.output_tabs.setCurrentIndex(1)
         QMessageBox.critical(self, "Run failed", details)
         self._set_running(False)
 
@@ -3766,27 +4043,28 @@ class MainWindow(QMainWindow):
     def handle_makemkv_completed(self, result: makemkv.MakeMkvBatchResult) -> None:
         total = len(result.discs) or len(result.reports) or 1
         total_units = self._progress_total_units(total, 100)
-        self.progress.setRange(0, total_units)
-        self.progress.setValue(total_units)
+        self._set_progress_value(total_units, total_units)
         self._populate_makemkv_results(result.reports)
         if result.organizer_result:
             self._populate_results(result.organizer_result.reports)
 
         if result.cancelled:
             self.statusBar().showMessage("MakeMKV batch cancelled")
-            self._set_progress_label("MakeMKV cancelled")
+            self._finish_progress_session("Cancelled")
         elif result.failures:
             self.statusBar().showMessage(f"MakeMKV completed with {result.failures} error(s)")
-            self._set_progress_label("MakeMKV completed with errors")
+            self._finish_progress_session(f"Completed with {result.failures} error(s)")
         elif result.organizer_result and result.organizer_result.failures:
             self.statusBar().showMessage(f"Organizer completed with {result.organizer_result.failures} error(s)")
-            self._set_progress_label("Organizer completed with errors")
+            self._finish_progress_session(
+                f"Organizer completed with {result.organizer_result.failures} error(s)"
+            )
         elif result.organizer_result:
             self.statusBar().showMessage("MakeMKV and Organizer completed without errors")
-            self._set_progress_label("Pipeline completed")
+            self._finish_progress_session("Pipeline completed")
         else:
             self.statusBar().showMessage("MakeMKV completed without errors")
-            self._set_progress_label("MakeMKV completed")
+            self._finish_progress_session("Completed")
         self._append_makemkv_result_summary(result)
         self._set_makemkv_running(False)
 
@@ -3794,8 +4072,11 @@ class MainWindow(QMainWindow):
     def handle_makemkv_failed(self, details: str) -> None:
         self.append_makemkv_log(details)
         self.statusBar().showMessage("MakeMKV failed")
-        self._set_progress_label("MakeMKV failed")
-        self.append_makemkv_summary_line("MakeMKV failed.")
+        self._finish_progress_session("Failed")
+        first_line = details.strip().splitlines()[-1] if details.strip() else "Unknown error"
+        self.append_makemkv_summary_line(f"MakeMKV failed: {first_line}")
+        self.append_makemkv_summary_line("See Raw log for the full traceback.")
+        self.makemkv_output_tabs.setCurrentIndex(1)
         QMessageBox.critical(self, "MakeMKV failed", details)
         self._set_makemkv_running(False)
 
@@ -3804,20 +4085,22 @@ class MainWindow(QMainWindow):
         self.append_audio_sync_log(message)
         if message.startswith("Checkpoint") or message.startswith("  offset=") or message.startswith("  skipped="):
             self.append_audio_sync_summary_line(message)
+        if message.startswith("Checkpoint"):
+            self._set_progress_indeterminate()
+            self._set_progress_label(message)
         self.statusBar().showMessage(message[:160])
 
     @Slot(int, int)
     def handle_audio_sync_progress(self, index: int, total: int) -> None:
-        self.progress.setRange(0, max(1, total))
-        self.progress.setValue(index)
-        self._set_progress_label(f"Audio sync checkpoint {index}/{total}")
+        self._set_progress_context(index, total)
+        self._set_progress_value(total, index)
+        self._set_progress_label(f"Checkpoint {index}/{total} complete")
 
     @Slot(object)
     def handle_audio_sync_completed(self, result: audio_sync.AudioSyncResult) -> None:
         self.audio_sync_result = result
-        self.progress.setRange(0, max(1, len(result.estimates)))
-        self.progress.setValue(len(result.estimates))
-        self._set_progress_label("Audio sync completed")
+        self._set_progress_value(max(1, len(result.estimates)), len(result.estimates))
+        self._finish_progress_session("Analysis completed")
         self.append_audio_sync_summary_line()
         self.append_audio_sync_summary_line("Result")
         self.append_audio_sync_summary_line(
@@ -3850,9 +4133,8 @@ class MainWindow(QMainWindow):
 
     @Slot(object)
     def handle_audio_sync_export_completed(self, plan: audio_sync.ExportPlan) -> None:
-        self.progress.setRange(0, 1)
-        self.progress.setValue(1)
-        self._set_progress_label("Audio sync export completed")
+        self._set_progress_value(1, 1)
+        self._finish_progress_session("Export completed")
         self.append_audio_sync_summary_line()
         self.append_audio_sync_summary_line("Exported shifted .mka")
         self.append_audio_sync_summary_line(str(plan.output_path))
@@ -3872,8 +4154,10 @@ class MainWindow(QMainWindow):
         cancelled = "cancelled" in details.lower()
         status_text = "Audio Sync cancelled" if cancelled else "Audio Sync failed"
         self.statusBar().showMessage(status_text)
-        self._set_progress_label(status_text)
+        self._finish_progress_session("Cancelled" if cancelled else "Failed")
         if not cancelled:
+            self.append_audio_sync_summary_line("See Raw log for the full traceback.")
+            self.audio_sync_output_tabs.setCurrentIndex(1)
             QMessageBox.critical(self, "Audio Sync failed", details)
         self._set_audio_sync_running(False)
 
@@ -4554,6 +4838,10 @@ class MainWindow(QMainWindow):
         self._set_displayed_track_checks(Qt.Unchecked, duplicate_members_only=True, track_type="subtitles")
 
     @Slot()
+    def deselect_probable_duplicate_tracks(self) -> None:
+        self._set_displayed_track_checks(Qt.Unchecked, probable_duplicate_members_only=True)
+
+    @Slot()
     def reset_track_selection_edits(self) -> None:
         current_keys = self._current_track_selection_keys()
         if current_keys:
@@ -4581,6 +4869,7 @@ class MainWindow(QMainWindow):
         self,
         check_state: Qt.CheckState,
         duplicate_members_only: bool = False,
+        probable_duplicate_members_only: bool = False,
         track_type: str | None = None,
     ) -> None:
         tracks = self._current_track_rows()
@@ -4589,6 +4878,8 @@ class MainWindow(QMainWindow):
             if track_type and track.get("type") != track_type:
                 continue
             if duplicate_members_only and track.get("duplicate_of_id") is None:
+                continue
+            if probable_duplicate_members_only and track.get("probable_duplicate_of_id") is None:
                 continue
             self._set_manual_track_include(track, include_track)
         self._populate_tracks_for_row(self.files_table.currentRow())
@@ -4640,6 +4931,10 @@ class MainWindow(QMainWindow):
             track.get("type") == "subtitles" and track.get("duplicate_of_id") is not None
             for track in current_tracks
         )
+        has_probable_duplicates = any(
+            track.get("probable_duplicate_of_id") is not None
+            for track in current_tracks
+        )
         self.track_select_all_button.setEnabled(enabled)
         self.track_select_audio_button.setEnabled(enabled and has_audio)
         self.track_select_subtitles_button.setEnabled(enabled and has_subtitles)
@@ -4649,6 +4944,7 @@ class MainWindow(QMainWindow):
         )
         self.track_deselect_duplicate_audio_button.setEnabled(enabled and has_audio_duplicates)
         self.track_deselect_duplicate_subtitles_button.setEnabled(enabled and has_subtitle_duplicates)
+        self.track_deselect_probable_duplicates_button.setEnabled(enabled and has_probable_duplicates)
         self.track_reset_selection_button.setEnabled(enabled and manual_selection_count > 0)
         self.track_reset_order_button.setEnabled(enabled and self.manual_track_order_active)
         self.track_reset_button.setEnabled(

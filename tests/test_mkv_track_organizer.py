@@ -2125,9 +2125,80 @@ def test_process_file_with_language_variants_does_not_need_batch_inputs(tmp_path
         track_selection_overrides={},
     )
 
-    report = m.process_file(input_path, output_path, args, forced_subtitle_ids=set())
+    progress_events: list[tuple[str, int, int]] = []
+    report = m.process_file(
+        input_path,
+        output_path,
+        args,
+        forced_subtitle_ids=set(),
+        progress_callback=lambda message, step, steps: progress_events.append((message, step, steps)),
+    )
 
     assert report["status"] == "dry-run"
+    indeterminate_messages = {
+        message for message, _step, steps in progress_events
+        if steps == 0
+    }
+    assert "Reading metadata" in indeterminate_messages
+    assert "Preparing OCR cache" in indeterminate_messages
+    assert "Detecting language variants" in indeterminate_messages
+    assert progress_events[-1] == ("Preview complete", 100, 100)
+
+
+def test_run_batch_emits_indeterminate_language_context_progress(tmp_path: Path, monkeypatch) -> None:
+    first = tmp_path / "first.mkv"
+    second = tmp_path / "second.mkv"
+    first.write_bytes(b"")
+    second.write_bytes(b"")
+    args = argparse.Namespace(
+        path=first,
+        output_dir=None,
+        output_suffix="",
+        report=False,
+        report_dir=None,
+        report_format="both",
+        dry_run=True,
+        detect_language_variants=True,
+        batch_language_variant_consensus=True,
+    )
+    context = m.BatchRunContext(
+        args=args,
+        input_files=[first, second],
+        source_root=None,
+        forced_subtitle_ids=set(),
+    )
+
+    def fake_consensus(input_files, _args, progress_callback=None, cancel_callback=None):
+        assert cancel_callback is not None
+        if progress_callback:
+            progress_callback("Analyzing language context: first.mkv (1/2)", 1, len(input_files))
+        return {}
+
+    def fake_process_file(
+        input_file,
+        output_file,
+        _args,
+        _forced_ids,
+        _consensus,
+        progress_callback=None,
+        cancel_callback=None,
+    ):
+        if progress_callback:
+            progress_callback("Preview complete", 100, 100)
+        return m.file_report_data(input_file, output_file, "dry-run")
+
+    monkeypatch.setattr(m, "collect_batch_language_variant_consensus", fake_consensus)
+    monkeypatch.setattr(m, "collect_sibling_metadata_variant_consensus", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(m, "process_file", fake_process_file)
+    events: list[m.BatchRunEvent] = []
+
+    result = m.run_batch(context, events.append, cancel_callback=lambda: False)
+
+    assert result.return_code == 0
+    context_event = next(event for event in events if event.kind == "batch-progress")
+    assert context_event.message == "Analyzing language context: first.mkv (1/2)"
+    assert (context_event.index, context_event.total) == (1, 2)
+    assert (context_event.step, context_event.steps) == (0, 0)
 
 
 def test_run_batch_merge_inputs_uses_single_report(tmp_path: Path, monkeypatch) -> None:
