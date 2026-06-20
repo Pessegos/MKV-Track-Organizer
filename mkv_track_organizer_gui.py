@@ -1509,11 +1509,15 @@ class MainWindow(QMainWindow):
             self.audio_sync_log_edit,
         )
 
-        splitter = QSplitter(Qt.Vertical)
-        splitter.addWidget(streams_group)
-        splitter.addWidget(audio_sync_output_panel)
-        splitter.setSizes([460, 260])
-        root.addWidget(splitter, 1)
+        self.audio_sync_splitter = QSplitter(Qt.Vertical)
+        self.audio_sync_splitter.addWidget(streams_group)
+        self.audio_sync_splitter.addWidget(audio_sync_output_panel)
+        self.audio_sync_splitter.setCollapsible(0, False)
+        self.audio_sync_splitter.setCollapsible(1, False)
+        self.audio_sync_splitter.setStretchFactor(0, 2)
+        self.audio_sync_splitter.setStretchFactor(1, 3)
+        self.audio_sync_splitter.setSizes([300, 420])
+        root.addWidget(self.audio_sync_splitter, 1)
 
         reference_button.clicked.connect(self.choose_audio_sync_reference_file)
         source_button.clicked.connect(self.choose_audio_sync_source_file)
@@ -3120,6 +3124,10 @@ class MainWindow(QMainWindow):
     def start_audio_sync_stream_auto_load(self) -> None:
         self.start_audio_sync_stream_probe(automatic=True)
 
+    def _prepare_audio_sync_stream_probe_ui(self) -> None:
+        self._reset_progress_session()
+        self.statusBar().showMessage("Loading Audio Sync streams...")
+
     def start_audio_sync_stream_probe(self, automatic: bool = True) -> bool:
         if self.audio_sync_probe_thread and self.audio_sync_probe_thread.isRunning():
             return False
@@ -3137,9 +3145,7 @@ class MainWindow(QMainWindow):
         self.audio_sync_auto_load_timer.stop()
         self.audio_sync_probe_automatic = automatic
         self.audio_sync_probe_retry_after_finish = False
-        self.statusBar().showMessage("Loading Audio Sync streams...")
-        self._start_progress_session("Audio Sync", "Loading streams")
-        self._set_progress_indeterminate()
+        self._prepare_audio_sync_stream_probe_ui()
         self._set_audio_sync_probe_running(True)
 
         reference_path, source_path = paths
@@ -3177,10 +3183,10 @@ class MainWindow(QMainWindow):
                 reference_probe.duration_seconds,
                 source_probe.duration_seconds,
             )
-            self._finish_progress_session("Streams loaded")
+            self._reset_progress_session()
         except Exception as error:
             self.append_audio_sync_summary_line(f"Auto-load failed: {error}")
-            self._finish_progress_session("Stream load failed")
+            self._reset_progress_session()
             if self.start_audio_sync_analysis_after_probe or not self.audio_sync_probe_automatic:
                 QMessageBox.critical(self, "Audio Sync load failed", str(error))
             self.start_audio_sync_analysis_after_probe = False
@@ -3190,7 +3196,7 @@ class MainWindow(QMainWindow):
         self.append_audio_sync_log(details)
         first_line = details.splitlines()[-1] if details else "Audio Sync stream load failed."
         self.append_audio_sync_summary_line(f"Auto-load failed: {first_line}")
-        self._finish_progress_session("Stream load failed")
+        self._reset_progress_session()
         if self.start_audio_sync_analysis_after_probe or not self.audio_sync_probe_automatic:
             QMessageBox.critical(self, "Audio Sync load failed", details)
         self.start_audio_sync_analysis_after_probe = False

@@ -2,6 +2,11 @@
 
 All notable user-facing changes are recorded here.
 
+## 1.0.5 - 2026-06-20
+
+- Rebalanced the Audio Sync workspace so the Summary and Raw log receive more vertical space than the export-track table.
+- Stopped the global progress bar from using its animated indeterminate state while streams load automatically.
+
 ## 1.0.4 - 2026-06-20
 
 - Reduced the Audio Sync Plan field to match the height and padding of the surrounding comparison controls.

@@ -555,3 +555,27 @@ def test_audio_sync_full_timeline_plan_uses_shared_duration(qapp):
         assert window.audio_sync_analysis_plan_label.wordWrap()
     finally:
         window.close()
+
+
+def test_audio_sync_prioritizes_summary_space_and_keeps_probe_progress_idle(qapp):
+    window = gui.MainWindow()
+    try:
+        window.resize(1400, 900)
+        window.show()
+        qapp.processEvents()
+
+        track_height, output_height = window.audio_sync_splitter.sizes()
+        assert output_height > track_height
+        assert not window.audio_sync_splitter.isCollapsible(0)
+        assert not window.audio_sync_splitter.isCollapsible(1)
+
+        window._set_progress_indeterminate()
+        window._prepare_audio_sync_stream_probe_ui()
+
+        assert window.progress.minimum() == 0
+        assert window.progress.maximum() == 1
+        assert window.progress.value() == 0
+        assert window.progress_label.text() == "Idle"
+        assert window.statusBar().currentMessage() == "Loading Audio Sync streams..."
+    finally:
+        window.close()
