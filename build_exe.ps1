@@ -117,6 +117,7 @@ try {
         "--windowed",
         "--name", "MKV Track Organizer",
         "--version-file", $versionInfoPath,
+        "--manifest", ".\windows_app.manifest",
         $mode,
         ".\mkv_track_organizer_gui.py"
     )

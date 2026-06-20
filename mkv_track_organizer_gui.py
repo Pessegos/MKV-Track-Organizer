@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import ctypes
 import io
 import json
 import os
@@ -8,11 +9,22 @@ import sys
 import threading
 import time
 import traceback
+import uuid
 from pathlib import Path
 
 try:
     from PySide6.QtCore import QEvent, QObject, QThread, QTimer, Qt, Signal, Slot
-    from PySide6.QtGui import QAction, QBrush, QColor, QCloseEvent, QDragEnterEvent, QDropEvent, QTextCursor
+    from PySide6.QtGui import (
+        QAction,
+        QBrush,
+        QColor,
+        QCloseEvent,
+        QDragEnterEvent,
+        QDropEvent,
+        QFont,
+        QTextCharFormat,
+        QTextCursor,
+    )
     from PySide6.QtWidgets import (
         QApplication,
         QAbstractItemView,
@@ -64,6 +76,127 @@ def gui_profile_store_path() -> Path:
     appdata = os.environ.get("APPDATA")
     base_dir = Path(appdata) if appdata else Path.home() / ".config"
     return base_dir / "MKV Track Organizer" / "profiles.json"
+
+
+def set_windows_app_user_model_id() -> None:
+    if sys.platform != "win32":
+        return
+    try:
+        setter = ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID
+        setter.argtypes = [ctypes.c_wchar_p]
+        setter.restype = ctypes.c_long
+        setter("Pessegos.MKVTrackOrganizer")
+    except (OSError, AttributeError):
+        pass
+
+
+class WindowsTaskbarProgress:
+    NO_PROGRESS = 0
+    INDETERMINATE = 1
+    NORMAL = 2
+
+    class GUID(ctypes.Structure):
+        _fields_ = [
+            ("Data1", ctypes.c_uint32),
+            ("Data2", ctypes.c_uint16),
+            ("Data3", ctypes.c_uint16),
+            ("Data4", ctypes.c_ubyte * 8),
+        ]
+
+        @classmethod
+        def from_text(cls, value: str) -> "WindowsTaskbarProgress.GUID":
+            return cls.from_buffer_copy(uuid.UUID(value).bytes_le)
+
+    def __init__(self, window: QMainWindow) -> None:
+        self.window = window
+        self.interface = ctypes.c_void_p()
+        self.available = False
+        self.error = ""
+        self._ole32 = None
+        self._com_initialized = False
+        if sys.platform != "win32" or QApplication.platformName().casefold() != "windows":
+            return
+        try:
+            self._initialize()
+        except (OSError, ValueError, AttributeError) as error:
+            self.error = str(error)
+            self.close()
+
+    def _initialize(self) -> None:
+        self._ole32 = ctypes.OleDLL("ole32")
+        initialize_result = self._ole32.CoInitialize(None)
+        self._com_initialized = initialize_result in {0, 1}
+        clsid = self.GUID.from_text("56FDF344-FD6D-11D0-958A-006097C9A090")
+        iid = self.GUID.from_text("EA1AFB91-9E28-4B86-90E9-9E9F8A5EEA84")
+        self._ole32.CoCreateInstance.argtypes = [
+            ctypes.POINTER(self.GUID),
+            ctypes.c_void_p,
+            ctypes.c_uint32,
+            ctypes.POINTER(self.GUID),
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        self._ole32.CoCreateInstance.restype = ctypes.c_long
+        result = self._ole32.CoCreateInstance(
+            ctypes.byref(clsid),
+            None,
+            1,
+            ctypes.byref(iid),
+            ctypes.byref(self.interface),
+        )
+        if result < 0 or not self.interface.value:
+            raise OSError(f"Could not initialize Windows taskbar progress: HRESULT {result:#x}")
+
+        initialize = self._method(3)
+        if initialize(self.interface) < 0:
+            raise OSError("Could not initialize ITaskbarList3")
+        self.available = True
+
+    def _method(self, index: int, *argument_types):
+        vtable = ctypes.cast(
+            self.interface,
+            ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p)),
+        ).contents
+        function_type = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, *argument_types)
+        return function_type(vtable[index])
+
+    def _window_handle(self) -> ctypes.c_void_p:
+        return ctypes.c_void_p(int(self.window.winId()))
+
+    def set_indeterminate(self) -> None:
+        self._set_state(self.INDETERMINATE)
+
+    def set_value(self, maximum: int, value: int) -> None:
+        if not self.available:
+            return
+        maximum = max(1, int(maximum))
+        value = max(0, min(int(value), maximum))
+        self._set_state(self.NORMAL)
+        set_value = self._method(9, ctypes.c_void_p, ctypes.c_ulonglong, ctypes.c_ulonglong)
+        set_value(self.interface, self._window_handle(), value, maximum)
+
+    def clear(self) -> None:
+        self._set_state(self.NO_PROGRESS)
+
+    def _set_state(self, state: int) -> None:
+        if not self.available:
+            return
+        set_state = self._method(10, ctypes.c_void_p, ctypes.c_uint32)
+        set_state(self.interface, self._window_handle(), state)
+
+    def close(self) -> None:
+        if self.interface.value:
+            try:
+                self.clear()
+                release = self._method(2)
+                release(self.interface)
+            except (OSError, ValueError, AttributeError):
+                pass
+        self.interface = ctypes.c_void_p()
+        self.available = False
+        if self._com_initialized and self._ole32 is not None:
+            self._ole32.CoUninitialize()
+        self._com_initialized = False
+        self._ole32 = None
 
 
 class SignalTextStream(io.TextIOBase):
@@ -844,6 +977,7 @@ class MainWindow(QMainWindow):
         self.audio_sync_output_tabs = QTabWidget()
 
         self._build_ui()
+        self._taskbar_progress = WindowsTaskbarProgress(self)
         self._apply_theme()
         self._apply_default_args(self.default_args)
         self._profile_default_payload = self._profile_payload_from_ui()
@@ -2018,7 +2152,12 @@ class MainWindow(QMainWindow):
         self._clear_manual_track_order()
         self._sync_combo_tooltip(self.regional_order_combo, self.REGIONAL_ORDER_HELP)
 
-    def _append_text(self, edit: QPlainTextEdit, text: str) -> None:
+    def _append_text(
+        self,
+        edit: QPlainTextEdit,
+        text: str,
+        char_format: QTextCharFormat | None = None,
+    ) -> None:
         follow_check = self._output_follow_by_edit.get(id(edit))
         follow = follow_check.isChecked() if follow_check else True
         previous_cursor = edit.textCursor()
@@ -2027,7 +2166,7 @@ class MainWindow(QMainWindow):
 
         end_cursor = edit.textCursor()
         end_cursor.movePosition(QTextCursor.End)
-        end_cursor.insertText(text)
+        end_cursor.insertText(text, char_format or QTextCharFormat())
         if follow:
             edit.setTextCursor(end_cursor)
             edit.ensureCursorVisible()
@@ -2061,7 +2200,32 @@ class MainWindow(QMainWindow):
         self._append_text(self.makemkv_summary_edit, f"{text}\n")
 
     def append_audio_sync_summary_line(self, text: str = "") -> None:
-        self._append_text(self.audio_sync_summary_edit, f"{text}\n")
+        self._append_text(
+            self.audio_sync_summary_edit,
+            f"{text}\n",
+            self._audio_sync_summary_line_format(text),
+        )
+
+    def _audio_sync_summary_line_format(self, text: str) -> QTextCharFormat | None:
+        line = text.strip()
+        delay_prefixes = (
+            "offset=",
+            "Recommended correction:",
+            "Source offset vs reference:",
+            "Timeline shift to apply:",
+            "Measured timing:",
+            "Timeline shift:",
+            "Timeline shift baked into export:",
+            "Organizer will apply audio delays:",
+            "Organizer will apply subtitle delays:",
+        )
+        if not line.startswith(delay_prefixes):
+            return None
+
+        char_format = QTextCharFormat()
+        char_format.setForeground(QColor("#0369a1" if self.current_theme == "light" else "#7dd3fc"))
+        char_format.setFontWeight(QFont.DemiBold)
+        return char_format
 
     @Slot(str)
     def append_audio_sync_log(self, text: str) -> None:
@@ -2104,6 +2268,7 @@ class MainWindow(QMainWindow):
         self._progress_started_at = None
         self._progress_activity = activity
         self.progress_timer.stop()
+        self._taskbar_progress.clear()
         self._refresh_progress_label()
 
     def _reset_progress_session(self) -> None:
@@ -2117,6 +2282,7 @@ class MainWindow(QMainWindow):
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
         self.progress.setFormat("%p%")
+        self._taskbar_progress.clear()
         self._refresh_progress_label()
 
     @Slot()
@@ -2141,12 +2307,14 @@ class MainWindow(QMainWindow):
     def _set_progress_indeterminate(self) -> None:
         self.progress.setRange(0, 0)
         self.progress.setFormat("Working")
+        self._taskbar_progress.set_indeterminate()
 
     def _set_progress_value(self, maximum: int, value: int) -> None:
         maximum = max(1, maximum)
         self.progress.setRange(0, maximum)
         self.progress.setValue(max(0, min(value, maximum)))
         self.progress.setFormat("%p%")
+        self._taskbar_progress.set_value(maximum, value)
 
     def _load_default_args(self):
         config_defaults, config_path = organizer.config_defaults_from_argv([])
@@ -4009,19 +4177,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Invalid settings", str(error))
             return
 
-        self.summary_edit.clear()
-        self.log_edit.clear()
-        self._log_line_starts[id(self.log_edit)] = True
-        self.current_reports = []
-        self.tracks_table.setRowCount(0)
-        self._set_track_selection_controls_enabled(False)
-        self._update_track_details_for_selection()
-        self._refresh_file_list(running=True)
-        self._start_progress_session("Organizer", "Starting preview" if dry_run else "Starting run")
-        self._set_progress_indeterminate()
-        self.append_summary_line("Preview started." if dry_run else "Run started.")
-        self.statusBar().showMessage("Starting...")
-        self._set_running(True)
+        self._prepare_organizer_run_ui(dry_run)
 
         self.worker_thread = QThread(self)
         self.worker = OrganizerWorker(args, config_path)
@@ -4035,6 +4191,23 @@ class MainWindow(QMainWindow):
         self.worker.failed.connect(self.worker_thread.quit)
         self.worker_thread.finished.connect(self._thread_finished)
         self.worker_thread.start()
+
+    def _prepare_organizer_run_ui(self, dry_run: bool) -> None:
+        self.summary_edit.clear()
+        self.log_edit.clear()
+        self._log_line_starts[id(self.log_edit)] = True
+        preserve_preview = not dry_run and bool(self.current_reports) and self.tracks_table.rowCount() > 0
+        if not preserve_preview:
+            self.current_reports = []
+            self.tracks_table.setRowCount(0)
+            self._set_track_selection_controls_enabled(False)
+            self._update_track_details_for_selection()
+            self._refresh_file_list(running=True)
+        self._start_progress_session("Organizer", "Starting preview" if dry_run else "Starting run")
+        self._set_progress_indeterminate()
+        self.append_summary_line("Preview started." if dry_run else "Run started.")
+        self.statusBar().showMessage("Starting...")
+        self._set_running(True)
 
     def _start_makemkv(self, dry_run: bool) -> None:
         if self.makemkv_worker_thread and self.makemkv_worker_thread.isRunning():
@@ -5360,15 +5533,55 @@ class MainWindow(QMainWindow):
         include_track = item.checkState() == Qt.Checked
 
         tracks = self._current_track_rows()
-        row_to_restore = item.row()
         if 0 <= item.row() < len(tracks):
             track = tracks[item.row()]
             self._set_manual_track_include(track, include_track)
             track["drop"] = not include_track
-            self._populate_tracks_for_row(self.files_table.currentRow())
-            if 0 <= row_to_restore < self.tracks_table.rowCount():
-                self.tracks_table.selectRow(row_to_restore)
+            report = self._current_report()
+            if report is not None:
+                self._refresh_track_row_after_selection(item.row(), report, track, include_track)
         self._set_track_selection_controls_enabled(bool(tracks))
+
+    def _refresh_track_row_after_selection(
+        self,
+        row: int,
+        report: dict,
+        track: dict,
+        include_track: bool,
+    ) -> None:
+        base_drop = bool(track.get("_preview_base_drop", track.get("drop")))
+        plan_text, plan_tooltip, plan_categories = self._track_plan_details(
+            report,
+            track,
+            include_track,
+            base_drop,
+        )
+        track["_preview_plan_categories"] = plan_categories
+
+        include_item = self.tracks_table.item(row, self.TRACK_INCLUDE_COLUMN)
+        if include_item:
+            include_item.setToolTip("Included in the remux" if include_track else "Excluded from the remux")
+
+        flags_item = self.tracks_table.item(row, self.TRACK_FLAGS_COLUMN)
+        if flags_item:
+            flags_item.setText(self._track_flags_text(track))
+
+        plan_item = self.tracks_table.item(row, self.TRACK_PLAN_COLUMN)
+        if plan_item:
+            plan_item.setText(plan_text)
+            tooltip_lines = [plan_tooltip] if plan_tooltip else []
+            if track.get("duplicate_reason"):
+                tooltip_lines.append(str(track["duplicate_reason"]))
+            if track.get("probable_duplicate_reason"):
+                tooltip_lines.append(str(track["probable_duplicate_reason"]))
+            plan_item.setToolTip("\n".join(tooltip_lines))
+
+        for column in range(self.tracks_table.columnCount()):
+            row_item = self.tracks_table.item(row, column)
+            if row_item:
+                self._style_track_item(row_item, track, column)
+
+        self._update_track_details_for_selection()
 
     @Slot(list, int)
     def _track_rows_reordered(self, selected_rows: list[int], target_row: int) -> None:
@@ -5746,6 +5959,7 @@ class MainWindow(QMainWindow):
         self.audio_sync_apply_organizer_button.setEnabled(bool(self.audio_sync_result) and not running)
         self.audio_sync_export_button.setEnabled(bool(self.audio_sync_result) and not running)
         self._set_audio_sync_selection_controls_enabled(self.audio_sync_tracks_table.rowCount() > 0 and not running)
+        self.tracks_table.setEnabled(not running)
         self._set_track_selection_controls_enabled(self.tracks_table.rowCount() > 0 and not running)
 
     def _set_makemkv_running(self, running: bool) -> None:
@@ -5937,6 +6151,7 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
         self._write_profile_store()
+        self._taskbar_progress.close()
         event.accept()
 
 
@@ -5946,8 +6161,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{APP_NAME} {APP_VERSION}")
         return 0
 
+    set_windows_app_user_model_id()
     app = QApplication.instance() or QApplication(argv)
     window = MainWindow()
+    if "--taskbar-smoke-test" in argv:
+        window.show()
+        app.processEvents()
+        available = window._taskbar_progress.available
+        if available:
+            window._set_progress_value(100, 50)
+            app.processEvents()
+        window.close()
+        return 0 if available else 3
     if "--smoke-test" in argv:
         window.show()
         app.processEvents()

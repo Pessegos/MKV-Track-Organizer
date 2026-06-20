@@ -172,6 +172,63 @@ def test_track_table_shows_plan_and_manual_exclude(qapp):
         window.close()
 
 
+def test_run_keeps_existing_preview_tracks_visible(qapp):
+    audio = report_track(1, "audio", name="English - DTS-HD MA 5.1")
+    report = {
+        "status": "dry-run",
+        "input": str(Path("C:/tmp/source.mkv")),
+        "output": str(Path("C:/tmp/out.mkv")),
+        "message": "",
+        "command": [],
+        "tracks": {"video": [], "audio": [audio], "subtitles": []},
+        "plan_summary": {"counts": {}, "items": []},
+    }
+    window = gui.MainWindow()
+    try:
+        window._populate_results([report])
+
+        window._prepare_organizer_run_ui(dry_run=False)
+
+        assert window.current_reports == [report]
+        assert window.tracks_table.rowCount() == 1
+        assert window.tracks_table.item(0, window.TRACK_NAME_COLUMN).text() == "English - DTS-HD MA 5.1"
+        assert not window.tracks_table.isEnabled()
+        assert "Run started." in window.summary_edit.toPlainText()
+    finally:
+        window._set_running(False)
+        window._reset_progress_session()
+        window.close()
+
+
+def test_single_track_check_updates_only_its_row(qapp, monkeypatch):
+    tracks = [report_track(track_id, "audio", name=f"Audio {track_id}") for track_id in range(120)]
+    report = {
+        "status": "dry-run",
+        "input": str(Path("C:/tmp/source.mkv")),
+        "output": str(Path("C:/tmp/out.mkv")),
+        "message": "",
+        "command": [],
+        "tracks": {"video": [], "audio": tracks, "subtitles": []},
+        "plan_summary": {"counts": {}, "items": []},
+    }
+    window = gui.MainWindow()
+    repopulated_rows: list[int] = []
+    try:
+        window._populate_results([report])
+        monkeypatch.setattr(window, "_populate_tracks_for_row", repopulated_rows.append)
+
+        window.tracks_table.item(50, window.TRACK_INCLUDE_COLUMN).setCheckState(Qt.Unchecked)
+        qapp.processEvents()
+
+        assert repopulated_rows == []
+        assert window.tracks_table.rowCount() == 120
+        assert window.tracks_table.item(50, window.TRACK_PLAN_COLUMN).text() == "Exclude manually"
+        assert "Excluded" in window.tracks_table.item(50, window.TRACK_FLAGS_COLUMN).text()
+        assert window.manual_track_includes[organizer.track_selection_key(0, "audio", 50)] is False
+    finally:
+        window.close()
+
+
 def test_track_table_shows_regional_duplicate_warning_with_separate_drop_control(qapp):
     generic_dutch = report_track(
         10,
@@ -570,6 +627,58 @@ def test_audio_sync_summary_prioritizes_delay_reliability(qapp):
         assert "Warning:" not in summary
     finally:
         window.close()
+
+
+def test_audio_sync_delay_lines_use_highlight_format(qapp):
+    window = gui.MainWindow()
+    try:
+        delay_format = window._audio_sync_summary_line_format(
+            "Timeline shift to apply: +981.45 ms"
+        )
+
+        assert delay_format is not None
+        assert delay_format.foreground().color().name() == "#7dd3fc"
+        assert delay_format.fontWeight() == gui.QFont.DemiBold
+        assert window._audio_sync_summary_line_format("Delay reliability: High") is None
+    finally:
+        window.close()
+
+
+def test_progress_updates_windows_taskbar_state(qapp):
+    class FakeTaskbarProgress:
+        def __init__(self):
+            self.events: list[tuple] = []
+
+        def set_indeterminate(self):
+            self.events.append(("indeterminate",))
+
+        def set_value(self, maximum, value):
+            self.events.append(("value", maximum, value))
+
+        def clear(self):
+            self.events.append(("clear",))
+
+        def close(self):
+            self.events.append(("close",))
+
+    window = gui.MainWindow()
+    taskbar = FakeTaskbarProgress()
+    window._taskbar_progress = taskbar
+    try:
+        window._start_progress_session("Organizer", "Starting")
+        window._set_progress_indeterminate()
+        window._set_progress_value(100, 35)
+        window._finish_progress_session("Completed")
+
+        assert taskbar.events == [
+            ("indeterminate",),
+            ("value", 100, 35),
+            ("clear",),
+        ]
+    finally:
+        window.close()
+
+    assert taskbar.events[-1] == ("close",)
 
 
 def test_audio_sync_full_timeline_plan_uses_shared_duration(qapp):

@@ -37,8 +37,12 @@ def test_cli_reports_the_central_application_version(capsys) -> None:
 def test_packaging_uses_version_metadata_and_smoke_test() -> None:
     build_script = (ROOT / "build_exe.ps1").read_text(encoding="utf-8")
     workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    manifest = ROOT / "windows_app.manifest"
 
     assert "--version-file" in build_script
+    assert "--manifest" in build_script
+    assert manifest.is_file()
+    assert "8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a" in manifest.read_text(encoding="utf-8")
     assert "app_metadata" in build_script
     assert "smoke_test_exe.ps1" in workflow
     assert "actions/checkout@v5" in workflow

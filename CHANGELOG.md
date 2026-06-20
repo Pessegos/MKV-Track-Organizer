@@ -2,6 +2,14 @@
 
 All notable user-facing changes are recorded here.
 
+## 1.0.8 - 2026-06-20
+
+- Kept Preview tracks visible and read-only while Run processes the selected plan.
+- Made individual track check/uncheck updates modify only the affected row instead of rebuilding and resizing the full table.
+- Highlighted Audio Sync offset, correction, and timeline-shift lines in the Summary.
+- Mirrored determinate and indeterminate workflow progress on the Windows taskbar when supported by the active shell.
+- Added a modern Windows compatibility manifest and explicit application identity for packaged builds.
+
 ## 1.0.7 - 2026-06-20
 
 - Added generic recovery of `und` track languages from clear track names using MKVToolNix's complete language catalog.
