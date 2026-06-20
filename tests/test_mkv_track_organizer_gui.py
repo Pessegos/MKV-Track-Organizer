@@ -248,10 +248,23 @@ def test_track_table_shows_regional_duplicate_warning_with_separate_drop_control
         window.close()
 
 
-def test_progress_switches_between_indeterminate_and_real_values(qapp):
+def test_progress_uses_known_organizer_milestones_before_remux(qapp):
     window = gui.MainWindow()
     try:
         window._start_progress_session("Organizer", "Starting run")
+        window.handle_event(
+            "batch-progress",
+            "Analyzing language context",
+            "",
+            0,
+            2,
+            0,
+            0,
+        )
+
+        assert window.progress.minimum() == 0
+        assert window.progress.maximum() == 0
+
         window.handle_event(
             "file-progress",
             "movie.mkv: OCR PGS track 10 (1/4)",
@@ -263,7 +276,8 @@ def test_progress_switches_between_indeterminate_and_real_values(qapp):
         )
 
         assert window.progress.minimum() == 0
-        assert window.progress.maximum() == 0
+        assert window.progress.maximum() == window._progress_total_units(2, 100)
+        assert window.progress.value() == 30
         assert "Organizer | 1/2" in window.progress_label.text()
         assert "OCR PGS track 10" in window.progress_label.toolTip()
 
@@ -290,6 +304,29 @@ def test_progress_switches_between_indeterminate_and_real_values(qapp):
 
         assert not window.progress_timer.isActive()
         assert "Completed" in window.progress_label.text()
+    finally:
+        window.close()
+
+
+def test_audio_sync_progress_advances_by_completed_checkpoints(qapp):
+    window = gui.MainWindow()
+    try:
+        window._start_progress_session("Audio Sync", "Starting analysis")
+        window._set_progress_value(11, 0)
+
+        window.handle_audio_sync_log("Checkpoint 1/11 at 00:05:06.470")
+
+        assert window.progress.minimum() == 0
+        assert window.progress.maximum() == 11
+        assert window.progress.value() == 0
+        assert "Checkpoint 1/11" in window.progress_label.text()
+
+        window.handle_audio_sync_progress(1, 11)
+
+        assert window.progress.maximum() == 11
+        assert window.progress.value() == 1
+        assert window.progress.format() == "%p%"
+        assert "Checkpoint 1/11 complete" in window.progress_label.text()
     finally:
         window.close()
 
@@ -560,6 +597,8 @@ def test_audio_sync_full_timeline_plan_uses_shared_duration(qapp):
 def test_audio_sync_prioritizes_summary_space_and_keeps_probe_progress_idle(qapp):
     window = gui.MainWindow()
     try:
+        assert window.width() >= 1400
+        assert window.height() >= 900
         window.resize(1400, 900)
         window.show()
         qapp.processEvents()

@@ -2,6 +2,12 @@
 
 All notable user-facing changes are recorded here.
 
+## 1.0.6 - 2026-06-20
+
+- Increased the default desktop window from 1240x820 to 1400x900 so Audio Sync shows a useful number of tracks alongside its larger Summary.
+- Made Audio Sync progress determinate, advancing as each planned checkpoint completes.
+- Made Organizer progress use its existing analysis milestones before remux instead of hiding them behind an indeterminate animation.
+
 ## 1.0.5 - 2026-06-20
 
 - Rebalanced the Audio Sync workspace so the Summary and Raw log receive more vertical space than the export-track table.

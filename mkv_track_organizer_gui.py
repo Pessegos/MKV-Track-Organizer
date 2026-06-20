@@ -526,7 +526,7 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(APP_NAME)
-        self.resize(1240, 820)
+        self.resize(1400, 900)
         self.setAcceptDrops(True)
 
         self.worker_thread: QThread | None = None
@@ -4507,7 +4507,7 @@ class MainWindow(QMainWindow):
     def handle_event(self, kind: str, message: str, file_path: str, index: int, total: int, step: int, steps: int) -> None:
         if index or total:
             self._set_progress_context(index, total)
-        if kind in {"batch-progress", "file-progress"} and steps <= 0:
+        if kind in {"batch-progress", "file-progress"} and steps <= 0 and step <= 0:
             self._set_progress_indeterminate()
         elif total:
             steps = steps or 100
@@ -4669,7 +4669,6 @@ class MainWindow(QMainWindow):
         if message.startswith("Checkpoint") or message.startswith("  offset=") or message.startswith("  skipped="):
             self.append_audio_sync_summary_line(message)
         if message.startswith("Checkpoint"):
-            self._set_progress_indeterminate()
             self._set_progress_label(message)
         self.statusBar().showMessage(message[:160])
 
