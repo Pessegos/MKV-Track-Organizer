@@ -2,6 +2,12 @@
 
 All notable user-facing changes are recorded here.
 
+## 1.0.7 - 2026-06-20
+
+- Added generic recovery of `und` track languages from clear track names using MKVToolNix's complete language catalog.
+- Fixed Maori audio in Frozen, Encanto, and Moana being remuxed as unknown with an empty language name.
+- Kept name-based catalog inference conservative: valid language tags are not replaced by generic title matches.
+
 ## 1.0.6 - 2026-06-20
 
 - Increased the default desktop window from 1240x820 to 1400x900 so Audio Sync shows a useful number of tracks alongside its larger Summary.

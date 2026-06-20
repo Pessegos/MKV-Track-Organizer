@@ -128,6 +128,51 @@ def test_language_names_and_aliases() -> None:
     assert m.ietf_language_for_mkvpropedit("nl-BE") == "nl-BE"
 
 
+def test_undetermined_language_uses_generic_mkvtoolnix_name_catalog() -> None:
+    catalog = """English language name | ISO 639-3 code | ISO 639-2 code | ISO 639-1 code
+----------------------+----------------+----------------+---------------
+Maori                 | mao            | mao            | mi
+Welsh                 | cym            | wel            | cy
+Zulu                  | zul            | zul            | zu
+"""
+    assert m.register_mkvtoolnix_language_catalog(catalog) == 3
+
+    assert m.normalize_language_code("mi") == "mao"
+    assert m.normalize_language_code("cym") == "wel"
+    assert m.normalize_language_from_properties("und", "Maori") == "mao"
+    assert m.normalize_language_from_properties("und", "Welsh - E-AC-3 5.1") == "wel"
+    assert m.normalize_language_from_properties("und", "Audio Zulu Commentary") == "zul"
+    assert m.normalize_language_from_properties("fre", "Maori") == "fre"
+    assert m.language_display_name("mao") == "Maori"
+    assert m.ietf_language_for_mkvpropedit("mao") == "mi"
+
+
+def test_build_tracks_recovers_maori_audio_from_undetermined_tag() -> None:
+    metadata = {
+        "tracks": [
+            {
+                "id": 14,
+                "type": "audio",
+                "codec": "E-AC-3",
+                "properties": {
+                    "audio_channels": 6,
+                    "codec_id": "A_EAC3",
+                    "language": "und",
+                    "track_name": "Maori",
+                },
+            }
+        ]
+    }
+
+    track = m.build_tracks(metadata)[0]
+    m.apply_audio_names([track], "language-format")
+
+    assert track.language == "mao"
+    assert track.output_language == "mao"
+    assert track.language_name == "Maori"
+    assert track.suggested_name == "Maori - E-AC-3 5.1"
+
+
 def test_language_hints_fix_wrong_metadata_language() -> None:
     assert m.normalize_language_from_properties("or", "Français (Canadien)") == "fr-CA"
     assert m.normalize_language_from_properties("und", "Taiwan") == "zh-TW"

@@ -605,6 +605,13 @@ LANGUAGE_NAMES = {
 }
 
 
+_MKVTOOLNIX_LANGUAGE_CODES: dict[str, str] = {}
+_MKVTOOLNIX_LANGUAGE_NAMES: dict[str, str] = {}
+_MKVTOOLNIX_LANGUAGE_NAME_HINTS: dict[str, str] = {}
+_MKVTOOLNIX_IETF_CODES: dict[str, str] = {}
+_MKVTOOLNIX_LANGUAGE_CATALOG_PATHS: set[str] = set()
+
+
 LANGUAGE_SUBTAG_NAMES = {
     "US": "US",
     "GB": "British",
@@ -1676,12 +1683,18 @@ def normalize_language_code(raw_code: str | None) -> str:
     lower_code = code.lower()
     if lower_code in LANGUAGE_ALIASES:
         return LANGUAGE_ALIASES[lower_code]
+    if lower_code in _MKVTOOLNIX_LANGUAGE_CODES:
+        return _MKVTOOLNIX_LANGUAGE_CODES[lower_code]
 
     primary = lower_code.split("-", 1)[0]
     if "-" in lower_code and primary in LANGUAGE_ALIASES:
         return canonicalize_ietf_code(code)
+    if "-" in lower_code and primary in _MKVTOOLNIX_LANGUAGE_CODES:
+        return canonicalize_ietf_code(code)
     if primary in LANGUAGE_ALIASES:
         return LANGUAGE_ALIASES[primary]
+    if primary in _MKVTOOLNIX_LANGUAGE_CODES:
+        return _MKVTOOLNIX_LANGUAGE_CODES[primary]
 
     return code
 
@@ -1757,11 +1770,34 @@ def language_from_track_name_hint(track_name: str | None) -> str | None:
     return None
 
 
+def language_from_mkvtoolnix_name_hint(track_name: str | None) -> str | None:
+    text = language_hint_search_text(track_name)
+    if not text or not _MKVTOOLNIX_LANGUAGE_NAME_HINTS:
+        return None
+
+    words = text.split()
+    matches: list[tuple[int, int, str]] = []
+    for start in range(len(words)):
+        for end in range(start + 1, len(words) + 1):
+            hint = " ".join(words[start:end])
+            language_code = _MKVTOOLNIX_LANGUAGE_NAME_HINTS.get(hint)
+            if language_code:
+                matches.append((end - start, len(hint), language_code))
+
+    if not matches:
+        return None
+    return max(matches)[2]
+
+
 def normalize_language_from_properties(raw_code: str | None, track_name: str | None) -> str:
     language = normalize_language_code(raw_code)
     explicit_language = language_from_track_name_hint(track_name)
     if explicit_language:
         return explicit_language
+    if language in {"", "und", "zxx", "mul"}:
+        catalog_language = language_from_mkvtoolnix_name_hint(track_name)
+        if catalog_language:
+            return catalog_language
 
     base_code = base_language_code(language)
     hinted_variant = language_variant_from_hints(base_code, track_name)
@@ -1777,6 +1813,8 @@ def language_display_name(code: str) -> str:
     normalized = normalize_language_code(code)
     if normalized in LANGUAGE_NAMES:
         return LANGUAGE_NAMES[normalized]
+    if normalized.casefold() in _MKVTOOLNIX_LANGUAGE_NAMES:
+        return _MKVTOOLNIX_LANGUAGE_NAMES[normalized.casefold()]
 
     parts = canonicalize_ietf_code(normalized).split("-")
     if len(parts) > 1:
@@ -1812,7 +1850,12 @@ def ietf_language_for_mkvpropedit(code: str) -> str:
         return canonicalize_ietf_code(normalized)
 
     base_code = base_language_code(normalized)
-    return IETF_PRIMARY_BY_MKV_LANGUAGE.get(base_code, base_code or "und")
+    return (
+        IETF_PRIMARY_BY_MKV_LANGUAGE.get(base_code)
+        or _MKVTOOLNIX_IETF_CODES.get(base_code.casefold())
+        or base_code
+        or "und"
+    )
 
 
 def is_english(track: TrackInfo) -> bool:
@@ -2718,9 +2761,75 @@ def load_metadata(mkvmerge: Path, input_path: Path) -> dict[str, Any]:
         raise OrganizerError(f"Failed to read metadata with mkvmerge -J:\n{details}")
 
     try:
-        return json.loads(result.stdout)
+        metadata = json.loads(result.stdout)
     except json.JSONDecodeError as error:
         raise OrganizerError(f"mkvmerge -J returned invalid JSON: {error}") from error
+
+    load_mkvtoolnix_language_catalog(mkvmerge)
+    return metadata
+
+
+def parse_mkvtoolnix_language_catalog(output: str) -> list[tuple[str, str, str, str]]:
+    languages: list[tuple[str, str, str, str]] = []
+    for line in output.splitlines():
+        if "|" not in line:
+            continue
+        fields = [field.strip() for field in line.split("|")]
+        if len(fields) != 4:
+            continue
+        name, iso_639_3, iso_639_2, iso_639_1 = fields
+        if not name or name.startswith("-") or iso_639_3.casefold() == "iso 639-3 code":
+            continue
+        languages.append((name, iso_639_3, iso_639_2, iso_639_1))
+    return languages
+
+
+def register_mkvtoolnix_language_catalog(output: str) -> int:
+    entries = parse_mkvtoolnix_language_catalog(output)
+    hint_codes: dict[str, set[str]] = {}
+
+    for name, iso_639_3, iso_639_2, iso_639_1 in entries:
+        internal_code = iso_639_2 or iso_639_3 or iso_639_1
+        if not internal_code:
+            continue
+
+        internal_code = internal_code.strip()
+        for code in (internal_code, iso_639_3, iso_639_2, iso_639_1):
+            if code:
+                _MKVTOOLNIX_LANGUAGE_CODES[code.casefold()] = internal_code
+
+        _MKVTOOLNIX_LANGUAGE_NAMES[internal_code.casefold()] = name
+        _MKVTOOLNIX_IETF_CODES[internal_code.casefold()] = iso_639_1 or iso_639_3 or internal_code
+
+        normalized_name = language_hint_search_text(name)
+        if len(normalized_name) >= 3 and internal_code not in {"und", "zxx", "mul", "mis"}:
+            hint_codes.setdefault(normalized_name, set()).add(internal_code)
+
+    for hint, codes in hint_codes.items():
+        if len(codes) == 1:
+            _MKVTOOLNIX_LANGUAGE_NAME_HINTS[hint] = next(iter(codes))
+
+    return len(entries)
+
+
+def load_mkvtoolnix_language_catalog(mkvmerge: Path) -> None:
+    catalog_key = str(Path(mkvmerge).resolve()).casefold()
+    if catalog_key in _MKVTOOLNIX_LANGUAGE_CATALOG_PATHS:
+        return
+
+    command = command_with_mkvtoolnix_ui_language([str(mkvmerge), "--list-languages"])
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if result.returncode != 0:
+        return
+
+    if register_mkvtoolnix_language_catalog(result.stdout):
+        _MKVTOOLNIX_LANGUAGE_CATALOG_PATHS.add(catalog_key)
 
 
 def build_tracks(metadata: dict[str, Any], source_index: int = 0, source_path: Path | None = None) -> list[TrackInfo]:
