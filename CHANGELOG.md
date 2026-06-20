@@ -2,6 +2,10 @@
 
 All notable user-facing changes are recorded here.
 
+## 1.0.4 - 2026-06-20
+
+- Reduced the Audio Sync Plan field to match the height and padding of the surrounding comparison controls.
+
 ## 1.0.3 - 2026-06-20
 
 - Made the Audio Sync calculated Plan a taller, padded information panel that remains readable when text wraps.
