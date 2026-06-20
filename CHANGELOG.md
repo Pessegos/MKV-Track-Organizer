@@ -2,6 +2,10 @@
 
 All notable user-facing changes are recorded here.
 
+## 1.0.3 - 2026-06-20
+
+- Made the Audio Sync calculated Plan a taller, padded information panel that remains readable when text wraps.
+
 ## 1.0.2 - 2026-06-20
 
 - Recalibrated Audio Sync reliability around practical checkpoint agreement: dense full-timeline results within 10 ms can now be high reliability.

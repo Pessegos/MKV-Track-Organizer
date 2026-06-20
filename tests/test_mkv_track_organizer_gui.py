@@ -550,5 +550,8 @@ def test_audio_sync_full_timeline_plan_uses_shared_duration(qapp):
         assert plan.last_checkpoint_seconds < 5200.0
         assert "shared duration" in window.audio_sync_analysis_plan_label.text()
         assert "9 checkpoints" in window.audio_sync_analysis_plan_label.text()
+        assert window.audio_sync_analysis_plan_label.objectName() == "audioSyncPlan"
+        assert window.audio_sync_analysis_plan_label.minimumHeight() >= 48
+        assert window.audio_sync_analysis_plan_label.wordWrap()
     finally:
         window.close()

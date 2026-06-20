@@ -809,6 +809,9 @@ class MainWindow(QMainWindow):
         for label, mode in self.AUDIO_SYNC_ANALYSIS_PRESETS:
             self.audio_sync_analysis_combo.addItem(label, mode)
         self.audio_sync_analysis_plan_label = QLabel("Duration will be detected after loading both files.")
+        self.audio_sync_analysis_plan_label.setObjectName("audioSyncPlan")
+        self.audio_sync_analysis_plan_label.setMinimumHeight(48)
+        self.audio_sync_analysis_plan_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.audio_sync_analysis_plan_label.setWordWrap(True)
         self.audio_sync_reference_duration_seconds: float | None = None
         self.audio_sync_source_duration_seconds: float | None = None
@@ -1851,6 +1854,13 @@ class MainWindow(QMainWindow):
             QLabel#trackStatusLabel {{
                 color: {palette['muted']};
                 padding: 0 4px;
+            }}
+            QLabel#audioSyncPlan {{
+                background: {palette['field']};
+                color: {palette['text']};
+                border: 1px solid {palette['border']};
+                border-radius: 5px;
+                padding: 7px 9px;
             }}
             QTabWidget::pane {{
                 border: 1px solid {palette['border']};
