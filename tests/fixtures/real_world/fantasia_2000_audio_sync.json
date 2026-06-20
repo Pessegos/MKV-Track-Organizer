@@ -1,0 +1,28 @@
+{
+  "case": "Fantasia 2000 sub-frame checkpoint variation",
+  "settings": {
+    "start_seconds": 600.0,
+    "spacing_seconds": 600.0,
+    "duration_seconds": 120.0,
+    "max_offset_seconds": 5.0,
+    "requested_checkpoints": 8
+  },
+  "estimates": [
+    {"offset": -0.83780, "coarse": -0.84, "confidence": 0.40},
+    {"offset": -0.83713, "coarse": -0.84, "confidence": 0.50},
+    {"offset": -0.83779, "coarse": -0.84, "confidence": 0.45},
+    {"offset": -0.83288, "coarse": -0.83, "confidence": 0.50},
+    {"offset": -0.83288, "coarse": -0.83, "confidence": 0.40},
+    {"offset": -0.83205, "coarse": -0.83, "confidence": 0.48},
+    {"offset": -0.83170, "coarse": -0.83, "confidence": 0.49}
+  ],
+  "expected": {
+    "offset_ms": -833,
+    "timeline_shift_ms": 833,
+    "consistency": "excellent",
+    "delay_reliability": "high",
+    "used_checkpoints": 7,
+    "ignored_checkpoints": 0,
+    "unavailable_checkpoints": 1
+  }
+}

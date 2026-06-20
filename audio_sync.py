@@ -46,6 +46,27 @@ class MediaStream:
 
 
 @dataclass(frozen=True)
+class MediaProbe:
+    streams: tuple[MediaStream, ...]
+    duration_seconds: float | None = None
+
+
+@dataclass(frozen=True)
+class AdaptiveAnalysisPlan:
+    mode: str
+    media_duration_seconds: float | None
+    start_seconds: float
+    duration_seconds: float
+    checkpoints: int
+    checkpoint_spacing_seconds: float
+    max_offset_seconds: float = 5.0
+
+    @property
+    def last_checkpoint_seconds(self) -> float:
+        return self.start_seconds + max(0, self.checkpoints - 1) * self.checkpoint_spacing_seconds
+
+
+@dataclass(frozen=True)
 class OffsetEstimate:
     checkpoint_seconds: float
     offset_seconds: float
@@ -160,7 +181,7 @@ def resolve_binary(name: str, explicit_path: Path | None = None) -> Path:
     raise AudioSyncError(f"Missing required executable: {name}")
 
 
-def probe_media_streams(path: Path, ffprobe_path: Path | None = None) -> list[MediaStream]:
+def probe_media(path: Path, ffprobe_path: Path | None = None) -> MediaProbe:
     media_path = Path(path).expanduser()
     if not media_path.is_file():
         raise AudioSyncError(f"Media file not found: {media_path}")
@@ -171,7 +192,7 @@ def probe_media_streams(path: Path, ffprobe_path: Path | None = None) -> list[Me
         "-v",
         "error",
         "-show_entries",
-        "stream=index,codec_type,codec_name,channels:stream_tags=language,title",
+        "format=duration:stream=index,codec_type,codec_name,channels:stream_tags=language,title",
         "-of",
         "json",
         str(media_path),
@@ -185,7 +206,18 @@ def probe_media_streams(path: Path, ffprobe_path: Path | None = None) -> list[Me
         payload = json.loads(result.stdout or "{}")
     except json.JSONDecodeError as error:
         raise AudioSyncError(f"ffprobe returned invalid JSON for {media_path}: {error}") from error
-    return parse_ffprobe_streams(payload)
+    duration_value = (payload.get("format") or {}).get("duration")
+    try:
+        duration_seconds = float(duration_value)
+        if not math.isfinite(duration_seconds) or duration_seconds <= 0:
+            duration_seconds = None
+    except (TypeError, ValueError):
+        duration_seconds = None
+    return MediaProbe(tuple(parse_ffprobe_streams(payload)), duration_seconds)
+
+
+def probe_media_streams(path: Path, ffprobe_path: Path | None = None) -> list[MediaStream]:
+    return list(probe_media(path, ffprobe_path).streams)
 
 
 def parse_ffprobe_streams(payload: dict) -> list[MediaStream]:
@@ -213,6 +245,59 @@ def parse_ffprobe_streams(payload: dict) -> list[MediaStream]:
         )
 
     return streams
+
+
+def adaptive_analysis_plan(
+    media_duration_seconds: float | None,
+    mode: str = "full",
+    max_offset_seconds: float = 5.0,
+) -> AdaptiveAnalysisPlan:
+    mode = str(mode or "full").strip().lower()
+    if mode not in {"quick", "balanced", "full"}:
+        raise AudioSyncError(f"Unknown analysis preset: {mode}")
+
+    if not media_duration_seconds or not math.isfinite(media_duration_seconds) or media_duration_seconds <= 0:
+        fallback = {
+            "quick": (600.0, 60.0, 3, 900.0),
+            "balanced": (600.0, 90.0, 5, 750.0),
+            "full": (300.0, 120.0, 8, 600.0),
+        }[mode]
+        return AdaptiveAnalysisPlan(mode, None, *fallback, max_offset_seconds)
+
+    media_duration = float(media_duration_seconds)
+    target_window = {"quick": 60.0, "balanced": 90.0, "full": 120.0}[mode]
+    margin_fraction = {"quick": 0.15, "balanced": 0.10, "full": 0.05}[mode]
+    desired_checkpoints = {
+        "quick": 3,
+        "balanced": max(4, min(6, math.ceil(media_duration / 1200.0))),
+        "full": max(6, min(12, math.ceil(media_duration / 600.0))),
+    }[mode]
+
+    window_seconds = min(target_window, max(20.0, media_duration * 0.20))
+    start_seconds = min(600.0, max(0.0, media_duration * margin_fraction))
+    end_margin_seconds = max(15.0, media_duration * margin_fraction)
+    padding_seconds = max_offset_seconds + 1.0
+    last_checkpoint = max(
+        start_seconds,
+        media_duration - window_seconds - padding_seconds - end_margin_seconds,
+    )
+    available_span = max(0.0, last_checkpoint - start_seconds)
+    minimum_spacing = max(60.0, window_seconds * 1.25)
+    independent_capacity = max(1, int(available_span // minimum_spacing) + 1)
+    checkpoints = min(desired_checkpoints, independent_capacity)
+    if available_span > 0 and desired_checkpoints >= 2:
+        checkpoints = max(2, checkpoints)
+    spacing_seconds = available_span / (checkpoints - 1) if checkpoints > 1 else 0.0
+
+    return AdaptiveAnalysisPlan(
+        mode=mode,
+        media_duration_seconds=media_duration,
+        start_seconds=start_seconds,
+        duration_seconds=window_seconds,
+        checkpoints=checkpoints,
+        checkpoint_spacing_seconds=spacing_seconds,
+        max_offset_seconds=max_offset_seconds,
+    )
 
 
 def estimate_offset(
@@ -256,8 +341,7 @@ def estimate_offset(
             event_callback,
             (
                 f"  offset={format_delay_ms(estimate.offset_seconds)} "
-                f"(coarse={estimate.coarse_seconds * 1000:+.0f} ms, "
-                f"match strength={confidence_label(estimate.confidence)})"
+                f"(coarse={estimate.coarse_seconds * 1000:+.0f} ms)"
             ),
         )
         if progress_callback:
@@ -290,10 +374,6 @@ def estimate_offset(
         len(selected_estimates),
         ignored_checkpoints,
     )
-    notes = result_notes(
-        reliability=reliability,
-        average_confidence=average_confidence,
-    )
     warnings = result_warnings(
         selected_estimates=selected_estimates,
         ignored_checkpoints=ignored_checkpoints,
@@ -323,7 +403,7 @@ def estimate_offset(
         delay_reliability=reliability,
         reliability_reason=reliability_reason,
         attempted_checkpoints=len(checkpoints),
-        notes=notes,
+        notes=(),
         warnings=warnings,
     )
 
@@ -655,9 +735,9 @@ def delay_reliability_label(
 
     total = attempted_checkpoints or (checkpoints + ignored_checkpoints)
     coverage = checkpoints / max(1, total)
-    if checkpoints >= 4 and coverage >= 0.5 and spread_seconds <= 0.005 and average_confidence >= 1.0:
+    if checkpoints >= 4 and coverage >= 0.5 and spread_seconds <= 0.010 and average_confidence >= 0.25:
         return "high"
-    if checkpoints >= 3 and coverage >= 0.4 and spread_seconds <= 0.020 and average_confidence >= 0.75:
+    if checkpoints >= 3 and coverage >= 0.4 and spread_seconds <= 0.025 and average_confidence >= 0.15:
         return "medium"
     if checkpoints >= 2 and spread_seconds <= 0.020 and average_confidence >= 4.0:
         return "medium"
@@ -672,7 +752,7 @@ def delay_reliability_reason(
 ) -> str:
     spread_ms = spread_seconds * 1000
     if reliability == "high":
-        reason = f"{checkpoints} independent checkpoints agree within +/-{spread_ms:.2f} ms"
+        reason = f"{checkpoints} timeline checkpoints agree within +/-{spread_ms:.2f} ms"
     elif reliability == "medium":
         reason = f"{checkpoints} checkpoints form a plausible cluster within +/-{spread_ms:.2f} ms"
     elif checkpoints < 2:
@@ -682,21 +762,6 @@ def delay_reliability_reason(
     if ignored_checkpoints:
         reason += f" after ignoring {ignored_checkpoints} outlier(s)"
     return reason
-
-
-def result_notes(
-    *,
-    reliability: str,
-    average_confidence: float,
-) -> tuple[str, ...]:
-    notes: list[str] = []
-    if average_confidence < 2.0 and reliability in {"high", "medium"}:
-        notes.append(
-            "individual correlation peaks are weak, but repeated checkpoints independently agree on the delay"
-        )
-    elif average_confidence < 4.0 and reliability == "high":
-        notes.append("individual correlation peaks are modest, but checkpoint consensus is strong")
-    return tuple(notes)
 
 
 def result_warnings(

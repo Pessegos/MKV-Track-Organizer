@@ -1,0 +1,29 @@
+{
+  "case": "Hunchback of Notre Dame tight full-timeline consensus",
+  "settings": {
+    "start_seconds": 600.0,
+    "spacing_seconds": 600.0,
+    "duration_seconds": 120.0,
+    "max_offset_seconds": 5.0,
+    "requested_checkpoints": 8
+  },
+  "estimates": [
+    {"offset": -0.91645, "coarse": -0.92, "confidence": 0.70},
+    {"offset": -0.91662, "coarse": -0.92, "confidence": 0.80},
+    {"offset": -0.91613, "coarse": -0.92, "confidence": 0.70},
+    {"offset": -0.91613, "coarse": -0.92, "confidence": 0.80},
+    {"offset": -0.91580, "coarse": -0.92, "confidence": 0.70},
+    {"offset": -0.91612, "coarse": -0.92, "confidence": 0.80},
+    {"offset": -0.91663, "coarse": -0.92, "confidence": 0.80},
+    {"offset": -0.91613, "coarse": -0.92, "confidence": 0.78}
+  ],
+  "expected": {
+    "offset_ms": -916,
+    "timeline_shift_ms": 916,
+    "consistency": "excellent",
+    "delay_reliability": "high",
+    "used_checkpoints": 8,
+    "ignored_checkpoints": 0,
+    "unavailable_checkpoints": 0
+  }
+}

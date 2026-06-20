@@ -517,11 +517,8 @@ def test_audio_sync_summary_prioritizes_delay_reliability(qapp):
             used_checkpoints=6,
             confidence_summary="very low",
             delay_reliability="high",
-            reliability_reason="6 independent checkpoints agree within +/-0.34 ms",
+            reliability_reason="6 timeline checkpoints agree within +/-0.34 ms",
             attempted_checkpoints=8,
-            notes=(
-                "individual correlation peaks are weak, but repeated checkpoints independently agree on the delay",
-            ),
         )
 
         window.handle_audio_sync_completed(result)
@@ -531,7 +528,27 @@ def test_audio_sync_summary_prioritizes_delay_reliability(qapp):
         assert "Delay reliability: High" in summary
         assert "Checkpoint coverage: 6 used / 8 requested" in summary
         assert "Unavailable checkpoints: 2" in summary
-        assert "Signal match strength: Very low (1.50 average; diagnostic only)" in summary
+        assert "Signal match strength" not in summary
+        assert "match strength" not in summary
         assert "Warning:" not in summary
+    finally:
+        window.close()
+
+
+def test_audio_sync_full_timeline_plan_uses_shared_duration(qapp):
+    window = gui.MainWindow()
+    try:
+        window.audio_sync_reference_duration_seconds = 5400.0
+        window.audio_sync_source_duration_seconds = 5200.0
+        window._refresh_audio_sync_analysis_plan()
+
+        plan = window._current_audio_sync_analysis_plan()
+
+        assert plan.mode == "full"
+        assert plan.media_duration_seconds == 5200.0
+        assert plan.checkpoints == 9
+        assert plan.last_checkpoint_seconds < 5200.0
+        assert "shared duration" in window.audio_sync_analysis_plan_label.text()
+        assert "9 checkpoints" in window.audio_sync_analysis_plan_label.text()
     finally:
         window.close()

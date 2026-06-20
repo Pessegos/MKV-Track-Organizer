@@ -103,7 +103,12 @@ def test_mulan_merged_sources_flag_regional_pairs_as_probable_only() -> None:
 
 @pytest.mark.parametrize(
     "fixture_name",
-    ["ratatouille_audio_sync.json", "hercules_audio_sync.json"],
+    [
+        "ratatouille_audio_sync.json",
+        "hercules_audio_sync.json",
+        "hunchback_audio_sync.json",
+        "fantasia_2000_audio_sync.json",
+    ],
 )
 def test_real_world_audio_sync_keeps_stable_offsets(
     fixture_name: str,
@@ -149,6 +154,8 @@ def test_real_world_audio_sync_keeps_stable_offsets(
     assert result.used_checkpoints == expected["used_checkpoints"]
     assert result.ignored_checkpoints == expected["ignored_checkpoints"]
     assert result.unavailable_checkpoints == expected.get("unavailable_checkpoints", 0)
+    if expected.get("delay_reliability", "high") == "high":
+        assert not result.warnings
 
 
 def test_bambi_mux_plan_preserves_roles_order_delays_and_commentary_name(tmp_path: Path) -> None:

@@ -1,6 +1,6 @@
 # MKV Track Organizer
 
-MKV Track Organizer 1.0.1 is a Windows desktop and command-line tool for cleaning, inspecting, synchronizing, and remuxing Matroska tracks with MKVToolNix. It can analyze audio, video, and subtitle tracks, rename them consistently, detect common subtitle roles, and write organized outputs without touching the original files by default.
+MKV Track Organizer 1.0.2 is a Windows desktop and command-line tool for cleaning, inspecting, synchronizing, and remuxing Matroska tracks with MKVToolNix. It can analyze audio, video, and subtitle tracks, rename them consistently, detect common subtitle roles, and write organized outputs without touching the original files by default.
 
 It includes an Organizer, reusable profiles, a MakeMKV batch workflow, and an Audio Sync helper for fixed-delay corrections.
 
@@ -114,7 +114,7 @@ The **Config** tab controls application-wide defaults, independently from the cu
 
 The **MakeMKV Batch** tab can convert one disc backup folder or a folder containing multiple disc backup folders. Its selection modes cover English audio, all audio, all tracks, or a custom MakeMKV selection string. Enable **Run Organizer after MakeMKV** to feed the MakeMKV output folder into the Organizer tab settings automatically. MakeMKV runs in robot mode so progress is used when the console output exposes it.
 
-The **Audio Sync** tab compares one reference audio stream against one source audio stream using FFmpeg-decoded checkpoints. Positive source offset means the source is late; the displayed timeline shift is the inverse delay to apply to the source tracks. Duration and spacing use safe presets with a bounded custom option. After analysis, select source audio tracks and either use **Apply delay in Organizer** to fill the Organizer input and audio delay fields for a remux, or use **Export shifted .mka** to create a separate audio-only file whose selected tracks are already shifted.
+The **Audio Sync** tab compares one reference audio stream against one source audio stream using FFmpeg-decoded checkpoints. Positive source offset means the source is late; the displayed timeline shift is the inverse delay to apply to the source tracks. The default **Full timeline** preset detects the shorter media duration and distributes checkpoints from near the beginning to near the end; Balanced, Quick, and Custom modes remain available. After analysis, select source audio tracks and either use **Apply delay in Organizer** to fill the Organizer input and audio delay fields for a remux, or use **Export shifted .mka** to create a separate audio-only file whose selected tracks are already shifted.
 
 ## Command Line
 

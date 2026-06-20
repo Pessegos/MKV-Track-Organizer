@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -51,6 +53,56 @@ def test_parse_ffprobe_streams_assigns_relative_indexes() -> None:
     assert "DTS-HD MA 5.1" in streams[0].label
 
 
+def test_probe_media_includes_duration(monkeypatch, tmp_path: Path) -> None:
+    media_path = tmp_path / "movie.mkv"
+    media_path.touch()
+    payload = {
+        "format": {"duration": "4800.250"},
+        "streams": [
+            {
+                "index": 1,
+                "codec_type": "audio",
+                "codec_name": "eac3",
+                "channels": 6,
+                "tags": {"language": "eng"},
+            }
+        ],
+    }
+    monkeypatch.setattr(sync, "resolve_binary", lambda _name, _path=None: Path("ffprobe"))
+    monkeypatch.setattr(
+        sync.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, json.dumps(payload), ""),
+    )
+
+    probe = sync.probe_media(media_path)
+
+    assert probe.duration_seconds == 4800.25
+    assert len(probe.streams) == 1
+    assert probe.streams[0].language == "eng"
+
+
+def test_full_timeline_plan_uses_detected_duration_without_overshooting() -> None:
+    plan = sync.adaptive_analysis_plan(4800.0, "full")
+
+    assert plan.checkpoints == 8
+    assert plan.start_seconds == 240.0
+    assert plan.last_checkpoint_seconds < 4800.0
+    assert plan.last_checkpoint_seconds + plan.duration_seconds + plan.max_offset_seconds < 4800.0
+    assert 590.0 < plan.checkpoint_spacing_seconds < 610.0
+
+
+def test_adaptive_presets_scale_the_same_media_by_requested_depth() -> None:
+    quick = sync.adaptive_analysis_plan(5400.0, "quick")
+    balanced = sync.adaptive_analysis_plan(5400.0, "balanced")
+    full = sync.adaptive_analysis_plan(5400.0, "full")
+
+    assert quick.checkpoints == 3
+    assert balanced.checkpoints == 5
+    assert full.checkpoints == 9
+    assert quick.duration_seconds < balanced.duration_seconds < full.duration_seconds
+
+
 def test_consistency_labels() -> None:
     assert sync.consistency_label(0.003, 4) == "excellent"
     assert sync.consistency_label(0.015, 4) == "good"
@@ -87,6 +139,7 @@ def test_estimate_offset_skips_checkpoints_with_no_decoded_audio(monkeypatch, tm
     assert result.median_offset_seconds == 0.125
     assert len(result.estimates) == 1
     assert any("skipped=no audio decoded" in line for line in logs)
+    assert all("match strength" not in line for line in logs)
     assert progress == [(1, 3), (2, 3), (3, 3)]
 
 
@@ -135,7 +188,6 @@ def test_estimate_offset_uses_checkpoint_consensus_when_match_strength_is_weak(m
     assert result.confidence_summary == "very low"
     assert result.delay_reliability == "medium"
     assert result.verdict == "likely fixed delay; spot-check recommended"
-    assert any("independently agree" in note for note in result.notes)
     assert not result.warnings
 
 

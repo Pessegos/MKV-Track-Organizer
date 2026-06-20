@@ -23,9 +23,9 @@ Do not cancel merely because one percentage remains visible for several minutes.
 
 - Select the same language and equivalent mix in Reference and Source.
 - Avoid commentary, audio description, different edits/cuts, and logo-heavy opening sections.
-- Use more checkpoints or wider spacing for long films.
-- **Signal match strength** describes each correlation peak in isolation. It is diagnostic and can remain low across different encodes or mixes.
-- **Delay reliability** is the practical conclusion. It combines agreement across independent checkpoints, coverage, outliers, and signal match strength. Several weak peaks that repeatedly converge on the same delay can still produce high reliability.
+- Use **Full timeline - Recommended** for normal films. Audio Sync detects the shared duration and distributes checkpoints automatically without running beyond the shorter file.
+- Use Balanced or Quick only when speed matters more than timeline coverage. Custom exposes manual start, window, checkpoint, spacing, and maximum-offset values for unusual sources.
+- **Delay reliability** is the practical conclusion. It combines agreement across timeline checkpoints, coverage, outliers, and internal signal evidence. Small variations of a few milliseconds across different encodes can still produce high reliability.
 - Audio Sync corrects one fixed offset; it cannot repair gradual drift or different edits.
 
 The displayed timeline shift is the delay applied to the source. Exported shifted MKA tracks already contain that correction. Organizer remuxes audio and subtitle delays with `mkvmerge`; Matroska tags do not store or control those delays.

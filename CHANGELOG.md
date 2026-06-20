@@ -2,6 +2,15 @@
 
 All notable user-facing changes are recorded here.
 
+## 1.0.2 - 2026-06-20
+
+- Recalibrated Audio Sync reliability around practical checkpoint agreement: dense full-timeline results within 10 ms can now be high reliability.
+- Removed the internal correlation-peak strength from normal checkpoint and result summaries.
+- Replaced separate Start, Duration, Checkpoints, Spacing, and Max offset controls with one adaptive Analysis preset.
+- Added automatic duration probing and a recommended Full timeline plan that distributes checkpoints across the shorter input without overshooting it.
+- Kept Balanced, Quick, and a consolidated Custom dialog for unusual sources.
+- Added real-world Hunchback of Notre Dame and Fantasia 2000 regressions.
+
 ## 1.0.1 - 2026-06-19
 
 - Reworked Audio Sync conclusions to separate individual signal match strength from practical delay reliability.

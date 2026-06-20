@@ -18,7 +18,11 @@ try:
         QAbstractItemView,
         QCheckBox,
         QComboBox,
+        QDialog,
+        QDialogButtonBox,
+        QDoubleSpinBox,
         QFileDialog,
+        QFormLayout,
         QGridLayout,
         QGroupBox,
         QHBoxLayout,
@@ -357,9 +361,9 @@ class AudioSyncProbeWorker(QObject):
     @Slot()
     def run(self) -> None:
         try:
-            reference_streams = audio_sync.probe_media_streams(self.reference_path)
-            source_streams = audio_sync.probe_media_streams(self.source_path)
-            self.completed.emit(self.reference_path, self.source_path, reference_streams, source_streams)
+            reference_probe = audio_sync.probe_media(self.reference_path)
+            source_probe = audio_sync.probe_media(self.source_path)
+            self.completed.emit(self.reference_path, self.source_path, reference_probe, source_probe)
         except Exception:
             self.failed.emit(traceback.format_exc())
 
@@ -422,26 +426,10 @@ class MainWindow(QMainWindow):
     AUDIO_SYNC_COLUMNS = ["Export", "Type", "Index", "Codec", "Language", "Title"]
     AUDIO_SYNC_MEDIA_SUFFIXES = {".mkv", ".mka", ".mp4", ".mov", ".avi", ".flac", ".wav", ".aac", ".ac3", ".dts"}
     AUDIO_SYNC_CUSTOM_PRESET = "custom"
-    AUDIO_SYNC_DURATION_PRESETS = (
-        ("60 s - Fast", 60.0),
-        ("120 s - Balanced", 120.0),
-        ("180 s - Robust", 180.0),
-        ("300 s - Very robust / slow", 300.0),
-        ("Custom...", AUDIO_SYNC_CUSTOM_PRESET),
-    )
-    AUDIO_SYNC_SPACING_PRESETS = (
-        ("5 min - Close", 300.0),
-        ("10 min", 600.0),
-        ("15 min - Balanced", 900.0),
-        ("30 min - Wide", 1800.0),
-        ("Custom...", AUDIO_SYNC_CUSTOM_PRESET),
-    )
-    AUDIO_SYNC_CHECKPOINT_PRESETS = (
-        ("1 - Fast check", 1),
-        ("2 - Basic", 2),
-        ("4 - Balanced", 4),
-        ("6 - Robust", 6),
-        ("8 - Slow", 8),
+    AUDIO_SYNC_ANALYSIS_PRESETS = (
+        ("Full timeline - Recommended", "full"),
+        ("Balanced", "balanced"),
+        ("Quick check", "quick"),
         ("Custom...", AUDIO_SYNC_CUSTOM_PRESET),
     )
     AUDIO_SYNC_SAMPLE_RATE = 16_000
@@ -817,27 +805,20 @@ class MainWindow(QMainWindow):
         self.audio_sync_output_edit.setPlaceholderText("Default: synced next to the source")
         self.audio_sync_ref_combo = QComboBox()
         self.audio_sync_source_combo = QComboBox()
-        self.audio_sync_start_edit = QLineEdit("00:10:00")
-        self.audio_sync_duration_combo = QComboBox()
-        for label, seconds in self.AUDIO_SYNC_DURATION_PRESETS:
-            self.audio_sync_duration_combo.addItem(label, seconds)
-        self.audio_sync_duration_combo.setCurrentIndex(1)
-        self.audio_sync_spacing_combo = QComboBox()
-        for label, seconds in self.AUDIO_SYNC_SPACING_PRESETS:
-            self.audio_sync_spacing_combo.addItem(label, seconds)
-        self.audio_sync_spacing_combo.setCurrentIndex(2)
+        self.audio_sync_analysis_combo = QComboBox()
+        for label, mode in self.AUDIO_SYNC_ANALYSIS_PRESETS:
+            self.audio_sync_analysis_combo.addItem(label, mode)
+        self.audio_sync_analysis_plan_label = QLabel("Duration will be detected after loading both files.")
+        self.audio_sync_analysis_plan_label.setWordWrap(True)
+        self.audio_sync_reference_duration_seconds: float | None = None
+        self.audio_sync_source_duration_seconds: float | None = None
         self.audio_sync_custom_duration_seconds = 120.0
         self.audio_sync_custom_spacing_seconds = 900.0
-        self.audio_sync_previous_duration_index = self.audio_sync_duration_combo.currentIndex()
-        self.audio_sync_previous_spacing_index = self.audio_sync_spacing_combo.currentIndex()
+        self.audio_sync_custom_start_seconds = 600.0
+        self.audio_sync_custom_max_offset_seconds = 5.0
+        self.audio_sync_custom_checkpoints = 8
+        self.audio_sync_previous_analysis_index = self.audio_sync_analysis_combo.currentIndex()
         self._audio_sync_preset_prompt_active = False
-        self.audio_sync_max_offset_edit = QLineEdit("5")
-        self.audio_sync_checkpoints_combo = QComboBox()
-        for label, checkpoints in self.AUDIO_SYNC_CHECKPOINT_PRESETS:
-            self.audio_sync_checkpoints_combo.addItem(label, checkpoints)
-        self.audio_sync_checkpoints_combo.setCurrentIndex(2)
-        self.audio_sync_custom_checkpoints = 4
-        self.audio_sync_previous_checkpoints_index = self.audio_sync_checkpoints_combo.currentIndex()
         self.audio_sync_check_button = QPushButton("Check tools")
         self.audio_sync_analyze_button = QPushButton("Analyze")
         self.audio_sync_apply_organizer_button = QPushButton("Apply delay in Organizer")
@@ -1445,39 +1426,28 @@ class MainWindow(QMainWindow):
         compare_grid.setColumnStretch(3, 1)
         self.audio_sync_ref_combo.setToolTip("Reference audio stream, counted among audio streams")
         self.audio_sync_source_combo.setToolTip("Source audio stream to compare against the reference")
-        self.audio_sync_start_edit.setToolTip("First timestamp used for analysis. Skip intros, logos, or long quiet sections when possible.")
-        self.audio_sync_duration_combo.setToolTip("Longer windows are slower but more reliable. 120 seconds is a balanced default.")
-        self.audio_sync_checkpoints_combo.setToolTip("Number of timeline positions checked. More checkpoints are slower but help confirm a fixed delay.")
-        self.audio_sync_spacing_combo.setToolTip("Distance between checkpoints. Wider spacing checks whether the delay stays stable.")
-        self.audio_sync_max_offset_edit.setToolTip("Largest delay to search for in either direction. Increase only when the source may be far out of sync.")
+        self.audio_sync_analysis_combo.setToolTip(
+            "Automatically distribute checkpoints across the shared media duration. Full timeline is recommended."
+        )
+        self.audio_sync_analysis_plan_label.setToolTip(
+            "The calculated checkpoint count, range, spacing, and window duration."
+        )
         reference_audio_label = QLabel("Reference audio")
         reference_audio_label.setToolTip("Audio stream from the already synced reference.")
         source_audio_label = QLabel("Source audio")
         source_audio_label.setToolTip("Audio stream from the source to compare with the reference.")
-        start_label = QLabel("Start")
-        start_label.setToolTip("First timestamp used for analysis.")
-        duration_label = QLabel("Duration")
-        duration_label.setToolTip("Amount of audio analyzed at each checkpoint.")
-        checkpoints_label = QLabel("Checkpoints")
-        checkpoints_label.setToolTip("Number of timeline positions checked.")
-        spacing_label = QLabel("Spacing")
-        spacing_label.setToolTip("Distance between checkpoint start times.")
-        max_offset_label = QLabel("Max offset")
-        max_offset_label.setToolTip("Largest delay to search for in either direction.")
+        analysis_label = QLabel("Analysis")
+        analysis_label.setToolTip("Choose how thoroughly Audio Sync samples the shared timeline.")
+        plan_label = QLabel("Plan")
+        plan_label.setToolTip("Settings calculated from the shorter file duration.")
         compare_grid.addWidget(reference_audio_label, 0, 0)
         compare_grid.addWidget(self.audio_sync_ref_combo, 0, 1)
         compare_grid.addWidget(source_audio_label, 0, 2)
         compare_grid.addWidget(self.audio_sync_source_combo, 0, 3)
-        compare_grid.addWidget(start_label, 1, 0)
-        compare_grid.addWidget(self.audio_sync_start_edit, 1, 1)
-        compare_grid.addWidget(duration_label, 1, 2)
-        compare_grid.addWidget(self.audio_sync_duration_combo, 1, 3)
-        compare_grid.addWidget(checkpoints_label, 2, 0)
-        compare_grid.addWidget(self.audio_sync_checkpoints_combo, 2, 1)
-        compare_grid.addWidget(spacing_label, 2, 2)
-        compare_grid.addWidget(self.audio_sync_spacing_combo, 2, 3)
-        compare_grid.addWidget(max_offset_label, 3, 0)
-        compare_grid.addWidget(self.audio_sync_max_offset_edit, 3, 1)
+        compare_grid.addWidget(analysis_label, 1, 0)
+        compare_grid.addWidget(self.audio_sync_analysis_combo, 1, 1, 1, 3)
+        compare_grid.addWidget(plan_label, 2, 0)
+        compare_grid.addWidget(self.audio_sync_analysis_plan_label, 2, 1, 1, 3)
         root.addWidget(compare_group)
 
         self.audio_sync_check_button.setIcon(style.standardIcon(QStyle.SP_DialogApplyButton))
@@ -1589,9 +1559,7 @@ class MainWindow(QMainWindow):
         self.audio_sync_reference_edit.textEdited.connect(lambda _text: self._audio_sync_path_text_edited())
         self.audio_sync_source_edit.textEdited.connect(lambda _text: self._audio_sync_path_text_edited())
         self.audio_sync_auto_load_timer.timeout.connect(self.start_audio_sync_stream_auto_load)
-        self.audio_sync_duration_combo.activated.connect(self._audio_sync_duration_preset_activated)
-        self.audio_sync_spacing_combo.activated.connect(self._audio_sync_spacing_preset_activated)
-        self.audio_sync_checkpoints_combo.activated.connect(self._audio_sync_checkpoints_preset_activated)
+        self.audio_sync_analysis_combo.activated.connect(self._audio_sync_analysis_preset_activated)
         self.input_edit.textEdited.connect(self._manual_input_changed)
         self.files_table.itemSelectionChanged.connect(self._populate_tracks_for_selection)
         self.profile_combo.currentIndexChanged.connect(self._profile_combo_changed)
@@ -3093,6 +3061,8 @@ class MainWindow(QMainWindow):
         self.audio_sync_reference_streams = []
         self.audio_sync_source_streams = []
         self.audio_sync_stream_paths = None
+        self.audio_sync_reference_duration_seconds = None
+        self.audio_sync_source_duration_seconds = None
         self.audio_sync_result = None
         self.audio_sync_ref_combo.clear()
         self.audio_sync_source_combo.clear()
@@ -3100,6 +3070,7 @@ class MainWindow(QMainWindow):
         self.audio_sync_apply_organizer_button.setEnabled(False)
         self.audio_sync_export_button.setEnabled(False)
         self._set_audio_sync_selection_controls_enabled(False)
+        self._refresh_audio_sync_analysis_plan()
 
     def _audio_sync_path_text_edited(self) -> None:
         self._clear_audio_sync_loaded_streams()
@@ -3179,8 +3150,8 @@ class MainWindow(QMainWindow):
         self,
         reference_path: Path,
         source_path: Path,
-        reference_streams: list[audio_sync.MediaStream],
-        source_streams: list[audio_sync.MediaStream],
+        reference_probe: audio_sync.MediaProbe,
+        source_probe: audio_sync.MediaProbe,
     ) -> None:
         current_paths = self._current_audio_sync_valid_paths()
         if current_paths != (reference_path, source_path):
@@ -3188,7 +3159,14 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            self._apply_audio_sync_streams(reference_path, source_path, reference_streams, source_streams)
+            self._apply_audio_sync_streams(
+                reference_path,
+                source_path,
+                list(reference_probe.streams),
+                list(source_probe.streams),
+                reference_probe.duration_seconds,
+                source_probe.duration_seconds,
+            )
             self._finish_progress_session("Streams loaded")
         except Exception as error:
             self.append_audio_sync_summary_line(f"Auto-load failed: {error}")
@@ -3327,103 +3305,119 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Audio Sync delay prepared in Organizer")
 
     @Slot(int)
-    def _audio_sync_duration_preset_activated(self, index: int) -> None:
-        if self.audio_sync_duration_combo.itemData(index) != self.AUDIO_SYNC_CUSTOM_PRESET:
-            self.audio_sync_previous_duration_index = index
+    def _audio_sync_analysis_preset_activated(self, index: int) -> None:
+        if self.audio_sync_analysis_combo.itemData(index) != self.AUDIO_SYNC_CUSTOM_PRESET:
+            self.audio_sync_previous_analysis_index = index
+            self._refresh_audio_sync_analysis_plan()
             return
         if self._audio_sync_preset_prompt_active:
             return
         self._audio_sync_preset_prompt_active = True
         try:
-            seconds, accepted = QInputDialog.getDouble(
-                self,
-                "Custom duration",
-                "Duration in seconds",
-                self.audio_sync_custom_duration_seconds,
-                10.0,
-                600.0,
-                1,
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Custom Audio Sync analysis")
+            form = QFormLayout(dialog)
+
+            start_spin = QDoubleSpinBox(dialog)
+            start_spin.setRange(0.0, 240.0)
+            start_spin.setDecimals(1)
+            start_spin.setSuffix(" min")
+            start_spin.setValue(self.audio_sync_custom_start_seconds / 60.0)
+            duration_spin = QDoubleSpinBox(dialog)
+            duration_spin.setRange(10.0, 600.0)
+            duration_spin.setDecimals(0)
+            duration_spin.setSuffix(" s")
+            duration_spin.setValue(self.audio_sync_custom_duration_seconds)
+            checkpoints_spin = QSpinBox(dialog)
+            checkpoints_spin.setRange(1, 20)
+            checkpoints_spin.setValue(self.audio_sync_custom_checkpoints)
+            spacing_spin = QDoubleSpinBox(dialog)
+            spacing_spin.setRange(0.5, 120.0)
+            spacing_spin.setDecimals(1)
+            spacing_spin.setSuffix(" min")
+            spacing_spin.setValue(self.audio_sync_custom_spacing_seconds / 60.0)
+            max_offset_spin = QDoubleSpinBox(dialog)
+            max_offset_spin.setRange(0.1, 60.0)
+            max_offset_spin.setDecimals(1)
+            max_offset_spin.setSuffix(" s")
+            max_offset_spin.setValue(self.audio_sync_custom_max_offset_seconds)
+
+            form.addRow("Start", start_spin)
+            form.addRow("Window per checkpoint", duration_spin)
+            form.addRow("Checkpoints", checkpoints_spin)
+            form.addRow("Spacing", spacing_spin)
+            form.addRow("Maximum offset", max_offset_spin)
+            buttons = QDialogButtonBox(
+                QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+                parent=dialog,
             )
-            if accepted:
-                self.audio_sync_custom_duration_seconds = float(seconds)
-                self.audio_sync_duration_combo.setItemText(
-                    index,
-                    f"Custom: {self._format_audio_sync_seconds(seconds)}",
-                )
-                self.audio_sync_previous_duration_index = index
+            buttons.accepted.connect(dialog.accept)
+            buttons.rejected.connect(dialog.reject)
+            form.addRow(buttons)
+
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                self.audio_sync_custom_start_seconds = start_spin.value() * 60.0
+                self.audio_sync_custom_duration_seconds = duration_spin.value()
+                self.audio_sync_custom_checkpoints = checkpoints_spin.value()
+                self.audio_sync_custom_spacing_seconds = spacing_spin.value() * 60.0
+                self.audio_sync_custom_max_offset_seconds = max_offset_spin.value()
+                self.audio_sync_previous_analysis_index = index
             else:
-                self.audio_sync_duration_combo.setCurrentIndex(self.audio_sync_previous_duration_index)
+                self.audio_sync_analysis_combo.setCurrentIndex(self.audio_sync_previous_analysis_index)
+            self._refresh_audio_sync_analysis_plan()
         finally:
             self._audio_sync_preset_prompt_active = False
 
-    @Slot(int)
-    def _audio_sync_spacing_preset_activated(self, index: int) -> None:
-        if self.audio_sync_spacing_combo.itemData(index) != self.AUDIO_SYNC_CUSTOM_PRESET:
-            self.audio_sync_previous_spacing_index = index
-            return
-        if self._audio_sync_preset_prompt_active:
-            return
-        self._audio_sync_preset_prompt_active = True
-        try:
-            minutes, accepted = QInputDialog.getDouble(
-                self,
-                "Custom spacing",
-                "Spacing in minutes",
-                self.audio_sync_custom_spacing_seconds / 60.0,
-                1.0,
-                60.0,
-                1,
+    def _audio_sync_common_duration(self) -> float | None:
+        durations = [
+            duration
+            for duration in [
+                self.audio_sync_reference_duration_seconds,
+                self.audio_sync_source_duration_seconds,
+            ]
+            if duration is not None and duration > 0
+        ]
+        return min(durations) if len(durations) == 2 else None
+
+    def _current_audio_sync_analysis_plan(self) -> audio_sync.AdaptiveAnalysisPlan:
+        mode = str(self.audio_sync_analysis_combo.currentData() or "full")
+        common_duration = self._audio_sync_common_duration()
+        if mode == self.AUDIO_SYNC_CUSTOM_PRESET:
+            return audio_sync.AdaptiveAnalysisPlan(
+                mode="custom",
+                media_duration_seconds=common_duration,
+                start_seconds=self.audio_sync_custom_start_seconds,
+                duration_seconds=self.audio_sync_custom_duration_seconds,
+                checkpoints=self.audio_sync_custom_checkpoints,
+                checkpoint_spacing_seconds=self.audio_sync_custom_spacing_seconds,
+                max_offset_seconds=self.audio_sync_custom_max_offset_seconds,
             )
-            if accepted:
-                self.audio_sync_custom_spacing_seconds = float(minutes) * 60.0
-                self.audio_sync_spacing_combo.setItemText(
-                    index,
-                    f"Custom: {self._format_audio_sync_seconds(self.audio_sync_custom_spacing_seconds)}",
-                )
-                self.audio_sync_previous_spacing_index = index
-            else:
-                self.audio_sync_spacing_combo.setCurrentIndex(self.audio_sync_previous_spacing_index)
-        finally:
-            self._audio_sync_preset_prompt_active = False
+        return audio_sync.adaptive_analysis_plan(common_duration, mode)
 
-    @Slot(int)
-    def _audio_sync_checkpoints_preset_activated(self, index: int) -> None:
-        if self.audio_sync_checkpoints_combo.itemData(index) != self.AUDIO_SYNC_CUSTOM_PRESET:
-            self.audio_sync_previous_checkpoints_index = index
-            return
-        if self._audio_sync_preset_prompt_active:
-            return
-        self._audio_sync_preset_prompt_active = True
-        try:
-            checkpoints, accepted = QInputDialog.getInt(
-                self,
-                "Custom checkpoints",
-                "Checkpoints",
-                self.audio_sync_custom_checkpoints,
-                1,
-                20,
-                1,
+    def _refresh_audio_sync_analysis_plan(self) -> None:
+        plan = self._current_audio_sync_analysis_plan()
+        if plan.media_duration_seconds is None and plan.mode != "custom":
+            self.audio_sync_analysis_plan_label.setText(
+                "Duration will be detected after loading both files; fallback settings are ready."
             )
-            if accepted:
-                self.audio_sync_custom_checkpoints = int(checkpoints)
-                self.audio_sync_checkpoints_combo.setItemText(index, f"Custom: {checkpoints}")
-                self.audio_sync_previous_checkpoints_index = index
-            else:
-                self.audio_sync_checkpoints_combo.setCurrentIndex(self.audio_sync_previous_checkpoints_index)
-        finally:
-            self._audio_sync_preset_prompt_active = False
-
-    def _audio_sync_preset_seconds(self, combo: QComboBox, custom_seconds: float) -> float:
-        value = combo.currentData()
-        if value == self.AUDIO_SYNC_CUSTOM_PRESET:
-            return custom_seconds
-        return float(value)
-
-    def _audio_sync_preset_int(self, combo: QComboBox, custom_value: int) -> int:
-        value = combo.currentData()
-        if value == self.AUDIO_SYNC_CUSTOM_PRESET:
-            return custom_value
-        return int(value)
+            return
+        duration_text = (
+            f"shared duration {audio_sync.format_time(plan.media_duration_seconds)}; "
+            if plan.media_duration_seconds is not None
+            else "duration unavailable; "
+        )
+        if plan.checkpoints > 1:
+            range_text = (
+                f"{audio_sync.format_time(plan.start_seconds)} to "
+                f"{audio_sync.format_time(plan.last_checkpoint_seconds)}, "
+                f"about {self._format_audio_sync_seconds(plan.checkpoint_spacing_seconds)} apart"
+            )
+        else:
+            range_text = f"one checkpoint at {audio_sync.format_time(plan.start_seconds)}"
+        self.audio_sync_analysis_plan_label.setText(
+            f"{duration_text}{plan.checkpoints} checkpoints, {range_text}; "
+            f"{self._format_audio_sync_seconds(plan.duration_seconds)} per checkpoint."
+        )
 
     def _format_audio_sync_seconds(self, seconds: float) -> str:
         if seconds >= 60 and seconds % 60 == 0:
@@ -3575,17 +3569,13 @@ class MainWindow(QMainWindow):
         self.audio_sync_reference_edit.clear()
         self.audio_sync_source_edit.clear()
         self.audio_sync_output_edit.clear()
-        self.audio_sync_start_edit.setText("00:10:00")
-        self.audio_sync_duration_combo.setCurrentIndex(1)
-        self.audio_sync_spacing_combo.setCurrentIndex(2)
-        self.audio_sync_max_offset_edit.setText("5")
-        self.audio_sync_checkpoints_combo.setCurrentIndex(2)
+        self.audio_sync_analysis_combo.setCurrentIndex(0)
+        self.audio_sync_custom_start_seconds = 600.0
         self.audio_sync_custom_duration_seconds = 120.0
         self.audio_sync_custom_spacing_seconds = 900.0
-        self.audio_sync_custom_checkpoints = 4
-        self.audio_sync_previous_duration_index = self.audio_sync_duration_combo.currentIndex()
-        self.audio_sync_previous_spacing_index = self.audio_sync_spacing_combo.currentIndex()
-        self.audio_sync_previous_checkpoints_index = self.audio_sync_checkpoints_combo.currentIndex()
+        self.audio_sync_custom_checkpoints = 8
+        self.audio_sync_custom_max_offset_seconds = 5.0
+        self.audio_sync_previous_analysis_index = self.audio_sync_analysis_combo.currentIndex()
         self.audio_sync_summary_edit.clear()
         self.audio_sync_log_edit.clear()
         self._log_line_starts[id(self.audio_sync_log_edit)] = True
@@ -3750,9 +3740,16 @@ class MainWindow(QMainWindow):
     def load_audio_sync_streams(self) -> bool:
         try:
             reference_path, source_path = self._audio_sync_paths()
-            reference_streams = audio_sync.probe_media_streams(reference_path)
-            source_streams = audio_sync.probe_media_streams(source_path)
-            self._apply_audio_sync_streams(reference_path, source_path, reference_streams, source_streams)
+            reference_probe = audio_sync.probe_media(reference_path)
+            source_probe = audio_sync.probe_media(source_path)
+            self._apply_audio_sync_streams(
+                reference_path,
+                source_path,
+                list(reference_probe.streams),
+                list(source_probe.streams),
+                reference_probe.duration_seconds,
+                source_probe.duration_seconds,
+            )
         except Exception as error:
             self.append_audio_sync_summary_line(f"Load failed: {error}")
             QMessageBox.critical(self, "Audio Sync load failed", str(error))
@@ -3766,10 +3763,14 @@ class MainWindow(QMainWindow):
         source_path: Path,
         reference_streams: list[audio_sync.MediaStream],
         source_streams: list[audio_sync.MediaStream],
+        reference_duration_seconds: float | None = None,
+        source_duration_seconds: float | None = None,
     ) -> None:
         self.audio_sync_reference_streams = reference_streams
         self.audio_sync_source_streams = source_streams
         self.audio_sync_stream_paths = (reference_path, source_path)
+        self.audio_sync_reference_duration_seconds = reference_duration_seconds
+        self.audio_sync_source_duration_seconds = source_duration_seconds
         reference_audio = [stream for stream in self.audio_sync_reference_streams if stream.type == "audio"]
         source_audio = [stream for stream in self.audio_sync_source_streams if stream.type == "audio"]
         if not reference_audio:
@@ -3782,6 +3783,7 @@ class MainWindow(QMainWindow):
         auto_selected = self._select_matching_audio_sync_streams(reference_audio, source_audio)
         self._populate_audio_sync_export_table(self.audio_sync_source_streams)
         self.audio_sync_result = None
+        self._refresh_audio_sync_analysis_plan()
         self.audio_sync_apply_organizer_button.setEnabled(False)
         self.audio_sync_export_button.setEnabled(False)
         self._set_audio_sync_selection_controls_enabled(self.audio_sync_tracks_table.rowCount() > 0)
@@ -3789,6 +3791,10 @@ class MainWindow(QMainWindow):
         self.append_audio_sync_summary_line("Streams loaded.")
         self.append_audio_sync_summary_line(f"Reference audio streams: {len(reference_audio)}")
         self.append_audio_sync_summary_line(f"Source audio streams: {len(source_audio)}")
+        if self._audio_sync_common_duration() is not None:
+            self.append_audio_sync_summary_line(
+                f"Shared usable duration: {audio_sync.format_time(self._audio_sync_common_duration() or 0.0)}"
+            )
         if auto_selected:
             self.append_audio_sync_summary_line(f"Auto-selected: {auto_selected}")
         self.append_audio_sync_summary_line(
@@ -3829,6 +3835,11 @@ class MainWindow(QMainWindow):
         self.append_audio_sync_summary_line(f"Source: {settings.source_path}")
         self.append_audio_sync_summary_line(
             f"Streams: reference 0:a:{settings.reference_audio_stream}, source 0:a:{settings.source_audio_stream}"
+        )
+        self.append_audio_sync_summary_line(
+            f"Plan: {settings.checkpoints} checkpoints from {audio_sync.format_time(settings.start_seconds)} "
+            f"to {audio_sync.format_time(settings.start_seconds + max(0, settings.checkpoints - 1) * settings.checkpoint_spacing_seconds)}, "
+            f"{self._format_audio_sync_seconds(settings.duration_seconds)} per checkpoint"
         )
         self.append_audio_sync_summary_line()
         self._start_progress_session("Audio Sync", "Starting analysis")
@@ -4158,25 +4169,17 @@ class MainWindow(QMainWindow):
             raise ValueError("Choose a reference audio stream.")
         if source_stream is None:
             raise ValueError("Choose a source audio stream.")
+        plan = self._current_audio_sync_analysis_plan()
         return audio_sync.AudioSyncSettings(
             reference_path=reference_path,
             source_path=source_path,
             reference_audio_stream=int(reference_stream),
             source_audio_stream=int(source_stream),
-            start_seconds=audio_sync.parse_time(self.audio_sync_start_edit.text()),
-            duration_seconds=self._audio_sync_preset_seconds(
-                self.audio_sync_duration_combo,
-                self.audio_sync_custom_duration_seconds,
-            ),
-            checkpoints=self._audio_sync_preset_int(
-                self.audio_sync_checkpoints_combo,
-                self.audio_sync_custom_checkpoints,
-            ),
-            checkpoint_spacing_seconds=self._audio_sync_preset_seconds(
-                self.audio_sync_spacing_combo,
-                self.audio_sync_custom_spacing_seconds,
-            ),
-            max_offset_seconds=audio_sync.parse_time(self.audio_sync_max_offset_edit.text()),
+            start_seconds=plan.start_seconds,
+            duration_seconds=plan.duration_seconds,
+            checkpoints=plan.checkpoints,
+            checkpoint_spacing_seconds=plan.checkpoint_spacing_seconds,
+            max_offset_seconds=plan.max_offset_seconds,
             sample_rate=self.AUDIO_SYNC_SAMPLE_RATE,
         )
 
@@ -4707,14 +4710,7 @@ class MainWindow(QMainWindow):
             f"Timing agreement: {result.consistency.capitalize()} "
             f"(max deviation {result.spread_seconds * 1000:.2f} ms)"
         )
-        self.append_audio_sync_summary_line(
-            "Signal match strength: "
-            f"{(result.confidence_summary or audio_sync.confidence_label(result.average_confidence)).capitalize()} "
-            f"({result.average_confidence:.2f} average; diagnostic only)"
-        )
         self.append_audio_sync_summary_line(f"Verdict: {result.verdict}")
-        for note in result.notes:
-            self.append_audio_sync_summary_line(f"Note: {note}.")
         for warning in result.warnings:
             self.append_audio_sync_summary_line(f"Warning: {warning}.")
         self.append_audio_sync_summary_line()
