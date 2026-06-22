@@ -2564,6 +2564,30 @@ def extracted_size(path: Path) -> int:
     return size
 
 
+def mkvextract_result_is_usable(
+    result: subprocess.CompletedProcess[str],
+    output_paths: Iterable[Path],
+) -> bool:
+    if result.returncode == 0:
+        return True
+
+    # MKVToolNix uses exit code 1 for a completed operation with warnings.
+    # Keep the recovered extraction only when every requested output exists.
+    return result.returncode == 1 and all(path.exists() for path in output_paths)
+
+
+def report_mkvextract_warnings(input_path: Path, result: subprocess.CompletedProcess[str]) -> None:
+    details = "\n".join(part for part in (result.stdout, result.stderr) if part)
+    warning_lines = [
+        line.strip()
+        for line in details.splitlines()
+        if line.strip().lower().startswith("warning:")
+    ]
+    print(f"Warning: mkvextract recovered usable output from {input_path.name}.")
+    for line in warning_lines:
+        print(line)
+
+
 def format_command(command: list[str]) -> str:
     return subprocess.list2cmdline([str(part) for part in command])
 
@@ -2886,12 +2910,14 @@ def analyze_subtitle_sizes(input_path: Path, subtitles: list[TrackInfo], mkvextr
             errors="replace",
         )
 
-        if result.returncode != 0:
+        if not mkvextract_result_is_usable(result, extracted_paths.values()):
             details = result.stderr.strip() or result.stdout.strip()
             raise OrganizerError(
                 "Failed to extract subtitles for analysis:\n"
                 f"{format_command(command)}\n{details}"
             )
+        if result.returncode == 1:
+            report_mkvextract_warnings(input_path, result)
 
         for track in subtitles:
             output_path = extracted_paths[track.id]
@@ -3735,13 +3761,15 @@ def ensure_pgs_ocr_cache(
                 encoding="utf-8",
                 errors="replace",
             )
-            if result.returncode != 0:
+            if not mkvextract_result_is_usable(result, [sup_path]):
                 details = result.stderr.strip() or result.stdout.strip()
                 print(
                     f"  Warning: could not extract PGS track {track.id} for OCR:\n"
                     f"  {format_command(command)}\n  {details}"
                 )
                 continue
+            if result.returncode == 1:
+                report_mkvextract_warnings(input_path, result)
 
         ocr_sup_path = sup_path
         use_chinese_script_sample = (
@@ -3872,13 +3900,15 @@ def extract_pgs_for_manual_ocr(
                 errors="replace",
             )
 
-            if result.returncode != 0:
+            if not mkvextract_result_is_usable(result, [sup_path]):
                 details = result.stderr.strip() or result.stdout.strip()
                 print(
                     f"  track {track.id}: extraction for OCR failed:\n"
                     f"  {format_command(command)}\n  {details}"
                 )
                 continue
+            if result.returncode == 1:
+                report_mkvextract_warnings(input_path, result)
 
         status = "SRT already exists" if expected_srt_path.exists() else "SRT still needs OCR"
         print(f"  track {track.id}: {sup_path.name} -> {expected_srt_path.name} ({status})")

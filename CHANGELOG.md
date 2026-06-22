@@ -2,6 +2,14 @@
 
 All notable user-facing changes are recorded here.
 
+## 1.0.9 - 2026-06-22
+
+- Fixed an infinite `itemChanged` recursion when excluding duplicate or probable-duplicate tracks with styled table rows.
+- Made bulk duplicate cleanup update existing rows directly, keeping large previews responsive and intact.
+- Accepted recoverable `mkvextract` warning results when every requested subtitle output was produced.
+- Kept genuine extraction failures fatal when MKVToolNix reports an error or an expected output is missing.
+- Added regressions for large duplicate tables and damaged Matroska inputs that MKVToolNix can successfully resynchronize.
+
 ## 1.0.8 - 2026-06-20
 
 - Kept Preview tracks visible and read-only while Run processes the selected plan.

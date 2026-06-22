@@ -229,6 +229,84 @@ def test_single_track_check_updates_only_its_row(qapp, monkeypatch):
         window.close()
 
 
+def test_colored_duplicate_checkbox_does_not_reenter_item_changed(qapp):
+    duplicate = report_track(
+        2,
+        "subtitles",
+        duplicate_group="source.mkv:subtitles:1",
+        duplicate_of_id=1,
+        duplicate_reason="Exact duplicate of source.mkv track 1",
+    )
+    report = {
+        "status": "dry-run",
+        "input": str(Path("C:/tmp/source.mkv")),
+        "output": str(Path("C:/tmp/out.mkv")),
+        "message": "",
+        "command": [],
+        "tracks": {"video": [], "audio": [], "subtitles": [duplicate]},
+        "plan_summary": {"counts": {"duplicate": 1}, "items": []},
+    }
+    window = gui.MainWindow()
+    try:
+        window._populate_results([report])
+
+        window.tracks_table.item(0, window.TRACK_INCLUDE_COLUMN).setCheckState(Qt.Unchecked)
+        qapp.processEvents()
+
+        selection_key = organizer.track_selection_key(0, "subtitles", 2)
+        assert window.manual_track_includes[selection_key] is False
+        assert window.tracks_table.item(0, window.TRACK_PLAN_COLUMN).text() == "Exclude manually"
+        assert window.tracks_table.item(0, window.TRACK_INCLUDE_COLUMN).checkState() == Qt.Unchecked
+    finally:
+        window.close()
+
+
+def test_duplicate_cleanup_buttons_update_large_table_without_repopulate(qapp, monkeypatch):
+    subtitles = []
+    for track_id in range(240):
+        overrides = {}
+        if track_id % 4 == 1:
+            overrides = {
+                "duplicate_group": f"exact:{track_id - 1}",
+                "duplicate_of_id": track_id - 1,
+                "duplicate_reason": f"Exact duplicate of track {track_id - 1}",
+            }
+        elif track_id % 4 == 3:
+            overrides = {
+                "probable_duplicate_group": f"probable:{track_id - 1}",
+                "probable_duplicate_of_id": track_id - 1,
+                "probable_duplicate_reason": f"Possible regional duplicate of track {track_id - 1}",
+            }
+        subtitles.append(report_track(track_id, "subtitles", **overrides))
+
+    report = {
+        "status": "dry-run",
+        "input": str(Path("C:/tmp/source.mkv")),
+        "output": str(Path("C:/tmp/out.mkv")),
+        "message": "",
+        "command": [],
+        "tracks": {"video": [], "audio": [], "subtitles": subtitles},
+        "plan_summary": {"counts": {}, "items": []},
+    }
+    window = gui.MainWindow()
+    repopulated_rows: list[int] = []
+    try:
+        window._populate_results([report])
+        monkeypatch.setattr(window, "_populate_tracks_for_row", repopulated_rows.append)
+
+        window.deselect_duplicate_tracks()
+        window.deselect_probable_duplicate_tracks()
+        qapp.processEvents()
+
+        assert repopulated_rows == []
+        assert window.tracks_table.rowCount() == 240
+        for row in range(240):
+            expected = Qt.Unchecked if row % 4 in {1, 3} else Qt.Checked
+            assert window.tracks_table.item(row, window.TRACK_INCLUDE_COLUMN).checkState() == expected
+    finally:
+        window.close()
+
+
 def test_track_table_shows_regional_duplicate_warning_with_separate_drop_control(qapp):
     generic_dutch = report_track(
         10,

@@ -5548,40 +5548,47 @@ class MainWindow(QMainWindow):
         report: dict,
         track: dict,
         include_track: bool,
+        refresh_details: bool = True,
     ) -> None:
-        base_drop = bool(track.get("_preview_base_drop", track.get("drop")))
-        plan_text, plan_tooltip, plan_categories = self._track_plan_details(
-            report,
-            track,
-            include_track,
-            base_drop,
-        )
-        track["_preview_plan_categories"] = plan_categories
+        previous_sync_state = self._syncing_track_checks
+        self._syncing_track_checks = True
+        try:
+            base_drop = bool(track.get("_preview_base_drop", track.get("drop")))
+            plan_text, plan_tooltip, plan_categories = self._track_plan_details(
+                report,
+                track,
+                include_track,
+                base_drop,
+            )
+            track["_preview_plan_categories"] = plan_categories
 
-        include_item = self.tracks_table.item(row, self.TRACK_INCLUDE_COLUMN)
-        if include_item:
-            include_item.setToolTip("Included in the remux" if include_track else "Excluded from the remux")
+            include_item = self.tracks_table.item(row, self.TRACK_INCLUDE_COLUMN)
+            if include_item:
+                include_item.setToolTip("Included in the remux" if include_track else "Excluded from the remux")
 
-        flags_item = self.tracks_table.item(row, self.TRACK_FLAGS_COLUMN)
-        if flags_item:
-            flags_item.setText(self._track_flags_text(track))
+            flags_item = self.tracks_table.item(row, self.TRACK_FLAGS_COLUMN)
+            if flags_item:
+                flags_item.setText(self._track_flags_text(track))
 
-        plan_item = self.tracks_table.item(row, self.TRACK_PLAN_COLUMN)
-        if plan_item:
-            plan_item.setText(plan_text)
-            tooltip_lines = [plan_tooltip] if plan_tooltip else []
-            if track.get("duplicate_reason"):
-                tooltip_lines.append(str(track["duplicate_reason"]))
-            if track.get("probable_duplicate_reason"):
-                tooltip_lines.append(str(track["probable_duplicate_reason"]))
-            plan_item.setToolTip("\n".join(tooltip_lines))
+            plan_item = self.tracks_table.item(row, self.TRACK_PLAN_COLUMN)
+            if plan_item:
+                plan_item.setText(plan_text)
+                tooltip_lines = [plan_tooltip] if plan_tooltip else []
+                if track.get("duplicate_reason"):
+                    tooltip_lines.append(str(track["duplicate_reason"]))
+                if track.get("probable_duplicate_reason"):
+                    tooltip_lines.append(str(track["probable_duplicate_reason"]))
+                plan_item.setToolTip("\n".join(tooltip_lines))
 
-        for column in range(self.tracks_table.columnCount()):
-            row_item = self.tracks_table.item(row, column)
-            if row_item:
-                self._style_track_item(row_item, track, column)
+            for column in range(self.tracks_table.columnCount()):
+                row_item = self.tracks_table.item(row, column)
+                if row_item:
+                    self._style_track_item(row_item, track, column)
+        finally:
+            self._syncing_track_checks = previous_sync_state
 
-        self._update_track_details_for_selection()
+        if refresh_details:
+            self._update_track_details_for_selection()
 
     @Slot(list, int)
     def _track_rows_reordered(self, selected_rows: list[int], target_row: int) -> None:
@@ -5690,31 +5697,68 @@ class MainWindow(QMainWindow):
         track_type: str | None = None,
     ) -> None:
         tracks = self._current_track_rows()
+        report = self._current_report()
         include_track = check_state == Qt.Checked
-        for track in tracks:
-            if track_type and track.get("type") != track_type:
-                continue
-            if duplicate_members_only and track.get("duplicate_of_id") is None:
-                continue
-            if probable_duplicate_members_only and track.get("probable_duplicate_of_id") is None:
-                continue
-            self._set_manual_track_include(track, include_track)
-        self._populate_tracks_for_row(self.files_table.currentRow())
+        previous_sync_state = self._syncing_track_checks
+        self._syncing_track_checks = True
+        try:
+            for row, track in enumerate(tracks):
+                if track_type and track.get("type") != track_type:
+                    continue
+                if duplicate_members_only and track.get("duplicate_of_id") is None:
+                    continue
+                if probable_duplicate_members_only and track.get("probable_duplicate_of_id") is None:
+                    continue
+                self._set_manual_track_include(track, include_track)
+                track["drop"] = not include_track
+                item = self.tracks_table.item(row, self.TRACK_INCLUDE_COLUMN)
+                if item:
+                    item.setCheckState(check_state)
+                if report is not None:
+                    self._refresh_track_row_after_selection(
+                        row,
+                        report,
+                        track,
+                        include_track,
+                        refresh_details=False,
+                    )
+        finally:
+            self._syncing_track_checks = previous_sync_state
+        self._set_track_selection_controls_enabled(bool(tracks))
+        self._update_track_details_for_selection()
 
     def _selected_track_rows(self) -> list[int]:
         return sorted({index.row() for index in self.tracks_table.selectionModel().selectedRows()})
 
     def _set_selected_track_checks(self, check_state: Qt.CheckState) -> None:
         tracks = self._current_track_rows()
+        report = self._current_report()
         include_track = check_state == Qt.Checked
         selected_rows = self._selected_track_rows()
-        for row in selected_rows:
-            if 0 <= row < len(tracks):
-                self._set_manual_track_include(tracks[row], include_track)
-        self._populate_tracks_for_row(self.files_table.currentRow())
-        for row in selected_rows:
-            if 0 <= row < self.tracks_table.rowCount():
-                self.tracks_table.selectRow(row)
+        previous_sync_state = self._syncing_track_checks
+        self._syncing_track_checks = True
+        try:
+            for row in selected_rows:
+                if not 0 <= row < len(tracks):
+                    continue
+                track = tracks[row]
+                self._set_manual_track_include(track, include_track)
+                track["drop"] = not include_track
+                item = self.tracks_table.item(row, self.TRACK_INCLUDE_COLUMN)
+                if item:
+                    item.setCheckState(check_state)
+                if report is not None:
+                    self._refresh_track_row_after_selection(
+                        row,
+                        report,
+                        track,
+                        include_track,
+                        refresh_details=False,
+                    )
+        finally:
+            self._syncing_track_checks = previous_sync_state
+        self._set_track_selection_controls_enabled(bool(tracks))
+        self._update_track_details_for_selection()
 
     def _current_track_selection_keys(self) -> set[str]:
         return {self._track_selection_key(track) for track in self._current_track_rows()}

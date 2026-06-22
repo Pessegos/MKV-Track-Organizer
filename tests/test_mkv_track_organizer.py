@@ -89,6 +89,52 @@ def video_track(track_id: int = 0) -> m.TrackInfo:
     )
 
 
+def test_subtitle_analysis_uses_outputs_recovered_by_mkvextract(tmp_path: Path, monkeypatch, capsys) -> None:
+    input_path = tmp_path / "damaged-source.mkv"
+    input_path.write_bytes(b"")
+    subtitle = subtitle_track(3)
+
+    def fake_run(command, **_kwargs):
+        output_path = Path(command[-1].split(":", 1)[1])
+        output_path.write_text("1\n00:00:01,000 --> 00:00:02,000\nRecovered subtitle\n", encoding="utf-8")
+        return m.subprocess.CompletedProcess(
+            command,
+            1,
+            stdout="Warning: Matroska structure error; resyncing successful.\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(m.subprocess, "run", fake_run)
+
+    m.analyze_subtitle_sizes(input_path, [subtitle], Path("mkvextract"))
+
+    assert subtitle.analysis is not None
+    assert subtitle.analysis.size_bytes > 0
+    assert "recovered usable output" in capsys.readouterr().out
+
+
+def test_subtitle_analysis_rejects_mkvextract_warning_without_outputs(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    input_path = tmp_path / "failed-source.mkv"
+    input_path.write_bytes(b"")
+    subtitle = subtitle_track(3)
+    monkeypatch.setattr(
+        m.subprocess,
+        "run",
+        lambda command, **_kwargs: m.subprocess.CompletedProcess(
+            command,
+            1,
+            stdout="Warning: output could not be recovered.\n",
+            stderr="",
+        ),
+    )
+
+    with pytest.raises(m.OrganizerError, match="Failed to extract subtitles"):
+        m.analyze_subtitle_sizes(input_path, [subtitle], Path("mkvextract"))
+
+
 def test_language_names_and_aliases() -> None:
     assert m.normalize_language_code("pt-PT") == "pt-PT"
     assert m.language_display_name("pt-PT") == "Portuguese (Iberian)"
