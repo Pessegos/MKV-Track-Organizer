@@ -229,7 +229,7 @@ def test_single_track_check_updates_only_its_row(qapp, monkeypatch):
         window.close()
 
 
-def test_track_reorder_preserves_every_row_in_large_preview(qapp):
+def test_track_reorder_preserves_every_row_in_large_preview(qapp, monkeypatch):
     audio_tracks = [report_track(track_id, "audio", name=f"Audio {track_id}") for track_id in range(160)]
     report = {
         "status": "dry-run",
@@ -241,16 +241,29 @@ def test_track_reorder_preserves_every_row_in_large_preview(qapp):
         "plan_summary": {"counts": {}, "items": []},
     }
     window = gui.MainWindow()
+    repopulated_rows: list[int] = []
     try:
         window._populate_results([report])
         original_keys = window._track_order_keys_from_table()
+        moved_items = [
+            window.tracks_table.item(row, window.TRACK_INCLUDE_COLUMN)
+            for row in (40, 41, 42)
+        ]
+        monkeypatch.setattr(window, "_populate_tracks_for_row", repopulated_rows.append)
 
         window._track_rows_reordered([40, 41, 42], 125)
 
         reordered_keys = window._track_order_keys_from_table()
+        args, _config_path = window._build_args(dry_run=False)
+        assert repopulated_rows == []
         assert len(reordered_keys) == len(original_keys) == 160
         assert set(reordered_keys) == set(original_keys)
         assert reordered_keys[122:125] == original_keys[40:43]
+        assert [
+            window.tracks_table.item(row, window.TRACK_INCLUDE_COLUMN)
+            for row in (122, 123, 124)
+        ] == moved_items
+        assert args.track_order_overrides == reordered_keys
         assert window.tracks_table.rowCount() == 160
     finally:
         window.close()

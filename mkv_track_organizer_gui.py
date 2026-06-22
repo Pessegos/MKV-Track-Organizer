@@ -13,7 +13,7 @@ import uuid
 from pathlib import Path
 
 try:
-    from PySide6.QtCore import QEvent, QObject, QThread, QTimer, Qt, Signal, Slot
+    from PySide6.QtCore import QEvent, QItemSelection, QItemSelectionModel, QObject, QThread, QTimer, Qt, Signal, Slot
     from PySide6.QtGui import (
         QAction,
         QBrush,
@@ -296,6 +296,48 @@ class TrackTableWidget(QTableWidget):
 
         row_rect = self.visualRect(index)
         return index.row() + (1 if position.y() > row_rect.center().y() else 0)
+
+    def move_rows(self, selected_rows: list[int], insert_row: int) -> None:
+        valid_rows = sorted({row for row in selected_rows if 0 <= row < self.rowCount()})
+        if not valid_rows:
+            return
+
+        signals_were_blocked = self.blockSignals(True)
+        self.setUpdatesEnabled(False)
+        try:
+            moved_rows = [
+                [self.takeItem(row, column) for column in range(self.columnCount())]
+                for row in valid_rows
+            ]
+            row_heights = [self.rowHeight(row) for row in valid_rows]
+            for row in reversed(valid_rows):
+                self.removeRow(row)
+
+            insert_row = max(0, min(insert_row, self.rowCount()))
+            for offset, items in enumerate(moved_rows):
+                row = insert_row + offset
+                self.insertRow(row)
+                self.setRowHeight(row, row_heights[offset])
+                for column, item in enumerate(items):
+                    if item is not None:
+                        self.setItem(row, column, item)
+
+            first_index = self.model().index(insert_row, 0)
+            last_index = self.model().index(insert_row + len(moved_rows) - 1, self.columnCount() - 1)
+            selection = QItemSelection(first_index, last_index)
+            self.selectionModel().select(
+                selection,
+                QItemSelectionModel.SelectionFlag.ClearAndSelect
+                | QItemSelectionModel.SelectionFlag.Rows,
+            )
+            self.selectionModel().setCurrentIndex(
+                first_index,
+                QItemSelectionModel.SelectionFlag.NoUpdate,
+            )
+        finally:
+            self.setUpdatesEnabled(True)
+            self.blockSignals(signals_were_blocked)
+        self.viewport().update()
 
 
 class OrganizerWorker(QObject):
@@ -5628,11 +5670,9 @@ class MainWindow(QMainWindow):
         self.manual_track_order = remaining[:insert_row] + moving + remaining[insert_row:]
         self.manual_track_order_active = True
 
-        current_file_row = self.files_table.currentRow()
-        self._populate_tracks_for_row(current_file_row)
-        self.tracks_table.clearSelection()
-        for row in range(insert_row, min(insert_row + len(moving), self.tracks_table.rowCount())):
-            self.tracks_table.selectRow(row)
+        self.tracks_table.move_rows(valid_rows, insert_row)
+        self._set_track_selection_controls_enabled(True)
+        self._update_track_details_for_selection()
         self.statusBar().showMessage("Track order updated")
 
     def _sync_track_order_from_table(self) -> None:

@@ -2,6 +2,13 @@
 
 All notable user-facing changes are recorded here.
 
+## 1.0.11 - 2026-06-22
+
+- Made preview track reordering incremental instead of rebuilding and resizing the entire track table after every drop.
+- Preserved existing checkbox, style, tooltip, and selection items while moving rows.
+- Verified that the visible manual order is passed unchanged to the final remux arguments.
+- Reduced a representative 500-track reorder to a single-digit millisecond operation in local testing.
+
 ## 1.0.10 - 2026-06-22
 
 - Replaced the track table's native internal drag mutation with an Organizer-controlled drag operation.
