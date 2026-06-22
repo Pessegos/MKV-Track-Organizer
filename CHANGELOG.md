@@ -2,6 +2,13 @@
 
 All notable user-facing changes are recorded here.
 
+## 1.0.12 - 2026-06-22
+
+- Reduced the Audio Sync result to one unambiguous recommended correction instead of four equivalent delay descriptions.
+- Added green, amber, and red summary emphasis for reliability, timing agreement, verdicts, and warnings.
+- Fixed Windows taskbar progress on systems that expose `ITaskbarList4` but reject direct `ITaskbarList3` creation.
+- Kept an `ITaskbarList3` fallback for compatible Windows shells.
+
 ## 1.0.11 - 2026-06-22
 
 - Made preview track reordering incremental instead of rebuilding and resizing the entire track table after every drop.

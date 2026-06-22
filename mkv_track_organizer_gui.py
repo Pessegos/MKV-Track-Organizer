@@ -95,6 +95,10 @@ class WindowsTaskbarProgress:
     NO_PROGRESS = 0
     INDETERMINATE = 1
     NORMAL = 2
+    INTERFACE_IIDS = (
+        ("ITaskbarList4", "C43DC798-95D1-4BEA-9030-BB99E2983A1A"),
+        ("ITaskbarList3", "EA1AFB91-9E28-4B86-90E9-9E9F8A5EEA84"),
+    )
 
     class GUID(ctypes.Structure):
         _fields_ = [
@@ -113,6 +117,7 @@ class WindowsTaskbarProgress:
         self.interface = ctypes.c_void_p()
         self.available = False
         self.error = ""
+        self.interface_name = ""
         self._ole32 = None
         self._com_initialized = False
         if sys.platform != "win32" or QApplication.platformName().casefold() != "windows":
@@ -128,7 +133,6 @@ class WindowsTaskbarProgress:
         initialize_result = self._ole32.CoInitialize(None)
         self._com_initialized = initialize_result in {0, 1}
         clsid = self.GUID.from_text("56FDF344-FD6D-11D0-958A-006097C9A090")
-        iid = self.GUID.from_text("EA1AFB91-9E28-4B86-90E9-9E9F8A5EEA84")
         self._ole32.CoCreateInstance.argtypes = [
             ctypes.POINTER(self.GUID),
             ctypes.c_void_p,
@@ -137,15 +141,30 @@ class WindowsTaskbarProgress:
             ctypes.POINTER(ctypes.c_void_p),
         ]
         self._ole32.CoCreateInstance.restype = ctypes.c_long
-        result = self._ole32.CoCreateInstance(
-            ctypes.byref(clsid),
-            None,
-            1,
-            ctypes.byref(iid),
-            ctypes.byref(self.interface),
-        )
-        if result < 0 or not self.interface.value:
-            raise OSError(f"Could not initialize Windows taskbar progress: HRESULT {result:#x}")
+        last_error: OSError | None = None
+        for interface_name, iid_text in self.INTERFACE_IIDS:
+            iid = self.GUID.from_text(iid_text)
+            candidate = ctypes.c_void_p()
+            try:
+                result = self._ole32.CoCreateInstance(
+                    ctypes.byref(clsid),
+                    None,
+                    1,
+                    ctypes.byref(iid),
+                    ctypes.byref(candidate),
+                )
+            except OSError as error:
+                last_error = error
+                continue
+            if result >= 0 and candidate.value:
+                self.interface = candidate
+                self.interface_name = interface_name
+                break
+
+        if not self.interface.value:
+            if last_error:
+                raise OSError(f"Could not initialize Windows taskbar progress: {last_error}") from last_error
+            raise OSError("Could not initialize Windows taskbar progress")
 
         initialize = self._method(3)
         if initialize(self.interface) < 0:
@@ -2273,19 +2292,59 @@ class MainWindow(QMainWindow):
         delay_prefixes = (
             "offset=",
             "Recommended correction:",
-            "Source offset vs reference:",
-            "Timeline shift to apply:",
-            "Measured timing:",
             "Timeline shift:",
             "Timeline shift baked into export:",
             "Organizer will apply audio delays:",
             "Organizer will apply subtitle delays:",
         )
-        if not line.startswith(delay_prefixes):
-            return None
+        if line.startswith(delay_prefixes):
+            return self._audio_sync_emphasis_format("accent")
 
+        normalized = line.casefold()
+        if normalized.startswith("delay reliability:"):
+            rating = normalized.partition(":")[2].strip()
+            if rating == "high":
+                return self._audio_sync_emphasis_format("positive")
+            if rating == "medium":
+                return self._audio_sync_emphasis_format("caution")
+            if rating in {"low", "very low"}:
+                return self._audio_sync_emphasis_format("negative")
+        if normalized.startswith("timing agreement:"):
+            rating = normalized.partition(":")[2].strip()
+            if rating.startswith(("excellent", "good")):
+                return self._audio_sync_emphasis_format("positive")
+            if rating.startswith("fair"):
+                return self._audio_sync_emphasis_format("caution")
+            if rating.startswith(("poor", "single checkpoint")):
+                return self._audio_sync_emphasis_format("negative")
+        if normalized.startswith("verdict:"):
+            verdict = normalized.partition(":")[2].strip()
+            if verdict.startswith("reliable"):
+                return self._audio_sync_emphasis_format("positive")
+            if verdict.startswith("likely"):
+                return self._audio_sync_emphasis_format("caution")
+            if verdict.startswith(("uncertain", "single checkpoint")):
+                return self._audio_sync_emphasis_format("negative")
+        if normalized.startswith("warning:"):
+            return self._audio_sync_emphasis_format("negative")
+        return None
+
+    def _audio_sync_emphasis_format(self, level: str) -> QTextCharFormat:
+        light_colors = {
+            "accent": "#0369a1",
+            "positive": "#15803d",
+            "caution": "#a16207",
+            "negative": "#b91c1c",
+        }
+        dark_colors = {
+            "accent": "#7dd3fc",
+            "positive": "#86efac",
+            "caution": "#facc15",
+            "negative": "#fca5a5",
+        }
+        colors = light_colors if self.current_theme == "light" else dark_colors
         char_format = QTextCharFormat()
-        char_format.setForeground(QColor("#0369a1" if self.current_theme == "light" else "#7dd3fc"))
+        char_format.setForeground(QColor(colors[level]))
         char_format.setFontWeight(QFont.DemiBold)
         return char_format
 
@@ -4922,13 +4981,7 @@ class MainWindow(QMainWindow):
         self.append_audio_sync_summary_line("Result")
         requested_checkpoints = result.attempted_checkpoints or len(result.estimates)
         used_checkpoints = result.used_checkpoints or len(result.estimates)
-        offset_ms = abs(result.median_offset_seconds * 1000)
         shift_ms = abs(result.timeline_shift_seconds * 1000)
-        if abs(result.median_offset_seconds) < 0.0005:
-            source_timing = "Source is aligned with the reference"
-        else:
-            timing_direction = "late" if result.median_offset_seconds > 0 else "early"
-            source_timing = f"Source is {offset_ms:.2f} ms {timing_direction} relative to the reference"
         if abs(result.timeline_shift_seconds) < 0.0005:
             correction = "No practical source shift is needed"
         else:
@@ -4936,13 +4989,6 @@ class MainWindow(QMainWindow):
             correction = f"{correction_action} source by {shift_ms:.2f} ms"
 
         self.append_audio_sync_summary_line(f"Recommended correction: {correction}")
-        self.append_audio_sync_summary_line(
-            f"Source offset vs reference: {audio_sync.format_delay_ms(result.median_offset_seconds)}"
-        )
-        self.append_audio_sync_summary_line(
-            f"Timeline shift to apply: {audio_sync.format_delay_ms(result.timeline_shift_seconds)}"
-        )
-        self.append_audio_sync_summary_line(f"Measured timing: {source_timing}")
         self.append_audio_sync_summary_line(
             f"Delay reliability: {(result.delay_reliability or 'unknown').capitalize()}"
         )

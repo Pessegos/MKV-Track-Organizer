@@ -763,6 +763,9 @@ def test_audio_sync_summary_prioritizes_delay_reliability(qapp):
 
         summary = window.audio_sync_summary_edit.toPlainText()
         assert "Recommended correction: Delay source by 981.45 ms" in summary
+        assert "Source offset vs reference:" not in summary
+        assert "Timeline shift to apply:" not in summary
+        assert "Measured timing:" not in summary
         assert "Delay reliability: High" in summary
         assert "Checkpoint coverage: 6 used / 8 requested" in summary
         assert "Unavailable checkpoints: 2" in summary
@@ -777,13 +780,24 @@ def test_audio_sync_delay_lines_use_highlight_format(qapp):
     window = gui.MainWindow()
     try:
         delay_format = window._audio_sync_summary_line_format(
-            "Timeline shift to apply: +981.45 ms"
+            "Recommended correction: Delay source by 981.45 ms"
         )
 
         assert delay_format is not None
         assert delay_format.foreground().color().name() == "#7dd3fc"
         assert delay_format.fontWeight() == gui.QFont.DemiBold
-        assert window._audio_sync_summary_line_format("Delay reliability: High") is None
+        assert (
+            window._audio_sync_summary_line_format("Delay reliability: High").foreground().color().name()
+            == "#86efac"
+        )
+        assert (
+            window._audio_sync_summary_line_format("Delay reliability: Medium").foreground().color().name()
+            == "#facc15"
+        )
+        assert (
+            window._audio_sync_summary_line_format("Delay reliability: Low").foreground().color().name()
+            == "#fca5a5"
+        )
     finally:
         window.close()
 
