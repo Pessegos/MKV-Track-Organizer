@@ -2576,6 +2576,12 @@ def mkvextract_result_is_usable(
     return result.returncode == 1 and all(path.exists() for path in output_paths)
 
 
+def mkvmerge_result_is_usable(result: subprocess.CompletedProcess, output_path: Path) -> bool:
+    if result.returncode == 0:
+        return True
+    return result.returncode == 1 and output_path.is_file() and output_path.stat().st_size > 0
+
+
 def report_mkvextract_warnings(input_path: Path, result: subprocess.CompletedProcess[str]) -> None:
     details = "\n".join(part for part in (result.stdout, result.stderr) if part)
     warning_lines = [
@@ -7638,8 +7644,11 @@ def process_file(
         cancel_callback,
     )
 
-    if result.returncode != 0:
+    if not mkvmerge_result_is_usable(result, output_path):
         raise OrganizerError(f"mkvmerge failed with exit code {result.returncode}: {input_path}")
+    completed_with_warnings = result.returncode == 1
+    if completed_with_warnings:
+        print("Warning: mkvmerge completed with warnings; validating the recovered output.")
 
     progress("Verifying output", 96, 0)
     verification = verify_output_plan(
@@ -7659,8 +7668,8 @@ def process_file(
         disable_track_statistics_tags=disable_track_statistics_tags,
     )
     print_verification_result(verification)
-    status = "processed"
-    message = ""
+    status = "processed-with-warnings" if completed_with_warnings else "processed"
+    message = "mkvmerge completed with warnings; output verified" if completed_with_warnings else ""
     if verification.get("status") == "failed":
         status = "verification-failed"
         message = f"output verification failed: {len(verification.get('errors', []))} issue(s)"
@@ -7955,8 +7964,11 @@ def process_merged_inputs(
         cancel_callback,
     )
 
-    if result.returncode != 0:
+    if not mkvmerge_result_is_usable(result, output_path):
         raise OrganizerError(f"mkvmerge failed with exit code {result.returncode}: {output_path}")
+    completed_with_warnings = result.returncode == 1
+    if completed_with_warnings:
+        print("Warning: mkvmerge completed with warnings; validating the recovered output.")
 
     progress("Verifying output", 96, 0)
     verification = verify_output_plan(
@@ -7976,8 +7988,10 @@ def process_merged_inputs(
         disable_track_statistics_tags=disable_track_statistics_tags,
     )
     print_verification_result(verification)
-    status = "processed"
+    status = "processed-with-warnings" if completed_with_warnings else "processed"
     message = f"merged {len(input_files)} sources"
+    if completed_with_warnings:
+        message += "; mkvmerge completed with warnings; output verified"
     if verification.get("status") == "failed":
         status = "verification-failed"
         message = f"merged {len(input_files)} sources; output verification failed: {len(verification.get('errors', []))} issue(s)"

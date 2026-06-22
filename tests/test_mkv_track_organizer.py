@@ -2166,6 +2166,164 @@ def test_run_batch_returns_reports_and_events(tmp_path: Path, monkeypatch) -> No
     assert [(event.step, event.steps) for event in progress_events] == [(5, 100), (100, 100)]
 
 
+def test_process_file_verifies_mkvmerge_warning_output(tmp_path: Path, monkeypatch) -> None:
+    input_path = tmp_path / "damaged-source.mkv"
+    output_path = tmp_path / "recovered-output.mkv"
+    input_path.write_bytes(b"source")
+    video = video_track(0)
+    audio = audio_track(1, "eng")
+
+    monkeypatch.setattr(m, "load_metadata", lambda _mkvmerge, _input_path: {})
+    monkeypatch.setattr(m, "build_tracks", lambda _metadata, source_index=0, source_path=None: [video, audio])
+
+    def fake_remux(command, *_args, **_kwargs):
+        output_path.write_bytes(b"valid recovered output")
+        return m.subprocess.CompletedProcess(command, 1)
+
+    monkeypatch.setattr(m, "run_command_with_progress", fake_remux)
+    monkeypatch.setattr(
+        m,
+        "verify_output_plan",
+        lambda **_kwargs: {
+            "status": "ok",
+            "errors": [],
+            "warnings": [],
+            "expected_tracks": 2,
+            "output_tracks": 2,
+        },
+    )
+    args = argparse.Namespace(
+        mkvmerge=Path("mkvmerge"),
+        mkvextract=Path("mkvextract"),
+        subtitle_language_overrides={},
+        audio_delay_overrides={},
+        subtitle_delay_overrides={},
+        detect_language_variants=False,
+        audio_name_style="auto",
+        language_order_style="default",
+        regional_order=None,
+        custom_language_order=None,
+        preferred_language="",
+        preferred_audio_first=False,
+        preferred_audio_default=False,
+        preferred_subtitle_first=False,
+        preferred_forced_subtitle_default=False,
+        analyze_sub_sizes=False,
+        smart_sub_detection=False,
+        drop_empty_subs=False,
+        detect_duplicate_tracks=False,
+        detect_subtitle_language_duplicates=False,
+        auto_commentary_ocr=False,
+        prepare_pgs_ocr=False,
+        preserve_commentary_names=False,
+        disable_track_statistics_tags=True,
+        explain_track_ids=set(),
+        metadata_edit_mode="off",
+        dry_run=False,
+        overwrite=False,
+        skip_existing=False,
+        track_selection_overrides={},
+        track_order_overrides=[],
+    )
+
+    report = m.process_file(input_path, output_path, args, forced_subtitle_ids=set())
+
+    assert report["status"] == "processed-with-warnings"
+    assert report["message"] == "mkvmerge completed with warnings; output verified"
+    assert not m.report_counts_as_failure(report)
+
+
+def test_mkvmerge_warning_requires_nonempty_output(tmp_path: Path) -> None:
+    result = m.subprocess.CompletedProcess(["mkvmerge"], 1)
+    missing_output = tmp_path / "missing.mkv"
+    empty_output = tmp_path / "empty.mkv"
+    empty_output.write_bytes(b"")
+
+    assert not m.mkvmerge_result_is_usable(result, missing_output)
+    assert not m.mkvmerge_result_is_usable(result, empty_output)
+
+
+def test_merged_inputs_report_verified_mkvmerge_warning_without_error(tmp_path: Path, monkeypatch) -> None:
+    first_input = tmp_path / "damaged-main.mkv"
+    second_input = tmp_path / "extra-audio.mka"
+    output_path = tmp_path / "merged-output.mkv"
+    first_input.write_bytes(b"main")
+    second_input.write_bytes(b"audio")
+
+    monkeypatch.setattr(m, "load_metadata", lambda _mkvmerge, _input_path: {})
+
+    def fake_tracks(_metadata, source_index=0, source_path=None):
+        tracks = [video_track(0), audio_track(1, "eng")] if source_index == 0 else [audio_track(1, "por")]
+        for track in tracks:
+            track.source_index = source_index
+            track.source_path = str(source_path or "")
+            track.source_name = Path(source_path).name if source_path else ""
+        return tracks
+
+    monkeypatch.setattr(m, "build_tracks", fake_tracks)
+
+    def fake_merge(command, *_args, **_kwargs):
+        output_path.write_bytes(b"valid recovered merge")
+        return m.subprocess.CompletedProcess(command, 1)
+
+    monkeypatch.setattr(m, "run_command_with_progress", fake_merge)
+    monkeypatch.setattr(
+        m,
+        "verify_output_plan",
+        lambda **_kwargs: {
+            "status": "ok",
+            "errors": [],
+            "warnings": [],
+            "expected_tracks": 3,
+            "output_tracks": 3,
+        },
+    )
+    args = argparse.Namespace(
+        mkvmerge=Path("mkvmerge"),
+        mkvextract=Path("mkvextract"),
+        subtitle_language_overrides={},
+        audio_delay_overrides={},
+        subtitle_delay_overrides={},
+        detect_language_variants=False,
+        audio_name_style="auto",
+        language_order_style="default",
+        regional_order=None,
+        custom_language_order=None,
+        preferred_language="",
+        preferred_audio_first=False,
+        preferred_audio_default=False,
+        preferred_subtitle_first=False,
+        preferred_forced_subtitle_default=False,
+        analyze_sub_sizes=False,
+        smart_sub_detection=False,
+        drop_empty_subs=False,
+        detect_duplicate_tracks=False,
+        detect_subtitle_language_duplicates=False,
+        auto_commentary_ocr=False,
+        prepare_pgs_ocr=False,
+        preserve_commentary_names=False,
+        disable_track_statistics_tags=True,
+        explain_track_ids=set(),
+        metadata_edit_mode="off",
+        dry_run=False,
+        overwrite=False,
+        skip_existing=False,
+        track_selection_overrides={},
+        track_order_overrides=[],
+    )
+
+    report = m.process_merged_inputs(
+        [first_input, second_input],
+        output_path,
+        args,
+        forced_subtitle_ids=set(),
+    )
+
+    assert report["status"] == "processed-with-warnings"
+    assert report["message"] == "merged 2 sources; mkvmerge completed with warnings; output verified"
+    assert not m.report_counts_as_failure(report)
+
+
 def test_process_file_with_language_variants_does_not_need_batch_inputs(tmp_path: Path, monkeypatch) -> None:
     input_path = tmp_path / "movie.mkv"
     output_path = tmp_path / "out.mkv"

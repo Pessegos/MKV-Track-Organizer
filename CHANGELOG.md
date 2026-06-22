@@ -2,6 +2,13 @@
 
 All notable user-facing changes are recorded here.
 
+## 1.0.13 - 2026-06-22
+
+- Treated MKVToolNix exit code 1 as a completed remux with warnings instead of an immediate failure.
+- Required a non-empty output before accepting a warning result, then ran the full output-plan verification.
+- Reported verified warning results as `processed-with-warnings` without increasing the error count.
+- Kept fatal exit codes, missing/empty outputs, and verification mismatches as real errors.
+
 ## 1.0.12 - 2026-06-22
 
 - Reduced the Audio Sync result to one unambiguous recommended correction instead of four equivalent delay descriptions.
