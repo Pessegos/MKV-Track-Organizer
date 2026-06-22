@@ -2,6 +2,13 @@
 
 All notable user-facing changes are recorded here.
 
+## 1.0.14 - 2026-06-22
+
+- Added a Summary details section with the complete error/warning reason, affected input, and relevant paths.
+- Preserved MKVToolNix warning/error lines in run reports, including structural recovery timestamps when provided.
+- Added full cell tooltips so truncated file-table messages remain directly inspectable.
+- Clarified warning verification wording as track-plan verification rather than full media decoding.
+
 ## 1.0.13 - 2026-06-22
 
 - Treated MKVToolNix exit code 1 as a completed remux with warnings instead of an immediate failure.

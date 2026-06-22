@@ -802,6 +802,53 @@ def test_audio_sync_delay_lines_use_highlight_format(qapp):
         window.close()
 
 
+def test_organizer_summary_includes_full_error_and_warning_details(qapp):
+    reports = [
+        {
+            "status": "error",
+            "input": "C:/media/bambi.mkv",
+            "output": "C:/media/_sorted/bambi-smart-regional.mkv",
+            "message": (
+                "Output already exists for this file:\n"
+                "C:/media/_sorted/bambi-smart-regional.mkv\n"
+                "Will not overwrite."
+            ),
+            "verification": {},
+            "plan_summary": {},
+        },
+        {
+            "status": "processed-with-warnings",
+            "input": "C:/media/damaged.mkv",
+            "output": "C:/media/_sorted/damaged.mkv",
+            "message": (
+                "mkvmerge completed with warnings; output track plan verified\n"
+                "The last timestamp before the error was 00:53:14.066."
+            ),
+            "verification": {"status": "ok", "errors": [], "warnings": []},
+            "plan_summary": {},
+        },
+    ]
+    result = organizer.BatchRunResult(
+        reports=reports,
+        failures=1,
+        input_files=[Path("C:/media/bambi.mkv"), Path("C:/media/damaged.mkv")],
+        source_root=None,
+    )
+    window = gui.MainWindow()
+    try:
+        window._append_organizer_result_summary(result)
+        summary = window.summary_edit.toPlainText()
+
+        assert "Details" in summary
+        assert "Error: bambi.mkv" in summary
+        assert "Output already exists for this file:" in summary
+        assert "C:/media/_sorted/bambi-smart-regional.mkv" in summary
+        assert "Warning: damaged.mkv" in summary
+        assert "00:53:14.066" in summary
+    finally:
+        window.close()
+
+
 def test_progress_updates_windows_taskbar_state(qapp):
     class FakeTaskbarProgress:
         def __init__(self):

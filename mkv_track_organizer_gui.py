@@ -5142,6 +5142,7 @@ class MainWindow(QMainWindow):
                 f"{verification_counts.get('failed', 0)} failed"
             )
         self._append_plan_summary_lines(self.append_summary_line, result.reports)
+        self._append_report_diagnostics(self.append_summary_line, result.reports)
         for output_dir in self._output_dirs(result.reports):
             self.append_summary_line(f"Output: {output_dir}")
         self.append_summary_line()
@@ -5173,6 +5174,7 @@ class MainWindow(QMainWindow):
                     f"{verification_counts.get('failed', 0)} failed"
                 )
             self._append_plan_summary_lines(self.append_makemkv_summary_line, organizer_result.reports)
+            self._append_report_diagnostics(self.append_makemkv_summary_line, organizer_result.reports)
             for output_dir in self._output_dirs(organizer_result.reports):
                 self.append_makemkv_summary_line(f"Organizer output: {output_dir}")
         self.append_makemkv_summary_line()
@@ -5193,6 +5195,42 @@ class MainWindow(QMainWindow):
                 continue
             counts[status] = counts.get(status, 0) + 1
         return counts
+
+    def _append_report_diagnostics(self, append_line, reports: list[dict]) -> None:
+        entries: list[tuple[str, str, list[str]]] = []
+        for report in reports:
+            status = str(report.get("status") or "")
+            verification = report.get("verification") or {}
+            messages = [
+                line.strip()
+                for line in str(report.get("message") or "").splitlines()
+                if line.strip()
+            ]
+            messages.extend(
+                str(line).strip()
+                for line in verification.get("errors", [])
+                if str(line).strip()
+            )
+            messages.extend(
+                str(line).strip()
+                for line in verification.get("warnings", [])
+                if str(line).strip()
+            )
+            messages = list(dict.fromkeys(messages))
+            if not messages or status not in {"error", "verification-failed", "processed-with-warnings"}:
+                continue
+            level = "Warning" if status == "processed-with-warnings" else "Error"
+            input_name = Path(str(report.get("input") or "")).name or "Unknown input"
+            entries.append((level, input_name, messages))
+
+        if not entries:
+            return
+        append_line()
+        append_line("Details")
+        for level, input_name, messages in entries:
+            append_line(f"{level}: {input_name}")
+            for message in messages:
+                append_line(f"  {message}")
 
     def _plan_summary_counts(self, reports: list[dict]) -> dict[str, int]:
         counts: dict[str, int] = {}
@@ -5246,6 +5284,8 @@ class MainWindow(QMainWindow):
                 item.setData(Qt.UserRole, key)
             if column == 0:
                 self._apply_status_style(item, str(value))
+            if value:
+                item.setToolTip(str(value))
             self.files_table.setItem(row, column, item)
 
     def _set_makemkv_row(self, row: int, values: list[str], path: Path) -> None:

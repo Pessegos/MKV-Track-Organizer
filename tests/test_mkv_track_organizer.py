@@ -2178,7 +2178,11 @@ def test_process_file_verifies_mkvmerge_warning_output(tmp_path: Path, monkeypat
 
     def fake_remux(command, *_args, **_kwargs):
         output_path.write_bytes(b"valid recovered output")
-        return m.subprocess.CompletedProcess(command, 1)
+        return m.subprocess.CompletedProcess(
+            command,
+            1,
+            stdout="#GUI#warning Resyncing successful at 00:53:16.193.\n",
+        )
 
     monkeypatch.setattr(m, "run_command_with_progress", fake_remux)
     monkeypatch.setattr(
@@ -2229,7 +2233,8 @@ def test_process_file_verifies_mkvmerge_warning_output(tmp_path: Path, monkeypat
     report = m.process_file(input_path, output_path, args, forced_subtitle_ids=set())
 
     assert report["status"] == "processed-with-warnings"
-    assert report["message"] == "mkvmerge completed with warnings; output verified"
+    assert "mkvmerge completed with warnings; output track plan verified" in report["message"]
+    assert "Resyncing successful at 00:53:16.193." in report["message"]
     assert not m.report_counts_as_failure(report)
 
 
@@ -2264,7 +2269,11 @@ def test_merged_inputs_report_verified_mkvmerge_warning_without_error(tmp_path: 
 
     def fake_merge(command, *_args, **_kwargs):
         output_path.write_bytes(b"valid recovered merge")
-        return m.subprocess.CompletedProcess(command, 1)
+        return m.subprocess.CompletedProcess(
+            command,
+            1,
+            stdout="Warning: The last timestamp before the error was 00:53:14.066.\n",
+        )
 
     monkeypatch.setattr(m, "run_command_with_progress", fake_merge)
     monkeypatch.setattr(
@@ -2320,7 +2329,8 @@ def test_merged_inputs_report_verified_mkvmerge_warning_without_error(tmp_path: 
     )
 
     assert report["status"] == "processed-with-warnings"
-    assert report["message"] == "merged 2 sources; mkvmerge completed with warnings; output verified"
+    assert "merged 2 sources; mkvmerge completed with warnings" in report["message"]
+    assert "00:53:14.066" in report["message"]
     assert not m.report_counts_as_failure(report)
 
 

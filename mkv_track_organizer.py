@@ -2582,6 +2582,28 @@ def mkvmerge_result_is_usable(result: subprocess.CompletedProcess, output_path: 
     return result.returncode == 1 and output_path.is_file() and output_path.stat().st_size > 0
 
 
+def mkvtoolnix_diagnostic_lines(result: subprocess.CompletedProcess) -> list[str]:
+    diagnostics: list[str] = []
+    for raw_line in str(result.stdout or "").splitlines():
+        line = raw_line.strip()
+        line = re.sub(r"^#GUI#(?:warning|error)\s*", "", line, flags=re.IGNORECASE).strip()
+        if line.lower().startswith(("warning:", "error:")):
+            line = line.partition(":")[2].strip()
+        elif not raw_line.lstrip().lower().startswith(("#gui#warning", "#gui#error")):
+            continue
+        if line and line not in diagnostics:
+            diagnostics.append(line)
+    return diagnostics
+
+
+def mkvmerge_warning_report_message(result: subprocess.CompletedProcess, prefix: str = "") -> str:
+    headline = "mkvmerge completed with warnings; output track plan verified"
+    if prefix:
+        headline = f"{prefix}; {headline}"
+    diagnostics = mkvtoolnix_diagnostic_lines(result)
+    return "\n".join([headline, *diagnostics])
+
+
 def report_mkvextract_warnings(input_path: Path, result: subprocess.CompletedProcess[str]) -> None:
     details = "\n".join(part for part in (result.stdout, result.stderr) if part)
     warning_lines = [
@@ -7293,6 +7315,7 @@ def run_command_with_progress(
     reader_thread.start()
 
     output_closed = False
+    captured_output: list[str] = []
     while True:
         if cancel_callback and cancel_callback():
             terminate_process(process)
@@ -7319,10 +7342,11 @@ def run_command_with_progress(
             if progress_callback:
                 progress_callback(f"{message} ({percent}%)", step, 100)
             continue
+        captured_output.append(line)
         print(line, end="")
 
     reader_thread.join(timeout=1)
-    return subprocess.CompletedProcess(command_to_run, process.wait())
+    return subprocess.CompletedProcess(command_to_run, process.wait(), stdout="".join(captured_output))
 
 
 def process_file(
@@ -7669,7 +7693,7 @@ def process_file(
     )
     print_verification_result(verification)
     status = "processed-with-warnings" if completed_with_warnings else "processed"
-    message = "mkvmerge completed with warnings; output verified" if completed_with_warnings else ""
+    message = mkvmerge_warning_report_message(result) if completed_with_warnings else ""
     if verification.get("status") == "failed":
         status = "verification-failed"
         message = f"output verification failed: {len(verification.get('errors', []))} issue(s)"
@@ -7989,9 +8013,12 @@ def process_merged_inputs(
     )
     print_verification_result(verification)
     status = "processed-with-warnings" if completed_with_warnings else "processed"
-    message = f"merged {len(input_files)} sources"
-    if completed_with_warnings:
-        message += "; mkvmerge completed with warnings; output verified"
+    merge_message = f"merged {len(input_files)} sources"
+    message = (
+        mkvmerge_warning_report_message(result, merge_message)
+        if completed_with_warnings
+        else merge_message
+    )
     if verification.get("status") == "failed":
         status = "verification-failed"
         message = f"merged {len(input_files)} sources; output verification failed: {len(verification.get('errors', []))} issue(s)"
