@@ -19,6 +19,7 @@ try:
         QBrush,
         QColor,
         QCloseEvent,
+        QDrag,
         QDragEnterEvent,
         QDropEvent,
         QFont,
@@ -227,15 +228,34 @@ class TrackTableWidget(QTableWidget):
     def startDrag(self, supported_actions) -> None:
         self._drag_rows = self._selected_row_numbers()
         self._pending_drop_row = None
-        super().startDrag(supported_actions)
+        if not self._drag_rows:
+            return
+
+        indexes = [
+            self.model().index(row, column)
+            for row in self._drag_rows
+            for column in range(self.columnCount())
+        ]
+        mime_data = self.model().mimeData(indexes)
+        if mime_data is None:
+            self._drag_rows = []
+            return
+
+        drag = QDrag(self)
+        drag.setMimeData(mime_data)
+        try:
+            drag.exec(supported_actions & Qt.MoveAction, Qt.MoveAction)
+        finally:
+            self._drag_rows = []
+            self._pending_drop_row = None
 
     def dragMoveEvent(self, event) -> None:
         super().dragMoveEvent(event)
-        if event.source() is self:
+        if self._drag_rows or event.source() is self:
             self._pending_drop_row = self._drop_target_row(event)
 
     def dropEvent(self, event: QDropEvent) -> None:
-        if event.source() is not self:
+        if not self._drag_rows and event.source() is not self:
             super().dropEvent(event)
             return
 

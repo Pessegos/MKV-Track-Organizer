@@ -229,6 +229,59 @@ def test_single_track_check_updates_only_its_row(qapp, monkeypatch):
         window.close()
 
 
+def test_track_reorder_preserves_every_row_in_large_preview(qapp):
+    audio_tracks = [report_track(track_id, "audio", name=f"Audio {track_id}") for track_id in range(160)]
+    report = {
+        "status": "dry-run",
+        "input": str(Path("C:/tmp/source.mkv")),
+        "output": str(Path("C:/tmp/out.mkv")),
+        "message": "",
+        "command": [],
+        "tracks": {"video": [], "audio": audio_tracks, "subtitles": []},
+        "plan_summary": {"counts": {}, "items": []},
+    }
+    window = gui.MainWindow()
+    try:
+        window._populate_results([report])
+        original_keys = window._track_order_keys_from_table()
+
+        window._track_rows_reordered([40, 41, 42], 125)
+
+        reordered_keys = window._track_order_keys_from_table()
+        assert len(reordered_keys) == len(original_keys) == 160
+        assert set(reordered_keys) == set(original_keys)
+        assert reordered_keys[122:125] == original_keys[40:43]
+        assert window.tracks_table.rowCount() == 160
+    finally:
+        window.close()
+
+
+def test_internal_track_drop_uses_captured_rows_when_qt_reports_viewport_source(qapp):
+    table = gui.TrackTableWidget(4, 2)
+    emitted: list[tuple[list[int], int]] = []
+
+    class DropEvent:
+        accepted = False
+
+        def source(self):
+            return table.viewport()
+
+        def acceptProposedAction(self):
+            self.accepted = True
+
+    event = DropEvent()
+    table._drag_rows = [1]
+    table._pending_drop_row = 3
+    table.rows_reordered.connect(lambda rows, target: emitted.append((rows, target)))
+
+    table.dropEvent(event)
+
+    assert event.accepted
+    assert emitted == [([1], 3)]
+    assert table._drag_rows == []
+    assert table._pending_drop_row is None
+
+
 def test_colored_duplicate_checkbox_does_not_reenter_item_changed(qapp):
     duplicate = report_track(
         2,

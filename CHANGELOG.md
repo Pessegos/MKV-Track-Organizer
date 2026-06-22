@@ -2,6 +2,13 @@
 
 All notable user-facing changes are recorded here.
 
+## 1.0.10 - 2026-06-22
+
+- Replaced the track table's native internal drag mutation with an Organizer-controlled drag operation.
+- Prevented dragged tracks from disappearing or being moved to the end when Qt reports the table viewport as the drag source.
+- Preserved every preview row and its selection state while applying manual track order changes.
+- Added large-preview and alternate drag-source regressions for manual ordering.
+
 ## 1.0.9 - 2026-06-22
 
 - Fixed an infinite `itemChanged` recursion when excluding duplicate or probable-duplicate tracks with styled table rows.
