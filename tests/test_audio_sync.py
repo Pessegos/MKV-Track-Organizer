@@ -191,6 +191,44 @@ def test_estimate_offset_uses_checkpoint_consensus_when_match_strength_is_weak(m
     assert not result.warnings
 
 
+def test_estimate_offset_detects_linear_drift_correction(monkeypatch, tmp_path: Path) -> None:
+    reference = tmp_path / "reference.mkv"
+    source = tmp_path / "source.mkv"
+    reference.touch()
+    source.touch()
+    settings = sync.AudioSyncSettings(
+        reference,
+        source,
+        start_seconds=300.0,
+        checkpoint_spacing_seconds=600.0,
+        checkpoints=6,
+    )
+
+    monkeypatch.setattr(sync, "validate_settings", lambda _settings: None)
+    estimates = iter(
+        [
+            sync.OffsetEstimate(300.0, -0.340, -0.340, 0.8),
+            sync.OffsetEstimate(900.0, -0.940, -0.940, 0.8),
+            sync.OffsetEstimate(1500.0, -1.540, -1.540, 0.8),
+            sync.OffsetEstimate(2100.0, -2.140, -2.140, 0.8),
+            sync.OffsetEstimate(2700.0, -2.740, -2.740, 0.8),
+            sync.OffsetEstimate(3300.0, -3.340, -3.340, 0.8),
+        ]
+    )
+    monkeypatch.setattr(sync, "estimate_at_checkpoint", lambda *_args, **_kwargs: next(estimates))
+
+    result = sync.estimate_offset(settings)
+
+    assert result.has_linear_drift_correction
+    assert result.delay_reliability == "high"
+    assert result.drift_reliability == "high"
+    assert round(result.drift_correction_delay_seconds * 1000) == 40
+    assert round(result.drift_correction_stretch_factor, 6) == 1.001000
+    assert result.drift_residual_spread_seconds < 0.001
+    assert "timestamp stretch required" in result.verdict
+    assert not result.warnings
+
+
 def test_estimate_offset_keeps_two_very_weak_checkpoints_low_reliability(monkeypatch, tmp_path: Path) -> None:
     reference = tmp_path / "reference.mkv"
     source = tmp_path / "source.mkv"

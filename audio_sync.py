@@ -108,10 +108,24 @@ class AudioSyncResult:
     attempted_checkpoints: int = 0
     notes: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
+    drift_slope_seconds_per_second: float = 0.0
+    drift_intercept_seconds: float = 0.0
+    drift_residual_spread_seconds: float = 0.0
+    drift_correction_delay_seconds: float = 0.0
+    drift_correction_stretch_factor: float = 1.0
+    drift_reliability: str = ""
+    drift_reason: str = ""
 
     @property
     def timeline_shift_seconds(self) -> float:
         return -self.median_offset_seconds
+
+    @property
+    def has_linear_drift_correction(self) -> bool:
+        return (
+            self.drift_reliability in {"high", "medium"}
+            and abs(self.drift_correction_stretch_factor - 1.0) >= 0.0001
+        )
 
     @property
     def unavailable_checkpoints(self) -> int:
@@ -361,6 +375,13 @@ def estimate_offset(
     average_confidence = float(np.mean([estimate.confidence for estimate in selected_estimates]))
     consistency = consistency_label(spread, len(selected_estimates))
     confidence_summary = confidence_label(average_confidence)
+    (
+        drift_slope,
+        drift_intercept,
+        drift_residual_spread,
+        drift_reliability,
+        drift_reason,
+    ) = linear_drift_analysis(estimates, average_confidence)
     reliability = delay_reliability_label(
         spread,
         average_confidence,
@@ -374,6 +395,9 @@ def estimate_offset(
         len(selected_estimates),
         ignored_checkpoints,
     )
+    if drift_reliability:
+        reliability = drift_reliability
+        reliability_reason = drift_reason
     warnings = result_warnings(
         selected_estimates=selected_estimates,
         ignored_checkpoints=ignored_checkpoints,
@@ -381,14 +405,18 @@ def estimate_offset(
         all_spread_seconds=all_spread,
         average_confidence=average_confidence,
         attempted_checkpoints=len(checkpoints),
+        drift_reliability=drift_reliability,
     )
-    verdict = verdict_label(
-        spread,
-        average_confidence,
-        len(selected_estimates),
-        ignored_checkpoints,
-        len(checkpoints),
-    )
+    if drift_reliability:
+        verdict = "reliable linear drift correction: timestamp stretch required"
+    else:
+        verdict = verdict_label(
+            spread,
+            average_confidence,
+            len(selected_estimates),
+            ignored_checkpoints,
+            len(checkpoints),
+        )
     return AudioSyncResult(
         estimates=estimates,
         median_offset_seconds=median,
@@ -405,6 +433,13 @@ def estimate_offset(
         attempted_checkpoints=len(checkpoints),
         notes=(),
         warnings=warnings,
+        drift_slope_seconds_per_second=drift_slope,
+        drift_intercept_seconds=drift_intercept,
+        drift_residual_spread_seconds=drift_residual_spread,
+        drift_correction_delay_seconds=-drift_intercept,
+        drift_correction_stretch_factor=1.0 - drift_slope,
+        drift_reliability=drift_reliability,
+        drift_reason=drift_reason,
     )
 
 
@@ -764,6 +799,47 @@ def delay_reliability_reason(
     return reason
 
 
+def linear_drift_analysis(
+    estimates: list[OffsetEstimate],
+    average_confidence: float,
+) -> tuple[float, float, float, str, str]:
+    if len(estimates) < 4:
+        return 0.0, 0.0, 0.0, "", ""
+
+    times = np.array([estimate.checkpoint_seconds for estimate in estimates], dtype=np.float64)
+    offsets = np.array([estimate.offset_seconds for estimate in estimates], dtype=np.float64)
+    time_span = float(np.max(times) - np.min(times)) if times.size else 0.0
+    if time_span < 600.0:
+        return 0.0, 0.0, 0.0, "", ""
+
+    design = np.vstack([times, np.ones_like(times)]).T
+    slope, intercept = np.linalg.lstsq(design, offsets, rcond=None)[0]
+    slope = float(slope)
+    intercept = float(intercept)
+    fitted = slope * times + intercept
+    residual_spread = float(np.max(np.abs(offsets - fitted))) if offsets.size else 0.0
+
+    if abs(slope) < 0.00015:
+        return slope, intercept, residual_spread, "", ""
+
+    reliability = ""
+    if residual_spread <= 0.100 and average_confidence >= 0.10:
+        reliability = "high"
+    elif residual_spread <= 0.250 and average_confidence >= 0.05:
+        reliability = "medium"
+
+    if not reliability:
+        return slope, intercept, residual_spread, "", ""
+
+    drift_over_span_ms = slope * time_span * 1000.0
+    reason = (
+        f"{len(estimates)} checkpoints form a linear drift "
+        f"({drift_over_span_ms:+.0f} ms over the sampled timeline) "
+        f"with residuals within +/-{residual_spread * 1000:.2f} ms"
+    )
+    return slope, intercept, residual_spread, reliability, reason
+
+
 def result_warnings(
     *,
     selected_estimates: list[OffsetEstimate],
@@ -772,8 +848,14 @@ def result_warnings(
     all_spread_seconds: float,
     average_confidence: float,
     attempted_checkpoints: int = 0,
+    drift_reliability: str = "",
 ) -> tuple[str, ...]:
     warnings: list[str] = []
+    if drift_reliability:
+        if ignored_checkpoints:
+            warnings.append(f"{ignored_checkpoints} outlier checkpoint(s) were ignored outside the main delay cluster")
+        return tuple(warnings)
+
     reliability = delay_reliability_label(
         spread_seconds,
         average_confidence,

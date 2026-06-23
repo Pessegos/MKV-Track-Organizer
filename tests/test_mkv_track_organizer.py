@@ -1077,6 +1077,14 @@ def test_parse_track_delay_overrides() -> None:
     }
 
 
+def test_parse_track_delay_overrides_accepts_linear_stretch() -> None:
+    overrides = m.parse_track_delay_overrides("1:+69,1.001004, 2:-250", "--audio-delays")
+
+    assert overrides[1].delay_ms == 69
+    assert overrides[1].stretch_factor == 1.001004
+    assert overrides[2] == -250
+
+
 def test_parse_track_delay_overrides_rejects_bad_input() -> None:
     try:
         m.parse_track_delay_overrides("1:+abc", "--audio-delays")
@@ -1110,6 +1118,29 @@ def test_mkvmerge_command_applies_audio_and_subtitle_delays(tmp_path: Path) -> N
     ]
     assert "1:150" in sync_values
     assert "2:-250" in sync_values
+
+
+def test_mkvmerge_command_applies_linear_sync_stretch(tmp_path: Path) -> None:
+    audio = audio_track(1)
+    audio.suggested_name = "E-AC-3 5.1"
+    audio.delay_ms = 69
+    audio.sync_stretch_factor = 1.001004
+
+    command = m.build_mkvmerge_command(
+        mkvmerge=Path("mkvmerge"),
+        input_path=tmp_path / "in.mkv",
+        output_path=tmp_path / "out.mkv",
+        videos=[],
+        audio_tracks=[audio],
+        subtitles=[],
+    )
+
+    sync_values = [
+        command[index + 1]
+        for index, value in enumerate(command)
+        if value == "--sync"
+    ]
+    assert "1:69,1.001004" in sync_values
 
 
 def test_mkvmerge_command_disables_track_statistics_tags_by_default(tmp_path: Path) -> None:

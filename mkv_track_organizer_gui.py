@@ -803,9 +803,9 @@ class MainWindow(QMainWindow):
         self.forced_ids_edit = QLineEdit()
         self.forced_ids_edit.setPlaceholderText("5,8,12")
         self.audio_delays_edit = QLineEdit()
-        self.audio_delays_edit.setPlaceholderText("1:150, 2:-250")
+        self.audio_delays_edit.setPlaceholderText("1:150, 2:-250, 7:+69,1.001")
         self.subtitle_delays_edit = QLineEdit()
-        self.subtitle_delays_edit.setPlaceholderText("5:-250")
+        self.subtitle_delays_edit.setPlaceholderText("5:-250, 8:+69,1.001")
         self.preferred_language_edit = QLineEdit()
         self.preferred_language_edit.setPlaceholderText("pt-PT")
 
@@ -1038,7 +1038,7 @@ class MainWindow(QMainWindow):
         self._audio_sync_preset_prompt_active = False
         self.audio_sync_check_button = QPushButton("Check tools")
         self.audio_sync_analyze_button = QPushButton("Analyze")
-        self.audio_sync_apply_organizer_button = QPushButton("Apply delay in Organizer")
+        self.audio_sync_apply_organizer_button = QPushButton("Apply correction in Organizer")
         self.audio_sync_export_button = QPushButton("Export shifted .mka")
         self.audio_sync_select_all_button = QPushButton("Select all")
         self.audio_sync_clear_selection_button = QPushButton("Clear selection")
@@ -1160,8 +1160,12 @@ class MainWindow(QMainWindow):
         )
         self.subtitle_language_edit.setToolTip("Manual language override, for example spa:7,8; fr-CA:9")
         self.forced_ids_edit.setToolTip("Manual forced-subtitle override, for example 5,8,12")
-        self.audio_delays_edit.setToolTip("Manual audio delays in milliseconds. Example: 1:150, 2:-250")
-        self.subtitle_delays_edit.setToolTip("Manual subtitle delays in milliseconds. Example: 5:-250")
+        self.audio_delays_edit.setToolTip(
+            "Manual audio sync in milliseconds. Examples: 1:150, 2:-250, 7:+69,1.001 for linear drift."
+        )
+        self.subtitle_delays_edit.setToolTip(
+            "Manual subtitle sync in milliseconds. Examples: 5:-250 or 8:+69,1.001 for linear drift."
+        )
         self.preferred_language_edit.setToolTip("Language code used by the optional preferred-language rules, for example pt-PT")
         self.config_custom_language_order_edit.setToolTip(
             "App-wide default copied into the Organizer when requested."
@@ -1672,7 +1676,7 @@ class MainWindow(QMainWindow):
         self.audio_sync_analyze_button.setIcon(style.standardIcon(QStyle.SP_MediaPlay))
         self.audio_sync_apply_organizer_button.setIcon(style.standardIcon(QStyle.SP_DialogApplyButton))
         self.audio_sync_apply_organizer_button.setToolTip(
-            "Fill the Organizer input, audio delay, and subtitle delay fields; Organizer remux applies them with mkvmerge --sync."
+            "Fill the Organizer input, audio sync, and subtitle sync fields; Organizer remux applies them with mkvmerge --sync."
         )
         self.audio_sync_apply_organizer_button.setEnabled(False)
         self.audio_sync_export_button.setIcon(style.standardIcon(QStyle.SP_DialogSaveButton))
@@ -2296,12 +2300,13 @@ class MainWindow(QMainWindow):
             "Timeline shift baked into export:",
             "Organizer will apply audio delays:",
             "Organizer will apply subtitle delays:",
+            "Linear drift:",
         )
         if line.startswith(delay_prefixes):
             return self._audio_sync_emphasis_format("accent")
 
         normalized = line.casefold()
-        if normalized.startswith("delay reliability:"):
+        if normalized.startswith(("delay reliability:", "correction reliability:")):
             rating = normalized.partition(":")[2].strip()
             if rating == "high":
                 return self._audio_sync_emphasis_format("positive")
@@ -2309,7 +2314,7 @@ class MainWindow(QMainWindow):
                 return self._audio_sync_emphasis_format("caution")
             if rating in {"low", "very low"}:
                 return self._audio_sync_emphasis_format("negative")
-        if normalized.startswith("timing agreement:"):
+        if normalized.startswith(("timing agreement:", "timing agreement after drift fit:")):
             rating = normalized.partition(":")[2].strip()
             if rating.startswith(("excellent", "good")):
                 return self._audio_sync_emphasis_format("positive")
@@ -2317,6 +2322,8 @@ class MainWindow(QMainWindow):
                 return self._audio_sync_emphasis_format("caution")
             if rating.startswith(("poor", "single checkpoint")):
                 return self._audio_sync_emphasis_format("negative")
+            if normalized.startswith("timing agreement after drift fit:"):
+                return self._audio_sync_emphasis_format("positive")
         if normalized.startswith("verdict:"):
             verdict = normalized.partition(":")[2].strip()
             if verdict.startswith("reliable"):
@@ -3565,6 +3572,18 @@ class MainWindow(QMainWindow):
             if track.get("type") == track_type and track.get("id") is not None
         ]
 
+    def _audio_sync_organizer_sync_value(self) -> str:
+        if not self.audio_sync_result:
+            return "+0"
+        if self.audio_sync_result.has_linear_drift_correction:
+            correction = organizer.TrackSyncCorrection(
+                int(round(self.audio_sync_result.drift_correction_delay_seconds * 1000)),
+                self.audio_sync_result.drift_correction_stretch_factor,
+            )
+            return organizer.format_track_sync_correction(correction)
+        delay_ms = int(round(self.audio_sync_result.timeline_shift_seconds * 1000))
+        return f"{delay_ms:+d}"
+
     @Slot()
     def apply_audio_sync_delay_to_organizer(self) -> None:
         if not self.audio_sync_result:
@@ -3587,12 +3606,12 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Audio Sync", "The Organizer workflow needs a .mkv or .mka source file.")
             return
 
-        delay_ms = int(round(self.audio_sync_result.timeline_shift_seconds * 1000))
-        delay_text = ", ".join(f"{stream.index}:{delay_ms:+d}" for stream in selected_streams)
+        sync_value = self._audio_sync_organizer_sync_value()
+        delay_text = ", ".join(f"{stream.index}:{sync_value}" for stream in selected_streams)
         subtitle_track_ids = self._matroska_track_ids_by_type(source_path, "subtitles")
         if not subtitle_track_ids:
             subtitle_track_ids = [stream.index for stream in self.audio_sync_source_streams if stream.type == "subtitle"]
-        subtitle_delay_text = ", ".join(f"{track_id}:{delay_ms:+d}" for track_id in subtitle_track_ids)
+        subtitle_delay_text = ", ".join(f"{track_id}:{sync_value}" for track_id in subtitle_track_ids)
         self.input_paths = []
         self.add_input_paths([source_path])
         self.audio_delays_edit.setText(delay_text)
@@ -3603,11 +3622,16 @@ class MainWindow(QMainWindow):
             self.append_audio_sync_summary_line(f"Organizer will apply subtitle delays: {subtitle_delay_text}")
         else:
             self.append_audio_sync_summary_line("Organizer found no source subtitles to delay.")
-        self.append_audio_sync_summary_line(
-            f"Timeline shift: {audio_sync.format_delay_ms(self.audio_sync_result.timeline_shift_seconds)}"
-        )
-        self.append_audio_sync_summary_line("Run Preview or Run in Organizer to remux with those delayed tracks.")
-        self.statusBar().showMessage("Audio Sync delay prepared in Organizer")
+        if self.audio_sync_result.has_linear_drift_correction:
+            self.append_audio_sync_summary_line(
+                "Linear drift correction will be applied with mkvmerge --sync delay,stretch."
+            )
+        else:
+            self.append_audio_sync_summary_line(
+                f"Timeline shift: {audio_sync.format_delay_ms(self.audio_sync_result.timeline_shift_seconds)}"
+            )
+        self.append_audio_sync_summary_line("Run Preview or Run in Organizer to remux with those synchronized tracks.")
+        self.statusBar().showMessage("Audio Sync correction prepared in Organizer")
 
     @Slot(int)
     def _audio_sync_analysis_preset_activated(self, index: int) -> None:
@@ -3684,9 +3708,25 @@ class MainWindow(QMainWindow):
         ]
         return min(durations) if len(durations) == 2 else None
 
+    def _audio_sync_detected_duration_delta(self) -> float | None:
+        reference_duration = self.audio_sync_reference_duration_seconds
+        source_duration = self.audio_sync_source_duration_seconds
+        if not reference_duration or not source_duration:
+            return None
+        if reference_duration <= 0 or source_duration <= 0:
+            return None
+        return abs(reference_duration - source_duration)
+
+    def _audio_sync_auto_max_offset_seconds(self) -> float:
+        duration_delta = self._audio_sync_detected_duration_delta()
+        if duration_delta is None:
+            return 5.0
+        return max(5.0, min(60.0, duration_delta + 2.0))
+
     def _current_audio_sync_analysis_plan(self) -> audio_sync.AdaptiveAnalysisPlan:
         mode = str(self.audio_sync_analysis_combo.currentData() or "full")
         common_duration = self._audio_sync_common_duration()
+        max_offset_seconds = self._audio_sync_auto_max_offset_seconds()
         if mode == self.AUDIO_SYNC_CUSTOM_PRESET:
             return audio_sync.AdaptiveAnalysisPlan(
                 mode="custom",
@@ -3697,7 +3737,7 @@ class MainWindow(QMainWindow):
                 checkpoint_spacing_seconds=self.audio_sync_custom_spacing_seconds,
                 max_offset_seconds=self.audio_sync_custom_max_offset_seconds,
             )
-        return audio_sync.adaptive_analysis_plan(common_duration, mode)
+        return audio_sync.adaptive_analysis_plan(common_duration, mode, max_offset_seconds=max_offset_seconds)
 
     def _refresh_audio_sync_analysis_plan(self) -> None:
         plan = self._current_audio_sync_analysis_plan()
@@ -3721,7 +3761,8 @@ class MainWindow(QMainWindow):
             range_text = f"one checkpoint at {audio_sync.format_time(plan.start_seconds)}"
         self.audio_sync_analysis_plan_label.setText(
             f"{duration_text}{plan.checkpoints} checkpoints, {range_text}; "
-            f"{self._format_audio_sync_seconds(plan.duration_seconds)} per checkpoint."
+            f"{self._format_audio_sync_seconds(plan.duration_seconds)} per checkpoint; "
+            f"search +/-{self._format_audio_sync_seconds(plan.max_offset_seconds)}."
         )
 
     def _format_audio_sync_seconds(self, seconds: float) -> str:
@@ -4175,6 +4216,14 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Another task is running", "Wait for the current task to finish first.")
             return
         if not self._confirm_audio_sync_warnings():
+            return
+
+        if self.audio_sync_result.has_linear_drift_correction:
+            QMessageBox.information(
+                self,
+                "Audio Sync export",
+                "This result needs timestamp stretch. Use Apply delay in Organizer so mkvmerge can apply delay,stretch.",
+            )
             return
 
         selected_streams = self._selected_audio_sync_streams()
@@ -4981,16 +5030,28 @@ class MainWindow(QMainWindow):
         self.append_audio_sync_summary_line("Result")
         requested_checkpoints = result.attempted_checkpoints or len(result.estimates)
         used_checkpoints = result.used_checkpoints or len(result.estimates)
-        shift_ms = abs(result.timeline_shift_seconds * 1000)
-        if abs(result.timeline_shift_seconds) < 0.0005:
-            correction = "No practical source shift is needed"
+        if result.has_linear_drift_correction:
+            drift_delay_ms = result.drift_correction_delay_seconds * 1000
+            action = "Delay" if drift_delay_ms > 0 else "Advance"
+            correction = (
+                f"{action} source by {abs(drift_delay_ms):.2f} ms and stretch timestamps "
+                f"x{organizer.format_stretch_factor(result.drift_correction_stretch_factor)}"
+            )
         else:
-            correction_action = "Delay" if result.timeline_shift_seconds > 0 else "Advance"
-            correction = f"{correction_action} source by {shift_ms:.2f} ms"
+            shift_ms = abs(result.timeline_shift_seconds * 1000)
+            if abs(result.timeline_shift_seconds) < 0.0005:
+                correction = "No practical source shift is needed"
+            else:
+                correction_action = "Delay" if result.timeline_shift_seconds > 0 else "Advance"
+                correction = f"{correction_action} source by {shift_ms:.2f} ms"
+
+        if abs(result.timeline_shift_seconds) < 0.0005 and not result.has_linear_drift_correction:
+            correction = "No practical source shift is needed"
 
         self.append_audio_sync_summary_line(f"Recommended correction: {correction}")
         self.append_audio_sync_summary_line(
-            f"Delay reliability: {(result.delay_reliability or 'unknown').capitalize()}"
+            f"{'Correction' if result.has_linear_drift_correction else 'Delay'} reliability: "
+            f"{(result.delay_reliability or 'unknown').capitalize()}"
         )
         if result.reliability_reason:
             self.append_audio_sync_summary_line(f"Why: {result.reliability_reason}")
@@ -5002,10 +5063,22 @@ class MainWindow(QMainWindow):
         if result.ignored_checkpoints:
             self.append_audio_sync_summary_line(f"Ignored outliers: {result.ignored_checkpoints}")
             self.append_audio_sync_summary_line(f"All-checkpoint spread: {result.all_spread_seconds * 1000:.2f} ms")
-        self.append_audio_sync_summary_line(
-            f"Timing agreement: {result.consistency.capitalize()} "
-            f"(max deviation {result.spread_seconds * 1000:.2f} ms)"
-        )
+        if result.has_linear_drift_correction:
+            self.append_audio_sync_summary_line(
+                f"Linear drift: {result.drift_slope_seconds_per_second * 100:+.4f}%"
+            )
+            self.append_audio_sync_summary_line(
+                f"Timing agreement after drift fit: "
+                f"max residual {result.drift_residual_spread_seconds * 1000:.2f} ms"
+            )
+            self.append_audio_sync_summary_line(
+                f"Fixed-delay spread before correction: {result.spread_seconds * 1000:.2f} ms"
+            )
+        else:
+            self.append_audio_sync_summary_line(
+                f"Timing agreement: {result.consistency.capitalize()} "
+                f"(max deviation {result.spread_seconds * 1000:.2f} ms)"
+            )
         self.append_audio_sync_summary_line(f"Verdict: {result.verdict}")
         for warning in result.warnings:
             self.append_audio_sync_summary_line(f"Warning: {warning}.")

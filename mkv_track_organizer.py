@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import queue
 import re
@@ -179,6 +180,22 @@ class SubtitleAnalysis:
 
 
 @dataclass
+class TrackSyncCorrection:
+    delay_ms: int = 0
+    stretch_factor: float | None = None
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, int):
+            return self.delay_ms == other and self.stretch_factor is None
+        if isinstance(other, TrackSyncCorrection):
+            return (
+                self.delay_ms == other.delay_ms
+                and self.stretch_factor == other.stretch_factor
+            )
+        return NotImplemented
+
+
+@dataclass
 class TrackInfo:
     id: int
     type: str
@@ -200,6 +217,7 @@ class TrackInfo:
     forced: bool = False
     drop: bool = False
     delay_ms: int = 0
+    sync_stretch_factor: float | None = None
     pt_variant: dict[str, Any] | None = None
     duplicate_group: str = ""
     duplicate_member_ids: list[int] = field(default_factory=list)
@@ -2684,32 +2702,63 @@ def parse_subtitle_language_overrides(
     return overrides
 
 
-def parse_track_delay_overrides(raw_value: str | None, option_name: str) -> dict[int, int]:
+def parse_track_delay_overrides(raw_value: str | None, option_name: str) -> dict[int, TrackSyncCorrection]:
     if not raw_value:
         return {}
 
-    overrides: dict[int, int] = {}
-    entry_pattern = re.compile(r"(\d+)\s*[:=]\s*([+-]?\d+)(?:ms)?", re.IGNORECASE)
+    overrides: dict[int, TrackSyncCorrection] = {}
+    stretch_number = r"(?:\d+\.\d*|\.\d+)"
+    entry_pattern = re.compile(
+        rf"(\d+)\s*[:=]\s*([+-]?\d+)(?:ms)?(?:\s*,\s*({stretch_number}))?",
+        re.IGNORECASE,
+    )
     matches = list(entry_pattern.finditer(raw_value))
     remainder = entry_pattern.sub("", raw_value)
     if not matches or re.sub(r"[,;\s]+", "", remainder):
         raise OrganizerError(
             f"Invalid delay override in {option_name}: {raw_value}. "
-            "Expected TRACK_ID:DELAY_MS, for example 2:150 or 5:-250."
+            "Expected TRACK_ID:DELAY_MS[,STRETCH], for example 2:150, 5:-250, or 7:+69,1.001."
         )
 
     for match in matches:
         track_id = int(match.group(1))
         delay_ms = int(match.group(2))
+        stretch_factor = float(match.group(3)) if match.group(3) is not None else None
+        if stretch_factor is not None:
+            if not math.isfinite(stretch_factor) or stretch_factor <= 0:
+                raise OrganizerError(
+                    f"Invalid stretch factor in {option_name}: {match.group(3)!r}."
+                )
+        correction = TrackSyncCorrection(delay_ms, stretch_factor)
         existing_delay = overrides.get(track_id)
-        if existing_delay is not None and existing_delay != delay_ms:
+        if existing_delay is not None and existing_delay != correction:
             raise OrganizerError(
                 f"Track {track_id} has conflicting delay overrides in {option_name}: "
-                f"{existing_delay} and {delay_ms}."
+                f"{format_track_sync_correction(existing_delay)} and {format_track_sync_correction(correction)}."
             )
-        overrides[track_id] = delay_ms
+        overrides[track_id] = correction
 
     return overrides
+
+
+def coerce_track_sync_correction(value: TrackSyncCorrection | int | None) -> TrackSyncCorrection:
+    if isinstance(value, TrackSyncCorrection):
+        return value
+    if isinstance(value, int):
+        return TrackSyncCorrection(value)
+    return TrackSyncCorrection()
+
+
+def format_stretch_factor(value: float) -> str:
+    text = f"{value:.9f}".rstrip("0").rstrip(".")
+    return text if "." in text else f"{text}.0"
+
+
+def format_track_sync_correction(correction: TrackSyncCorrection) -> str:
+    delay_text = str(correction.delay_ms)
+    if correction.stretch_factor is None:
+        return delay_text
+    return f"{delay_text},{format_stretch_factor(correction.stretch_factor)}"
 
 
 def apply_subtitle_language_overrides(subtitles: list[TrackInfo], overrides: dict[int, str]) -> None:
@@ -2735,8 +2784,8 @@ def apply_subtitle_language_overrides(subtitles: list[TrackInfo], overrides: dic
 def apply_track_delay_overrides(
     audio_tracks: list[TrackInfo],
     subtitles: list[TrackInfo],
-    audio_delays: dict[int, int],
-    subtitle_delays: dict[int, int],
+    audio_delays: dict[int, TrackSyncCorrection | int],
+    subtitle_delays: dict[int, TrackSyncCorrection | int],
 ) -> None:
     audio_ids = {track.id for track in audio_tracks}
     subtitle_ids = {track.id for track in subtitles}
@@ -2756,9 +2805,13 @@ def apply_track_delay_overrides(
         )
 
     for track in audio_tracks:
-        track.delay_ms = audio_delays.get(track.id, 0)
+        correction = coerce_track_sync_correction(audio_delays.get(track.id))
+        track.delay_ms = correction.delay_ms
+        track.sync_stretch_factor = correction.stretch_factor
     for track in subtitles:
-        track.delay_ms = subtitle_delays.get(track.id, 0)
+        correction = coerce_track_sync_correction(subtitle_delays.get(track.id))
+        track.delay_ms = correction.delay_ms
+        track.sync_stretch_factor = correction.stretch_factor
 
 
 def require_tool(path: Path | None, description: str) -> None:
@@ -5772,7 +5825,7 @@ def metadata_edit_plan(
     if dropped_tracks:
         return MetadataEditPlan(False, "tracks need to be removed")
 
-    delayed_tracks = [track for track in audio_tracks + subtitles if track.delay_ms]
+    delayed_tracks = [track for track in audio_tracks + subtitles if track_has_sync_correction(track)]
     if delayed_tracks:
         return MetadataEditPlan(False, "track delays require remux")
 
@@ -5813,6 +5866,26 @@ def build_mkvpropedit_command(
             command.extend(["--set", f"{property_name}={value}"])
 
     return command
+
+
+def track_has_sync_correction(track: TrackInfo) -> bool:
+    if track.delay_ms:
+        return True
+    return track.sync_stretch_factor is not None and not math.isclose(
+        track.sync_stretch_factor,
+        1.0,
+        rel_tol=0.0,
+        abs_tol=1e-9,
+    )
+
+
+def track_sync_value(track: TrackInfo) -> str:
+    correction = TrackSyncCorrection(track.delay_ms, track.sync_stretch_factor)
+    return format_track_sync_correction(correction)
+
+
+def track_sync_argument(track: TrackInfo) -> str:
+    return f"{track.id}:{track_sync_value(track)}"
 
 
 def build_mkvmerge_command(
@@ -5882,8 +5955,8 @@ def build_mkvmerge_command(
             command.extend(["--track-name", f"{track.id}:{track.suggested_name}"])
             command.extend(["--default-track-flag", f"{track.id}:{'yes' if track.default else 'no'}"])
             command.extend(["--commentary-flag", f"{track.id}:{'yes' if detect_audio_role(track) == 'Commentary' else 'no'}"])
-            if track.delay_ms:
-                command.extend(["--sync", f"{track.id}:{track.delay_ms}"])
+            if track_has_sync_correction(track):
+                command.extend(["--sync", track_sync_argument(track)])
 
         for track in included_subtitles:
             command.extend(["--language", f"{track.id}:{language_for_mkvmerge(track.output_language)}"])
@@ -5892,8 +5965,8 @@ def build_mkvmerge_command(
             command.extend(["--forced-display-flag", f"{track.id}:{'yes' if track.forced else 'no'}"])
             command.extend(["--hearing-impaired-flag", f"{track.id}:{'yes' if track.role == 'sdh' else 'no'}"])
             command.extend(["--commentary-flag", f"{track.id}:{'yes' if track.role == 'commentary' else 'no'}"])
-            if track.delay_ms:
-                command.extend(["--sync", f"{track.id}:{track.delay_ms}"])
+            if track_has_sync_correction(track):
+                command.extend(["--sync", track_sync_argument(track)])
 
         if disable_track_statistics_tags:
             command.append("--no-track-tags")
@@ -5918,7 +5991,7 @@ def build_mkvmerge_command(
 
 
 def command_has_sync_for_track(command: list[str], track: TrackInfo) -> bool:
-    expected = f"{track.id}:{track.delay_ms}"
+    expected = track_sync_argument(track)
     return any(
         item == "--sync" and index + 1 < len(command) and command[index + 1] == expected
         for index, item in enumerate(command)
@@ -6060,10 +6133,10 @@ def verify_output_plan_from_metadata(
                     f"Track {position} {label} commentary flag mismatch: expected {expected_commentary}, found {actual_commentary}.",
                 )
 
-        if expected.delay_ms and not command_has_sync_for_track(command, expected):
+        if track_has_sync_correction(expected) and not command_has_sync_for_track(command, expected):
             add_verification_issue(
                 errors,
-                f"Track {position} {label} delay was planned as {expected.delay_ms:+d} ms but no matching --sync was found.",
+                f"Track {position} {label} sync was planned as {track_sync_value(expected)} but no matching --sync was found.",
             )
 
     track_tag_entries, track_tag_properties = metadata_track_tag_counts(metadata)
@@ -6190,7 +6263,7 @@ def print_track_plan(
         ),
     ):
         reason_text = track_note_text(track)
-        delay_text = f" | delay={track.delay_ms:+d}ms" if track.delay_ms else ""
+        delay_text = f" | sync={track_sync_value(track)}" if track_has_sync_correction(track) else ""
         drop_text = " | DROP" if track.drop else ""
         print(
             f"  audio    {track.id:>3}: {track.language_name} | "
@@ -6215,7 +6288,7 @@ def print_track_plan(
         drop_text = " | DROP" if track.drop else ""
         forced_text = " | forced=yes" if track.forced else ""
         default_text = " | default=yes" if track.default else " | default=no"
-        delay_text = f" | delay={track.delay_ms:+d}ms" if track.delay_ms else ""
+        delay_text = f" | sync={track_sync_value(track)}" if track_has_sync_correction(track) else ""
         reason_text = track_note_text(track)
         print(
             f"  subtitle {track.id:>3}: {track.suggested_name}"
@@ -6430,12 +6503,12 @@ def plan_summary_for_tracks(
                     track.role_reason,
                 )
 
-        if track.delay_ms:
+        if track_has_sync_correction(track):
             plan_add_item(
                 items,
                 track,
                 "delay",
-                f"Apply delay to {label}: {track.delay_ms:+d} ms",
+                f"Apply delay/sync to {label}: {track_sync_value(track)}",
             )
 
     counts: dict[str, int] = {}
@@ -6502,6 +6575,7 @@ def track_report_data(track: TrackInfo) -> dict[str, Any]:
         "forced": track.forced,
         "drop": track.drop,
         "delay_ms": track.delay_ms,
+        "sync_stretch_factor": track.sync_stretch_factor,
         "role": track.role,
         "role_reason": track.role_reason,
         "duplicate_group": track.duplicate_group,

@@ -2,6 +2,14 @@
 
 All notable user-facing changes are recorded here.
 
+## 1.0.15 - 2026-06-23
+
+- Added Audio Sync detection for linear timing drift, such as 24.000 fps audio against a 23.976 fps Blu-ray timeline.
+- Applied drift corrections through Organizer with MKVToolNix `--sync delay,stretch`, preserving stream copy remuxing.
+- Expanded automatic Audio Sync search range when loaded files have a duration mismatch large enough to exceed the default 5 second window.
+- Updated Audio Sync summaries to explain delay-plus-stretch corrections and show residual timing agreement after the drift fit.
+- Allowed manual audio/subtitle sync entries such as `7:69,1.001` while keeping existing `7:69` delay-only entries compatible.
+
 ## 1.0.14 - 2026-06-22
 
 - Added a Summary details section with the complete error/warning reason, affected input, and relevant paths.

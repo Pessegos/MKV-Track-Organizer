@@ -776,6 +776,47 @@ def test_audio_sync_summary_prioritizes_delay_reliability(qapp):
         window.close()
 
 
+def test_audio_sync_summary_explains_linear_drift_correction(qapp):
+    window = gui.MainWindow()
+    try:
+        estimates = [
+            gui.audio_sync.OffsetEstimate(300.0 + index * 600.0, -0.340 - index * 0.600, -0.340, 0.8)
+            for index in range(6)
+        ]
+        result = gui.audio_sync.AudioSyncResult(
+            estimates=estimates,
+            median_offset_seconds=-1.840,
+            spread_seconds=1.500,
+            average_confidence=0.8,
+            consistency="poor",
+            verdict="reliable linear drift correction: timestamp stretch required",
+            used_checkpoints=6,
+            confidence_summary="very low",
+            delay_reliability="high",
+            reliability_reason="6 checkpoints form a linear drift with residuals within +/-0.00 ms",
+            attempted_checkpoints=6,
+            drift_slope_seconds_per_second=-0.001,
+            drift_intercept_seconds=-0.040,
+            drift_residual_spread_seconds=0.0,
+            drift_correction_delay_seconds=0.040,
+            drift_correction_stretch_factor=1.001,
+            drift_reliability="high",
+            drift_reason="6 checkpoints form a linear drift with residuals within +/-0.00 ms",
+        )
+
+        window.handle_audio_sync_completed(result)
+
+        summary = window.audio_sync_summary_edit.toPlainText()
+        assert "Recommended correction: Delay source by 40.00 ms and stretch timestamps x1.001" in summary
+        assert "Correction reliability: High" in summary
+        assert "Linear drift: -0.1000%" in summary
+        assert "Timing agreement after drift fit: max residual 0.00 ms" in summary
+        assert "Fixed-delay spread before correction: 1500.00 ms" in summary
+        assert window._audio_sync_organizer_sync_value() == "40,1.001"
+    finally:
+        window.close()
+
+
 def test_audio_sync_delay_lines_use_highlight_format(qapp):
     window = gui.MainWindow()
     try:

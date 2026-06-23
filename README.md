@@ -1,8 +1,8 @@
 # MKV Track Organizer
 
-MKV Track Organizer 1.0.14 is a Windows desktop and command-line tool for cleaning, inspecting, synchronizing, and remuxing Matroska tracks with MKVToolNix. It can analyze audio, video, and subtitle tracks, rename them consistently, detect common subtitle roles, and write organized outputs without touching the original files by default.
+MKV Track Organizer 1.0.15 is a Windows desktop and command-line tool for cleaning, inspecting, synchronizing, and remuxing Matroska tracks with MKVToolNix. It can analyze audio, video, and subtitle tracks, rename them consistently, detect common subtitle roles, and write organized outputs without touching the original files by default.
 
-It includes an Organizer, reusable profiles, a MakeMKV batch workflow, and an Audio Sync helper for fixed-delay corrections.
+It includes an Organizer, reusable profiles, a MakeMKV batch workflow, and an Audio Sync helper for fixed-delay and linear drift corrections.
 
 [Download the latest stable release](https://github.com/Pessegos/MKV-Track-Organizer/releases/latest) | [Changelog](CHANGELOG.md) | [Troubleshooting](docs/TROUBLESHOOTING.md)
 
@@ -14,8 +14,8 @@ It includes an Organizer, reusable profiles, a MakeMKV batch workflow, and an Au
 - Preview changes before writing output files.
 - Rename audio tracks by format, language plus format, or keep existing names.
 - Choose default or regional language ordering for audio/subtitle tracks, with optional region priority presets.
-- Apply manual audio/subtitle delays by track ID when a source needs sync correction.
-- Estimate fixed audio delay between a reference file and a source file, then apply it in Organizer or export shifted audio tracks.
+- Apply manual audio/subtitle delay or delay-plus-stretch sync by track ID when a source needs correction.
+- Estimate fixed audio delay or linear drift between a reference file and a source file, then apply it in Organizer.
 - Detect forced, empty, commentary, and SDH subtitle tracks.
 - Preserve existing commentary track names when releases already identify them well.
 - Highlight likely duplicate audio/subtitle tracks in the Organizer preview without dropping them automatically.
