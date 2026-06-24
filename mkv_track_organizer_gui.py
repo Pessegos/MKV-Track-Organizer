@@ -5,12 +5,18 @@ import ctypes
 import io
 import json
 import os
+import platform
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import traceback
+import urllib.error
+import urllib.request
 import uuid
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -103,6 +109,9 @@ class DependencyCheck:
     download_url: str
     version_args: tuple[str, ...] = ("--version",)
     notes: str = ""
+    latest_release_api_url: str = ""
+    windows_x64_asset: str = ""
+    windows_arm64_asset: str = ""
 
 
 DEPENDENCY_CHECKS: tuple[DependencyCheck, ...] = (
@@ -161,6 +170,9 @@ DEPENDENCY_CHECKS: tuple[DependencyCheck, ...] = (
         "Recommended",
         "https://github.com/SubtitleEdit/subtitleedit/releases",
         notes="Subtitle Edit command-line conversion component used for PGS OCR.",
+        latest_release_api_url="https://api.github.com/repos/SubtitleEdit/subtitleedit/releases/latest",
+        windows_x64_asset="SeConv-Windows-x64.zip",
+        windows_arm64_asset="SeConv-Windows-ARM64.zip",
     ),
     DependencyCheck(
         "tesseract",
@@ -180,6 +192,140 @@ DEPENDENCY_CHECKS: tuple[DependencyCheck, ...] = (
         notes="Only used when legacy Subtitle Edit OCR fallback is enabled.",
     ),
 )
+
+
+class DependencyInstallError(RuntimeError):
+    pass
+
+
+def dependency_check_by_key(key: str) -> DependencyCheck | None:
+    return next((check for check in DEPENDENCY_CHECKS if check.key == key), None)
+
+
+def dependency_is_installable(check: DependencyCheck) -> bool:
+    return bool(check.latest_release_api_url and check.windows_x64_asset)
+
+
+def seconv_asset_name_for_machine(machine: str | None = None) -> str:
+    machine_key = (machine or platform.machine()).strip().casefold()
+    if machine_key in {"arm64", "aarch64"}:
+        return "SeConv-Windows-ARM64.zip"
+    return "SeConv-Windows-x64.zip"
+
+
+def find_github_release_asset_url(release: dict, asset_name: str) -> str:
+    assets = release.get("assets", [])
+    if not isinstance(assets, list):
+        raise DependencyInstallError("GitHub release response did not contain an asset list.")
+    for asset in assets:
+        if not isinstance(asset, dict):
+            continue
+        if str(asset.get("name", "")).casefold() == asset_name.casefold():
+            url = str(asset.get("browser_download_url", ""))
+            if url:
+                return url
+    available = ", ".join(str(asset.get("name")) for asset in assets if isinstance(asset, dict) and asset.get("name"))
+    raise DependencyInstallError(f"Could not find release asset {asset_name!r}. Available assets: {available or 'none'}")
+
+
+def dependency_install_target_dir(check: DependencyCheck) -> Path:
+    if check.key == "seconv":
+        return organizer.local_tools_dir() / "seconv"
+    raise DependencyInstallError(f"Automatic install is not supported for {check.name}.")
+
+
+def _read_json_url(url: str) -> dict:
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": f"{APP_NAME.replace(' ', '-')}/{APP_VERSION}",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            data = response.read()
+    except urllib.error.URLError as error:
+        raise DependencyInstallError(f"Could not read {url}: {error}") from error
+    try:
+        parsed = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise DependencyInstallError(f"GitHub returned an invalid release response: {error}") from error
+    if not isinstance(parsed, dict):
+        raise DependencyInstallError("GitHub release response had an unexpected shape.")
+    return parsed
+
+
+def _download_url_to_file(url: str, destination: Path) -> None:
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": f"{APP_NAME.replace(' ', '-')}/{APP_VERSION}"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response, destination.open("wb") as output:
+            shutil.copyfileobj(response, output)
+    except urllib.error.URLError as error:
+        raise DependencyInstallError(f"Could not download {url}: {error}") from error
+    except OSError as error:
+        raise DependencyInstallError(f"Could not write download to {destination}: {error}") from error
+
+
+def _safe_extract_zip(zip_path: Path, destination: Path) -> None:
+    destination_resolved = destination.resolve()
+    try:
+        with zipfile.ZipFile(zip_path) as archive:
+            for member in archive.infolist():
+                member_path = (destination / member.filename).resolve()
+                if not member_path.is_relative_to(destination_resolved):
+                    raise DependencyInstallError(f"Unsafe path inside ZIP: {member.filename}")
+            archive.extractall(destination)
+    except zipfile.BadZipFile as error:
+        raise DependencyInstallError(f"Downloaded ZIP is not valid: {error}") from error
+
+
+def install_seconv_from_latest_release() -> Path:
+    check = dependency_check_by_key("seconv")
+    if check is None:
+        raise DependencyInstallError("seconv dependency definition is missing.")
+
+    asset_name = seconv_asset_name_for_machine()
+    release = _read_json_url(check.latest_release_api_url)
+    download_url = find_github_release_asset_url(release, asset_name)
+    target_dir = dependency_install_target_dir(check)
+    target_parent = target_dir.parent
+    target_parent.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.TemporaryDirectory(prefix="mkv-track-organizer-seconv-") as temp_name:
+        temp_dir = Path(temp_name)
+        zip_path = temp_dir / asset_name
+        extract_dir = temp_dir / "extract"
+        staging_dir = temp_dir / "staging"
+        extract_dir.mkdir()
+        _download_url_to_file(download_url, zip_path)
+        _safe_extract_zip(zip_path, extract_dir)
+
+        seconv_candidates = sorted(extract_dir.rglob("seconv.exe"), key=lambda item: len(item.parts))
+        if not seconv_candidates:
+            raise DependencyInstallError(f"{asset_name} did not contain seconv.exe.")
+
+        shutil.copytree(seconv_candidates[0].parent, staging_dir)
+        backup_dir: Path | None = None
+        if target_dir.exists():
+            backup_dir = target_dir.with_name(f"{target_dir.name}.backup-{int(time.time())}")
+            target_dir.rename(backup_dir)
+        try:
+            shutil.move(str(staging_dir), str(target_dir))
+        except Exception:
+            if backup_dir and backup_dir.exists() and not target_dir.exists():
+                backup_dir.rename(target_dir)
+            raise
+        if backup_dir and backup_dir.exists():
+            shutil.rmtree(backup_dir, ignore_errors=True)
+
+    installed_exe = target_dir / "seconv.exe"
+    if not installed_exe.is_file():
+        raise DependencyInstallError(f"Install finished but seconv.exe was not found at {installed_exe}.")
+    return installed_exe
 
 
 class WindowsTaskbarProgress:
@@ -673,6 +819,27 @@ class AudioSyncProbeWorker(QObject):
             self.failed.emit(traceback.format_exc())
 
 
+class DependencyInstallWorker(QObject):
+    completed = Signal(str)
+    failed = Signal(str)
+
+    def __init__(self, dependency_key: str) -> None:
+        super().__init__()
+        self.dependency_key = dependency_key
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            if self.dependency_key != "seconv":
+                check = dependency_check_by_key(self.dependency_key)
+                name = check.name if check else self.dependency_key
+                raise DependencyInstallError(f"Automatic install is not supported for {name}.")
+            installed_path = install_seconv_from_latest_release()
+            self.completed.emit(str(installed_path))
+        except Exception:
+            self.failed.emit(traceback.format_exc())
+
+
 class MainWindow(QMainWindow):
     PROFILE_NONE_LABEL = "Custom"
     PROFILE_STORE_VERSION = 2
@@ -842,6 +1009,8 @@ class MainWindow(QMainWindow):
         self.audio_sync_worker: AudioSyncWorker | AudioSyncExportWorker | None = None
         self.audio_sync_probe_thread: QThread | None = None
         self.audio_sync_probe_worker: AudioSyncProbeWorker | None = None
+        self.dependency_install_thread: QThread | None = None
+        self.dependency_install_worker: DependencyInstallWorker | None = None
         self.audio_sync_stream_paths: tuple[Path, Path] | None = None
         self.audio_sync_probe_automatic = True
         self.audio_sync_probe_retry_after_finish = False
@@ -1654,6 +1823,7 @@ class MainWindow(QMainWindow):
             rows.append(
                 {
                     "status": status,
+                    "key": check.key,
                     "tool": check.name,
                     "used_by": check.used_by,
                     "importance": check.importance,
@@ -1661,6 +1831,7 @@ class MainWindow(QMainWindow):
                     "path": str(path) if path else "",
                     "details": details,
                     "download_url": check.download_url,
+                    "installable": "yes" if dependency_is_installable(check) else "",
                 }
             )
         return rows
@@ -1694,7 +1865,14 @@ class MainWindow(QMainWindow):
             for column_index, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 item.setToolTip(value)
-                item.setData(Qt.UserRole, row["download_url"])
+                item.setData(
+                    Qt.UserRole,
+                    {
+                        "download_url": row["download_url"],
+                        "key": row["key"],
+                        "installable": row["installable"],
+                    },
+                )
                 self._style_dependency_item(item, row["status"])
                 table.setItem(row_index, column_index, item)
         table.resizeRowsToContents()
@@ -1725,39 +1903,174 @@ class MainWindow(QMainWindow):
         button_row = QHBoxLayout()
         refresh_button = QPushButton("Refresh")
         refresh_button.setObjectName("secondaryButton")
+        install_button = QPushButton("Install/Update selected")
+        install_button.setObjectName("secondaryButton")
+        install_button.setToolTip("Install supported tools into the local _tools folder")
         open_button = QPushButton("Open download page")
         open_button.setObjectName("primaryButton")
         close_button = QPushButton("Close")
         close_button.setObjectName("secondaryButton")
         button_row.addWidget(refresh_button)
         button_row.addStretch(1)
+        button_row.addWidget(install_button)
         button_row.addWidget(open_button)
         button_row.addWidget(close_button)
 
         layout.addWidget(table)
         layout.addLayout(button_row)
 
-        def selected_download_url() -> str:
+        def selected_dependency_data() -> dict[str, str]:
             row = table.currentRow()
             if row < 0:
-                return ""
+                return {}
             item = table.item(row, 0)
-            return str(item.data(Qt.UserRole) or "") if item else ""
+            data = item.data(Qt.UserRole) if item else None
+            return data if isinstance(data, dict) else {}
+
+        def selected_download_url() -> str:
+            return str(selected_dependency_data().get("download_url", ""))
+
+        def selected_dependency_key() -> str:
+            return str(selected_dependency_data().get("key", ""))
+
+        def update_install_button() -> None:
+            data = selected_dependency_data()
+            install_button.setEnabled(bool(data.get("installable")) and not self._workflow_is_running())
 
         def open_selected_download() -> None:
             url = selected_download_url()
             if url:
                 QDesktopServices.openUrl(QUrl(url))
 
-        refresh_button.clicked.connect(lambda: self._populate_dependency_table(table))
+        def refresh_table() -> None:
+            self._populate_dependency_table(table)
+            update_install_button()
+
+        refresh_button.clicked.connect(refresh_table)
+        install_button.clicked.connect(
+            lambda: self.start_dependency_install(selected_dependency_key(), table, install_button, close_button)
+        )
         open_button.clicked.connect(open_selected_download)
         close_button.clicked.connect(dialog.accept)
         table.itemDoubleClicked.connect(lambda _item: open_selected_download())
+        table.itemSelectionChanged.connect(update_install_button)
 
         self._populate_dependency_table(table)
         if table.rowCount():
             table.selectRow(0)
+        update_install_button()
         dialog.exec()
+
+    def start_dependency_install(
+        self,
+        dependency_key: str,
+        table: QTableWidget | None = None,
+        install_button: QPushButton | None = None,
+        close_button: QPushButton | None = None,
+    ) -> bool:
+        check = dependency_check_by_key(dependency_key)
+        if check is None:
+            QMessageBox.information(self, "Dependency Manager", "Select a supported dependency first.")
+            return False
+        if not dependency_is_installable(check):
+            QMessageBox.information(
+                self,
+                "Dependency Manager",
+                f"Automatic install is not supported for {check.name} yet.",
+            )
+            return False
+        if self._workflow_is_running():
+            QMessageBox.information(self, "Dependency Manager", "Wait for the current operation to finish first.")
+            return False
+
+        target_dir = dependency_install_target_dir(check)
+        asset_name = seconv_asset_name_for_machine() if dependency_key == "seconv" else ""
+        answer = QMessageBox.question(
+            self,
+            "Install dependency",
+            "Download and install this dependency?\n\n"
+            f"Tool: {check.name}\n"
+            f"Source: {check.download_url}\n"
+            f"Asset: {asset_name or 'latest compatible asset'}\n"
+            f"Destination: {target_dir}\n\n"
+            "Existing files in that dependency folder will be replaced.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return False
+
+        self._start_progress_session("Dependencies", f"Installing {check.name}")
+        self._set_progress_indeterminate()
+        if install_button:
+            install_button.setEnabled(False)
+        if close_button:
+            close_button.setEnabled(False)
+
+        self.dependency_install_thread = QThread(self)
+        self.dependency_install_worker = DependencyInstallWorker(dependency_key)
+        self.dependency_install_worker.moveToThread(self.dependency_install_thread)
+        self.dependency_install_thread.started.connect(self.dependency_install_worker.run)
+        self.dependency_install_worker.completed.connect(
+            lambda installed_path: self.handle_dependency_install_completed(
+                installed_path,
+                table,
+                install_button,
+                close_button,
+            )
+        )
+        self.dependency_install_worker.failed.connect(
+            lambda details: self.handle_dependency_install_failed(details, install_button, close_button)
+        )
+        self.dependency_install_worker.completed.connect(self.dependency_install_thread.quit)
+        self.dependency_install_worker.failed.connect(self.dependency_install_thread.quit)
+        self.dependency_install_thread.finished.connect(self._dependency_install_thread_finished)
+        self.dependency_install_thread.start()
+        return True
+
+    @Slot(str)
+    def handle_dependency_install_completed(
+        self,
+        installed_path: str,
+        table: QTableWidget | None = None,
+        install_button: QPushButton | None = None,
+        close_button: QPushButton | None = None,
+    ) -> None:
+        self._finish_progress_session("Dependency installed")
+        if table:
+            self._populate_dependency_table(table)
+        if install_button:
+            install_button.setEnabled(False)
+        if close_button:
+            close_button.setEnabled(True)
+        QMessageBox.information(
+            self,
+            "Dependency installed",
+            f"Installed dependency:\n{installed_path}",
+        )
+
+    @Slot(str)
+    def handle_dependency_install_failed(
+        self,
+        details: str,
+        install_button: QPushButton | None = None,
+        close_button: QPushButton | None = None,
+    ) -> None:
+        self._finish_progress_session("Dependency install failed")
+        if install_button:
+            install_button.setEnabled(True)
+        if close_button:
+            close_button.setEnabled(True)
+        QMessageBox.critical(self, "Dependency install failed", details)
+
+    @Slot()
+    def _dependency_install_thread_finished(self) -> None:
+        if self.dependency_install_worker:
+            self.dependency_install_worker.deleteLater()
+        if self.dependency_install_thread:
+            self.dependency_install_thread.deleteLater()
+        self.dependency_install_worker = None
+        self.dependency_install_thread = None
 
     def _build_makemkv_tab(self) -> QWidget:
         style = self.style()
@@ -6606,6 +6919,7 @@ class MainWindow(QMainWindow):
             (self.worker_thread and self.worker_thread.isRunning())
             or (self.makemkv_worker_thread and self.makemkv_worker_thread.isRunning())
             or (self.audio_sync_worker_thread and self.audio_sync_worker_thread.isRunning())
+            or (self.dependency_install_thread and self.dependency_install_thread.isRunning())
         )
 
     def _other_workflow_is_running(self) -> bool:

@@ -2,6 +2,12 @@
 
 All notable user-facing changes are recorded here.
 
+## 1.0.18 - 2026-06-24
+
+- Added automatic `seconv` install/update support from the Dependency Manager.
+- Downloaded the official Subtitle Edit `SeConv-Windows-x64.zip` or ARM64 asset based on the current machine and installed it into `_tools\seconv`.
+- Kept automatic installs explicitly limited to supported tools; other dependencies still open their official download pages.
+
 ## 1.0.17 - 2026-06-24
 
 - Added a Config tab Dependency Manager for MKVToolNix, FFmpeg/FFprobe, MakeMKV, Tesseract, `seconv`, and Subtitle Edit discovery.

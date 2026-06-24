@@ -705,6 +705,26 @@ def test_dependency_manager_specs_cover_external_tools(qapp):
         window.close()
 
 
+def test_dependency_installer_helpers_choose_seconv_assets():
+    check = gui.dependency_check_by_key("seconv")
+
+    assert check is not None
+    assert gui.dependency_is_installable(check)
+    assert gui.seconv_asset_name_for_machine("AMD64") == "SeConv-Windows-x64.zip"
+    assert gui.seconv_asset_name_for_machine("ARM64") == "SeConv-Windows-ARM64.zip"
+    assert gui.dependency_install_target_dir(check).name == "seconv"
+
+
+def test_github_release_asset_lookup_returns_download_url():
+    release = {
+        "assets": [
+            {"name": "SeConv-Windows-x64.zip", "browser_download_url": "https://example.test/seconv.zip"},
+        ]
+    }
+
+    assert gui.find_github_release_asset_url(release, "seconv-windows-x64.zip") == "https://example.test/seconv.zip"
+
+
 def test_dependency_status_rows_distinguish_optional_missing(qapp, monkeypatch):
     window = gui.MainWindow()
     try:
