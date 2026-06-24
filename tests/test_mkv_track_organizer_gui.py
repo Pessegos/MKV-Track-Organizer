@@ -705,14 +705,20 @@ def test_dependency_manager_specs_cover_external_tools(qapp):
         window.close()
 
 
-def test_dependency_installer_helpers_choose_seconv_assets():
-    check = gui.dependency_check_by_key("seconv")
+def test_dependency_installer_helpers_choose_github_release_assets():
+    seconv = gui.dependency_check_by_key("seconv")
+    subtitle_edit = gui.dependency_check_by_key("subtitle_edit")
 
-    assert check is not None
-    assert gui.dependency_is_installable(check)
+    assert seconv is not None
+    assert subtitle_edit is not None
+    assert gui.dependency_is_installable(seconv)
+    assert gui.dependency_is_installable(subtitle_edit)
     assert gui.seconv_asset_name_for_machine("AMD64") == "SeConv-Windows-x64.zip"
     assert gui.seconv_asset_name_for_machine("ARM64") == "SeConv-Windows-ARM64.zip"
-    assert gui.dependency_install_target_dir(check).name == "seconv"
+    assert gui.dependency_asset_name_for_machine(subtitle_edit, "AMD64") == "SubtitleEdit-Windows-x64.zip"
+    assert gui.dependency_asset_name_for_machine(subtitle_edit, "ARM64") == "SubtitleEdit-Windows-ARM64.zip"
+    assert gui.dependency_install_target_dir(seconv).name == "seconv"
+    assert gui.dependency_install_target_dir(subtitle_edit).name == "SubtitleEdit"
 
 
 def test_github_release_asset_lookup_returns_download_url():

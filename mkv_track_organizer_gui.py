@@ -112,6 +112,8 @@ class DependencyCheck:
     latest_release_api_url: str = ""
     windows_x64_asset: str = ""
     windows_arm64_asset: str = ""
+    executable_name: str = ""
+    install_dir_name: str = ""
 
 
 DEPENDENCY_CHECKS: tuple[DependencyCheck, ...] = (
@@ -173,6 +175,8 @@ DEPENDENCY_CHECKS: tuple[DependencyCheck, ...] = (
         latest_release_api_url="https://api.github.com/repos/SubtitleEdit/subtitleedit/releases/latest",
         windows_x64_asset="SeConv-Windows-x64.zip",
         windows_arm64_asset="SeConv-Windows-ARM64.zip",
+        executable_name="seconv.exe",
+        install_dir_name="seconv",
     ),
     DependencyCheck(
         "tesseract",
@@ -190,6 +194,11 @@ DEPENDENCY_CHECKS: tuple[DependencyCheck, ...] = (
         "https://github.com/SubtitleEdit/subtitleedit/releases",
         version_args=(),
         notes="Only used when legacy Subtitle Edit OCR fallback is enabled.",
+        latest_release_api_url="https://api.github.com/repos/SubtitleEdit/subtitleedit/releases/latest",
+        windows_x64_asset="SubtitleEdit-Windows-x64.zip",
+        windows_arm64_asset="SubtitleEdit-Windows-ARM64.zip",
+        executable_name="SubtitleEdit.exe",
+        install_dir_name="SubtitleEdit",
     ),
 )
 
@@ -206,11 +215,18 @@ def dependency_is_installable(check: DependencyCheck) -> bool:
     return bool(check.latest_release_api_url and check.windows_x64_asset)
 
 
-def seconv_asset_name_for_machine(machine: str | None = None) -> str:
+def dependency_asset_name_for_machine(check: DependencyCheck, machine: str | None = None) -> str:
     machine_key = (machine or platform.machine()).strip().casefold()
-    if machine_key in {"arm64", "aarch64"}:
-        return "SeConv-Windows-ARM64.zip"
-    return "SeConv-Windows-x64.zip"
+    if machine_key in {"arm64", "aarch64"} and check.windows_arm64_asset:
+        return check.windows_arm64_asset
+    return check.windows_x64_asset
+
+
+def seconv_asset_name_for_machine(machine: str | None = None) -> str:
+    check = dependency_check_by_key("seconv")
+    if check is None:
+        raise DependencyInstallError("seconv dependency definition is missing.")
+    return dependency_asset_name_for_machine(check, machine)
 
 
 def find_github_release_asset_url(release: dict, asset_name: str) -> str:
@@ -229,9 +245,9 @@ def find_github_release_asset_url(release: dict, asset_name: str) -> str:
 
 
 def dependency_install_target_dir(check: DependencyCheck) -> Path:
-    if check.key == "seconv":
-        return organizer.local_tools_dir() / "seconv"
-    raise DependencyInstallError(f"Automatic install is not supported for {check.name}.")
+    if not dependency_is_installable(check):
+        raise DependencyInstallError(f"Automatic install is not supported for {check.name}.")
+    return organizer.local_tools_dir() / (check.install_dir_name or check.key)
 
 
 def _read_json_url(url: str) -> dict:
@@ -283,19 +299,21 @@ def _safe_extract_zip(zip_path: Path, destination: Path) -> None:
         raise DependencyInstallError(f"Downloaded ZIP is not valid: {error}") from error
 
 
-def install_seconv_from_latest_release() -> Path:
-    check = dependency_check_by_key("seconv")
+def install_dependency_from_latest_release(dependency_key: str) -> Path:
+    check = dependency_check_by_key(dependency_key)
     if check is None:
-        raise DependencyInstallError("seconv dependency definition is missing.")
+        raise DependencyInstallError(f"Unknown dependency: {dependency_key}.")
+    if not dependency_is_installable(check):
+        raise DependencyInstallError(f"Automatic install is not supported for {check.name}.")
 
-    asset_name = seconv_asset_name_for_machine()
+    asset_name = dependency_asset_name_for_machine(check)
     release = _read_json_url(check.latest_release_api_url)
     download_url = find_github_release_asset_url(release, asset_name)
     target_dir = dependency_install_target_dir(check)
     target_parent = target_dir.parent
     target_parent.mkdir(parents=True, exist_ok=True)
 
-    with tempfile.TemporaryDirectory(prefix="mkv-track-organizer-seconv-") as temp_name:
+    with tempfile.TemporaryDirectory(prefix=f"mkv-track-organizer-{check.key}-") as temp_name:
         temp_dir = Path(temp_name)
         zip_path = temp_dir / asset_name
         extract_dir = temp_dir / "extract"
@@ -304,11 +322,12 @@ def install_seconv_from_latest_release() -> Path:
         _download_url_to_file(download_url, zip_path)
         _safe_extract_zip(zip_path, extract_dir)
 
-        seconv_candidates = sorted(extract_dir.rglob("seconv.exe"), key=lambda item: len(item.parts))
-        if not seconv_candidates:
-            raise DependencyInstallError(f"{asset_name} did not contain seconv.exe.")
+        executable_name = check.executable_name or f"{check.key}.exe"
+        executable_candidates = sorted(extract_dir.rglob(executable_name), key=lambda item: len(item.parts))
+        if not executable_candidates:
+            raise DependencyInstallError(f"{asset_name} did not contain {executable_name}.")
 
-        shutil.copytree(seconv_candidates[0].parent, staging_dir)
+        shutil.copytree(executable_candidates[0].parent, staging_dir)
         backup_dir: Path | None = None
         if target_dir.exists():
             backup_dir = target_dir.with_name(f"{target_dir.name}.backup-{int(time.time())}")
@@ -322,10 +341,14 @@ def install_seconv_from_latest_release() -> Path:
         if backup_dir and backup_dir.exists():
             shutil.rmtree(backup_dir, ignore_errors=True)
 
-    installed_exe = target_dir / "seconv.exe"
+    installed_exe = target_dir / (check.executable_name or f"{check.key}.exe")
     if not installed_exe.is_file():
-        raise DependencyInstallError(f"Install finished but seconv.exe was not found at {installed_exe}.")
+        raise DependencyInstallError(f"Install finished but {installed_exe.name} was not found at {installed_exe}.")
     return installed_exe
+
+
+def install_seconv_from_latest_release() -> Path:
+    return install_dependency_from_latest_release("seconv")
 
 
 class WindowsTaskbarProgress:
@@ -830,11 +853,7 @@ class DependencyInstallWorker(QObject):
     @Slot()
     def run(self) -> None:
         try:
-            if self.dependency_key != "seconv":
-                check = dependency_check_by_key(self.dependency_key)
-                name = check.name if check else self.dependency_key
-                raise DependencyInstallError(f"Automatic install is not supported for {name}.")
-            installed_path = install_seconv_from_latest_release()
+            installed_path = install_dependency_from_latest_release(self.dependency_key)
             self.completed.emit(str(installed_path))
         except Exception:
             self.failed.emit(traceback.format_exc())
@@ -1984,7 +2003,7 @@ class MainWindow(QMainWindow):
             return False
 
         target_dir = dependency_install_target_dir(check)
-        asset_name = seconv_asset_name_for_machine() if dependency_key == "seconv" else ""
+        asset_name = dependency_asset_name_for_machine(check)
         answer = QMessageBox.question(
             self,
             "Install dependency",

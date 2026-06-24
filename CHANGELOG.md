@@ -2,6 +2,12 @@
 
 All notable user-facing changes are recorded here.
 
+## 1.0.19 - 2026-06-24
+
+- Added automatic Subtitle Edit install/update support from the Dependency Manager.
+- Generalized GitHub ZIP dependency installs so supported tools can share the same safe `_tools` workflow.
+- Verified the official Subtitle Edit Windows ZIP installs into `_tools\SubtitleEdit` and is picked up by existing tool discovery.
+
 ## 1.0.18 - 2026-06-24
 
 - Added automatic `seconv` install/update support from the Dependency Manager.
