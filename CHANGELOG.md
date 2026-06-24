@@ -2,6 +2,12 @@
 
 All notable user-facing changes are recorded here.
 
+## 1.0.20 - 2026-06-24
+
+- Added an Organizer queue for freezing the current inputs/settings as sequential remux jobs.
+- Added queue controls to add the current Organizer setup, run queued jobs, remove queued jobs, and clear finished entries.
+- Kept queued remuxes serial and snapshot-based so the user can keep preparing later jobs without launching multiple heavy muxes at once.
+
 ## 1.0.19 - 2026-06-24
 
 - Added automatic Subtitle Edit install/update support from the Dependency Manager.

@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -772,6 +773,82 @@ def test_dependency_version_uses_first_output_line(qapp, monkeypatch, tmp_path):
         assert window._dependency_version(tool_path, ("--version",)) == "tool version 1.2.3"
         assert captured["command"] == [str(tool_path), "--version"]
         assert captured["kwargs"]["timeout"] == 5
+    finally:
+        window.close()
+
+
+def test_organizer_queue_adds_current_settings(qapp, monkeypatch):
+    window = gui.MainWindow()
+    try:
+        args = SimpleNamespace(
+            input_paths=[Path("C:/Movies/aladdin.mkv")],
+            path=Path("C:/Movies/aladdin.mkv"),
+            output_dir=Path("D:/sorted"),
+            output_suffix="-queued",
+        )
+        monkeypatch.setattr(window, "_build_args", lambda dry_run: (args, Path("config.json")))
+        monkeypatch.setattr(window, "_validate_organizer_settings", lambda _args, _config_path: None)
+
+        window.add_current_organizer_to_queue()
+
+        assert len(window.organizer_queue) == 1
+        assert window.organizer_queue[0].args is args
+        assert window.organizer_queue[0].status == "Queued"
+        assert window.queue_table.item(0, window.QUEUE_PROJECT_COLUMN).text() == "aladdin"
+        assert window.queue_table.item(0, window.QUEUE_MESSAGE_COLUMN).text() == "Waiting"
+        assert window.queue_run_button.isEnabled()
+
+        window.queue_table.selectRow(0)
+        window.remove_selected_queue_items()
+
+        assert window.organizer_queue == []
+    finally:
+        window.close()
+
+
+def test_organizer_queue_starts_next_item_after_completion(qapp, monkeypatch):
+    window = gui.MainWindow()
+    started: list[int] = []
+    try:
+        first = gui.OrganizerQueueItem(
+            item_id=1,
+            name="first",
+            args=SimpleNamespace(),
+            config_path=None,
+            input_summary="first.mkv",
+            output_summary="_sorted",
+        )
+        second = gui.OrganizerQueueItem(
+            item_id=2,
+            name="second",
+            args=SimpleNamespace(),
+            config_path=None,
+            input_summary="second.mkv",
+            output_summary="_sorted",
+        )
+        window.organizer_queue = [first, second]
+        window._refresh_queue_table()
+
+        def fake_start_worker(_args, _config_path, dry_run=False):
+            assert window.current_queue_item is not None
+            started.append(window.current_queue_item.item_id)
+
+        monkeypatch.setattr(window, "_start_organizer_worker", fake_start_worker)
+
+        assert window._start_next_organizer_queue_item()
+        assert started == [1]
+        assert first.status == "Running"
+
+        result = organizer.BatchRunResult(reports=[], failures=0, input_files=[], source_root=None)
+        window.handle_completed(result)
+
+        assert first.status == "Done"
+        assert window.start_next_queue_after_thread
+
+        window._thread_finished()
+
+        assert started == [1, 2]
+        assert second.status == "Running"
     finally:
         window.close()
 

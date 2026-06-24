@@ -859,6 +859,20 @@ class DependencyInstallWorker(QObject):
             self.failed.emit(traceback.format_exc())
 
 
+@dataclass
+class OrganizerQueueItem:
+    item_id: int
+    name: str
+    args: object
+    config_path: Path | None
+    input_summary: str
+    output_summary: str
+    status: str = "Queued"
+    message: str = "Waiting"
+    reports: list[dict] | None = None
+    failures: int = 0
+
+
 class MainWindow(QMainWindow):
     PROFILE_NONE_LABEL = "Custom"
     PROFILE_STORE_VERSION = 2
@@ -942,6 +956,16 @@ class MainWindow(QMainWindow):
     TRACK_NAME_COLUMN = TRACK_COLUMNS.index("Name")
     TRACK_FLAGS_COLUMN = TRACK_COLUMNS.index("Flags")
     TRACK_PLAN_COLUMN = TRACK_COLUMNS.index("Plan")
+    QUEUE_COLUMNS = [
+        "Status",
+        "Project",
+        "Input",
+        "Output",
+        "Message",
+    ]
+    QUEUE_STATUS_COLUMN = QUEUE_COLUMNS.index("Status")
+    QUEUE_PROJECT_COLUMN = QUEUE_COLUMNS.index("Project")
+    QUEUE_MESSAGE_COLUMN = QUEUE_COLUMNS.index("Message")
     STATUS_COLORS_BY_THEME = {
         "light": {
             "Ready": ("#edf7ed", "#1f6f3f"),
@@ -1030,6 +1054,10 @@ class MainWindow(QMainWindow):
         self.audio_sync_probe_worker: AudioSyncProbeWorker | None = None
         self.dependency_install_thread: QThread | None = None
         self.dependency_install_worker: DependencyInstallWorker | None = None
+        self.organizer_queue: list[OrganizerQueueItem] = []
+        self.current_queue_item: OrganizerQueueItem | None = None
+        self.organizer_queue_counter = 0
+        self.start_next_queue_after_thread = False
         self.audio_sync_stream_paths: tuple[Path, Path] | None = None
         self.audio_sync_probe_automatic = True
         self.audio_sync_probe_retry_after_finish = False
@@ -1182,6 +1210,10 @@ class MainWindow(QMainWindow):
         self.preview_button = QPushButton("Preview")
         self.run_button = QPushButton("Run")
         self.cancel_button = QPushButton("Cancel")
+        self.queue_add_button = QPushButton("Add current")
+        self.queue_run_button = QPushButton("Run queue")
+        self.queue_remove_button = QPushButton("Remove selected")
+        self.queue_clear_button = QPushButton("Clear finished")
         self.track_select_all_button = QPushButton("Select all")
         self.track_select_audio_button = QPushButton("Select audio")
         self.track_select_subtitles_button = QPushButton("Select subs")
@@ -1202,6 +1234,14 @@ class MainWindow(QMainWindow):
         self.preview_button.setObjectName("secondaryButton")
         self.run_button.setObjectName("primaryButton")
         self.cancel_button.setObjectName("dangerButton")
+        self.queue_add_button.setObjectName("secondaryButton")
+        self.queue_run_button.setObjectName("primaryButton")
+        self.queue_remove_button.setObjectName("secondaryButton")
+        self.queue_clear_button.setObjectName("secondaryButton")
+        self.queue_add_button.setToolTip("Freeze the current Organizer settings and add them to the queue")
+        self.queue_run_button.setToolTip("Run queued Organizer jobs one at a time")
+        self.queue_remove_button.setToolTip("Remove queued jobs that have not started yet")
+        self.queue_clear_button.setToolTip("Clear completed, failed, and cancelled queue entries")
         self.track_select_all_button.setObjectName("secondaryButton")
         self.track_select_audio_button.setObjectName("secondaryButton")
         self.track_select_subtitles_button.setObjectName("secondaryButton")
@@ -1240,9 +1280,13 @@ class MainWindow(QMainWindow):
         self.track_reset_selection_button.setEnabled(False)
         self.track_reset_order_button.setEnabled(False)
         self.track_reset_button.setEnabled(False)
+        self.queue_run_button.setEnabled(False)
+        self.queue_remove_button.setEnabled(False)
+        self.queue_clear_button.setEnabled(False)
         self.files_table = QTableWidget(0, len(self.FILE_COLUMNS))
         self.results_table = self.files_table
         self.tracks_table = TrackTableWidget(0, len(self.TRACK_COLUMNS))
+        self.queue_table = QTableWidget(0, len(self.QUEUE_COLUMNS))
         self.track_details_edit = QPlainTextEdit()
         self.track_details_edit.setObjectName("trackDetails")
         self.track_details_edit.setPlaceholderText("Select a track to inspect its plan, source, flags, and reasons.")
@@ -1426,6 +1470,31 @@ class MainWindow(QMainWindow):
         top_bar.addWidget(self.run_button)
         top_bar.addWidget(self.cancel_button)
         root.addLayout(top_bar)
+
+        queue_group = QGroupBox("Queue")
+        queue_group.setMaximumHeight(150)
+        queue_layout = QVBoxLayout(queue_group)
+        queue_layout.setContentsMargins(10, 8, 10, 10)
+        queue_actions = QHBoxLayout()
+        queue_actions.addWidget(self.queue_add_button)
+        queue_actions.addWidget(self.queue_run_button)
+        queue_actions.addStretch(1)
+        queue_actions.addWidget(self.queue_remove_button)
+        queue_actions.addWidget(self.queue_clear_button)
+        queue_layout.addLayout(queue_actions)
+        self.queue_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.queue_table.setSelectionMode(QTableWidget.ExtendedSelection)
+        self.queue_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.queue_table.setAlternatingRowColors(True)
+        self.queue_table.verticalHeader().setVisible(False)
+        self.queue_table.setHorizontalHeaderLabels(self.QUEUE_COLUMNS)
+        self.queue_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.queue_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.queue_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.queue_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+        self.queue_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
+        queue_layout.addWidget(self.queue_table, 1)
+        root.addWidget(queue_group)
 
         advanced_layout = QGridLayout(self.advanced_panel)
         advanced_layout.setContentsMargins(18, 0, 0, 0)
@@ -1704,6 +1773,11 @@ class MainWindow(QMainWindow):
             self.organizer_reset_button.clicked.connect(self.reset_organizer_tab)
         browse_output.clicked.connect(self.choose_output_folder)
         self.advanced_button.toggled.connect(self.toggle_advanced)
+        self.queue_add_button.clicked.connect(self.add_current_organizer_to_queue)
+        self.queue_run_button.clicked.connect(self.run_organizer_queue)
+        self.queue_remove_button.clicked.connect(self.remove_selected_queue_items)
+        self.queue_clear_button.clicked.connect(self.clear_finished_queue_items)
+        self.queue_table.itemSelectionChanged.connect(self._update_queue_controls)
         self.config_reload_button.clicked.connect(self.reload_config_tab)
         self.config_save_button.clicked.connect(self.save_config_tab)
         self.config_apply_button.clicked.connect(self.apply_custom_config_to_organizer)
@@ -4920,6 +4994,172 @@ class MainWindow(QMainWindow):
         self.audio_sync_worker_thread.finished.connect(self._audio_sync_thread_finished)
         self.audio_sync_worker_thread.start()
 
+    def _organizer_queue_input_summary(self, args) -> str:
+        input_paths = list(getattr(args, "input_paths", []) or [])
+        if input_paths:
+            if len(input_paths) == 1:
+                return Path(input_paths[0]).name
+            return f"{len(input_paths)} selected sources"
+        path = getattr(args, "path", None)
+        return Path(path).name if path else "No input"
+
+    def _organizer_queue_project_name(self, args) -> str:
+        input_paths = list(getattr(args, "input_paths", []) or [])
+        if len(input_paths) == 1:
+            return Path(input_paths[0]).stem
+        if len(input_paths) > 1:
+            first_name = Path(input_paths[0]).stem
+            return f"{first_name} + {len(input_paths) - 1}"
+        path = getattr(args, "path", None)
+        return Path(path).stem if path else f"Queue item {self.organizer_queue_counter + 1}"
+
+    def _organizer_queue_output_summary(self, args) -> str:
+        output_dir = getattr(args, "output_dir", None)
+        if output_dir:
+            return str(output_dir)
+        suffix = getattr(args, "output_suffix", "") or ""
+        return f"Default _sorted{f' ({suffix})' if suffix else ''}"
+
+    def _make_current_organizer_queue_item(self) -> OrganizerQueueItem:
+        args, config_path = self._build_args(dry_run=False)
+        self._validate_organizer_settings(args, config_path)
+        self.organizer_queue_counter += 1
+        return OrganizerQueueItem(
+            item_id=self.organizer_queue_counter,
+            name=self._organizer_queue_project_name(args),
+            args=args,
+            config_path=config_path,
+            input_summary=self._organizer_queue_input_summary(args),
+            output_summary=self._organizer_queue_output_summary(args),
+        )
+
+    @Slot()
+    def add_current_organizer_to_queue(self) -> None:
+        try:
+            item = self._make_current_organizer_queue_item()
+        except Exception as error:
+            QMessageBox.critical(self, "Cannot add to queue", str(error))
+            return
+        self.organizer_queue.append(item)
+        self._refresh_queue_table()
+        self.append_summary_line(f"Queued: {item.name}")
+        self.statusBar().showMessage(f"Queued: {item.name}")
+
+    @Slot()
+    def run_organizer_queue(self) -> None:
+        if self.worker_thread and self.worker_thread.isRunning():
+            return
+        queued = [item for item in self.organizer_queue if item.status == "Queued"]
+        if not queued:
+            QMessageBox.information(self, "Organizer queue", "There are no queued Organizer jobs.")
+            return
+        if self.makemkv_worker_thread and self.makemkv_worker_thread.isRunning():
+            QMessageBox.information(self, "MakeMKV is running", "Wait for the MakeMKV batch to finish first.")
+            return
+        if self.audio_sync_worker_thread and self.audio_sync_worker_thread.isRunning():
+            QMessageBox.information(self, "Audio Sync is running", "Wait for the Audio Sync task to finish first.")
+            return
+        answer = QMessageBox.question(
+            self,
+            "Run Organizer queue",
+            f"Run {len(queued)} queued Organizer job(s)?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        self._start_next_organizer_queue_item()
+
+    @Slot()
+    def remove_selected_queue_items(self) -> None:
+        selected_ids = self._selected_queue_item_ids()
+        if not selected_ids:
+            return
+        running_id = self.current_queue_item.item_id if self.current_queue_item else None
+        self.organizer_queue = [
+            item
+            for item in self.organizer_queue
+            if item.item_id not in selected_ids or item.item_id == running_id
+        ]
+        self._refresh_queue_table()
+
+    @Slot()
+    def clear_finished_queue_items(self) -> None:
+        self.organizer_queue = [
+            item
+            for item in self.organizer_queue
+            if item.status not in {"Done", "Error", "Cancelled"}
+        ]
+        self._refresh_queue_table()
+
+    def _selected_queue_item_ids(self) -> set[int]:
+        ids: set[int] = set()
+        for item in self.queue_table.selectedItems():
+            row_item = self.queue_table.item(item.row(), 0)
+            if row_item is None:
+                continue
+            item_id = row_item.data(Qt.UserRole)
+            if isinstance(item_id, int):
+                ids.add(item_id)
+        return ids
+
+    def _refresh_queue_table(self) -> None:
+        self.queue_table.setRowCount(len(self.organizer_queue))
+        for row, item in enumerate(self.organizer_queue):
+            values = [item.status, item.name, item.input_summary, item.output_summary, item.message]
+            for column, value in enumerate(values):
+                table_item = QTableWidgetItem(str(value))
+                table_item.setData(Qt.UserRole, item.item_id)
+                table_item.setToolTip(str(value))
+                if column == self.QUEUE_STATUS_COLUMN:
+                    self._apply_status_style(table_item, str(value))
+                self.queue_table.setItem(row, column, table_item)
+        self._update_queue_controls()
+
+    @Slot()
+    def _update_queue_controls(self) -> None:
+        queue_running = bool(self.current_queue_item)
+        has_queued = any(item.status == "Queued" for item in self.organizer_queue)
+        has_finished = any(item.status in {"Done", "Error", "Cancelled"} for item in self.organizer_queue)
+        selected_ids = self._selected_queue_item_ids()
+        running_id = self.current_queue_item.item_id if self.current_queue_item else None
+        selected_removable = any(item_id != running_id for item_id in selected_ids)
+        self.queue_run_button.setEnabled(has_queued and not queue_running and not self._workflow_is_running())
+        self.queue_remove_button.setEnabled(selected_removable and not queue_running)
+        self.queue_clear_button.setEnabled(has_finished and not queue_running)
+
+    def _set_queue_item_status(self, item: OrganizerQueueItem, status: str, message: str = "") -> None:
+        item.status = status
+        if message:
+            item.message = message
+        self._refresh_queue_table()
+
+    def _start_next_organizer_queue_item(self) -> bool:
+        if self.worker_thread and self.worker_thread.isRunning():
+            return False
+        next_item = next((item for item in self.organizer_queue if item.status == "Queued"), None)
+        if next_item is None:
+            self.current_queue_item = None
+            self._set_queue_running(False)
+            self.statusBar().showMessage("Organizer queue finished")
+            return False
+
+        self.current_queue_item = next_item
+        self._set_queue_item_status(next_item, "Running", "Starting")
+        self._prepare_organizer_queue_run_ui(next_item)
+        self._start_organizer_worker(next_item.args, next_item.config_path, dry_run=False)
+        return True
+
+    def _prepare_organizer_queue_run_ui(self, item: OrganizerQueueItem) -> None:
+        self.summary_edit.clear()
+        self.log_edit.clear()
+        self._log_line_starts[id(self.log_edit)] = True
+        self._start_progress_session("Organizer queue", item.name)
+        self._set_progress_indeterminate()
+        self.append_summary_line(f"Queue item started: {item.name}")
+        self.statusBar().showMessage(f"Queue item started: {item.name}")
+        self._set_queue_running(True)
+
     @Slot()
     def start_preview(self) -> None:
         self._start_run(dry_run=True)
@@ -5003,6 +5243,9 @@ class MainWindow(QMainWindow):
 
         self._prepare_organizer_run_ui(dry_run)
 
+        self._start_organizer_worker(args, config_path, dry_run)
+
+    def _start_organizer_worker(self, args, config_path: Path | None, dry_run: bool) -> None:
         self.worker_thread = QThread(self)
         self.worker = OrganizerWorker(args, config_path)
         self.worker.moveToThread(self.worker_thread)
@@ -5530,7 +5773,11 @@ class MainWindow(QMainWindow):
                 "file-cancelled": "Cancelled",
             }.get(kind)
             if status:
-                self._set_file_status(Path(file_path), status, message)
+                if self.current_queue_item:
+                    queue_status = "Error" if status == "Error" else "Cancelled" if status == "Cancelled" else "Running"
+                    self._set_queue_item_status(self.current_queue_item, queue_status, message)
+                else:
+                    self._set_file_status(Path(file_path), status, message)
         if kind in {"batch-started", "batch-finished", "batch-cancelled", "file-started", "file-finished", "file-error", "file-cancelled"}:
             self.append_summary_line(message)
         self._set_progress_label(message)
@@ -5591,6 +5838,10 @@ class MainWindow(QMainWindow):
 
     @Slot(object)
     def handle_completed(self, result: organizer.BatchRunResult) -> None:
+        if self.current_queue_item:
+            self._handle_queue_item_completed(result)
+            return
+
         total_units = self._progress_total_units(len(result.input_files), 100)
         self._set_progress_value(total_units, total_units)
         self._populate_results(result.reports)
@@ -5607,8 +5858,39 @@ class MainWindow(QMainWindow):
         self._append_organizer_result_summary(result)
         self._set_running(False)
 
+    def _handle_queue_item_completed(self, result: organizer.BatchRunResult) -> None:
+        item = self.current_queue_item
+        if item is None:
+            return
+
+        total_units = self._progress_total_units(len(result.input_files), 100)
+        self._set_progress_value(total_units, total_units)
+        item.reports = result.reports
+        item.failures = result.failures
+        self._append_organizer_result_summary(result)
+        if result.cancelled:
+            self._set_queue_item_status(item, "Cancelled", "Cancelled")
+            self.statusBar().showMessage(f"Queue item cancelled: {item.name}")
+            self._finish_progress_session("Cancelled")
+        elif result.failures:
+            self._set_queue_item_status(item, "Error", f"Completed with {result.failures} error(s)")
+            self.statusBar().showMessage(f"Queue item completed with {result.failures} error(s): {item.name}")
+            self._finish_progress_session(f"Completed with {result.failures} error(s)")
+        else:
+            self._set_queue_item_status(item, "Done", "Completed")
+            self.statusBar().showMessage(f"Queue item completed: {item.name}")
+            self._finish_progress_session("Completed")
+
+        self.current_queue_item = None
+        self._set_queue_running(False)
+        self.start_next_queue_after_thread = True
+
     @Slot(str)
     def handle_failed(self, details: str) -> None:
+        if self.current_queue_item:
+            self._handle_queue_item_failed(details)
+            return
+
         self.append_log(details)
         self.statusBar().showMessage("Failed")
         self._finish_progress_session("Failed")
@@ -5618,6 +5900,21 @@ class MainWindow(QMainWindow):
         self.output_tabs.setCurrentIndex(1)
         QMessageBox.critical(self, "Run failed", details)
         self._set_running(False)
+
+    def _handle_queue_item_failed(self, details: str) -> None:
+        item = self.current_queue_item
+        if item is None:
+            return
+        self.append_log(details)
+        first_line = details.strip().splitlines()[-1] if details.strip() else "Unknown error"
+        self.append_summary_line(f"Queue item failed: {first_line}")
+        self.append_summary_line("See Raw log for the full traceback.")
+        self._set_queue_item_status(item, "Error", first_line)
+        self.statusBar().showMessage(f"Queue item failed: {item.name}")
+        self._finish_progress_session("Failed")
+        self.current_queue_item = None
+        self._set_queue_running(False)
+        self.start_next_queue_after_thread = True
 
     @Slot(object)
     def handle_makemkv_completed(self, result: makemkv.MakeMkvBatchResult) -> None:
@@ -5781,6 +6078,9 @@ class MainWindow(QMainWindow):
             self.worker_thread.deleteLater()
         self.worker = None
         self.worker_thread = None
+        if self.start_next_queue_after_thread:
+            self.start_next_queue_after_thread = False
+            self._start_next_organizer_queue_item()
 
     @Slot()
     def _makemkv_thread_finished(self) -> None:
@@ -6851,6 +7151,22 @@ class MainWindow(QMainWindow):
             self.audio_sync_reset_button.setEnabled(not running)
         self._set_audio_sync_selection_controls_enabled(self.audio_sync_tracks_table.rowCount() > 0 and not running)
 
+    def _set_queue_running(self, running: bool) -> None:
+        self.check_tools_button.setEnabled(not running)
+        self.preview_button.setEnabled(not running)
+        self.run_button.setEnabled(not running)
+        self.cancel_button.setEnabled(running)
+        self.makemkv_check_button.setEnabled(not running)
+        self.makemkv_preview_button.setEnabled(not running)
+        self.makemkv_run_button.setEnabled(not running)
+        self.audio_sync_check_button.setEnabled(not running)
+        self.audio_sync_analyze_button.setEnabled(not running)
+        self.audio_sync_apply_organizer_button.setEnabled(bool(self.audio_sync_result) and not running)
+        self.audio_sync_export_button.setEnabled(bool(self.audio_sync_result) and not running)
+        self._set_audio_sync_selection_controls_enabled(self.audio_sync_tracks_table.rowCount() > 0 and not running)
+        self.queue_add_button.setEnabled(True)
+        self._update_queue_controls()
+
     def _set_running(self, running: bool) -> None:
         if self.organizer_clear_button:
             self.organizer_clear_button.setEnabled(not running)
@@ -6878,6 +7194,8 @@ class MainWindow(QMainWindow):
         self._set_audio_sync_selection_controls_enabled(self.audio_sync_tracks_table.rowCount() > 0 and not running)
         self.tracks_table.setEnabled(not running)
         self._set_track_selection_controls_enabled(self.tracks_table.rowCount() > 0 and not running)
+        self.queue_add_button.setEnabled(not running)
+        self._update_queue_controls()
 
     def _set_makemkv_running(self, running: bool) -> None:
         if self.organizer_clear_button:
@@ -6905,6 +7223,8 @@ class MainWindow(QMainWindow):
         self.audio_sync_export_button.setEnabled(bool(self.audio_sync_result) and not running)
         self._set_audio_sync_selection_controls_enabled(self.audio_sync_tracks_table.rowCount() > 0 and not running)
         self._set_track_selection_controls_enabled(self.tracks_table.rowCount() > 0 and not running)
+        self.queue_add_button.setEnabled(not running)
+        self._update_queue_controls()
 
     def _set_audio_sync_running(self, running: bool) -> None:
         if self.organizer_clear_button:
@@ -6932,6 +7252,8 @@ class MainWindow(QMainWindow):
         if self.makemkv_reset_button:
             self.makemkv_reset_button.setEnabled(not running)
         self._set_track_selection_controls_enabled(self.tracks_table.rowCount() > 0 and not running)
+        self.queue_add_button.setEnabled(not running)
+        self._update_queue_controls()
 
     def _workflow_is_running(self) -> bool:
         return bool(

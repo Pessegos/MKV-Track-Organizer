@@ -1,6 +1,6 @@
 # MKV Track Organizer
 
-MKV Track Organizer 1.0.19 is a Windows desktop and command-line tool for cleaning, inspecting, synchronizing, and remuxing Matroska tracks with MKVToolNix. It can analyze audio, video, and subtitle tracks, rename them consistently, detect common subtitle roles, and write organized outputs without touching the original files by default.
+MKV Track Organizer 1.0.20 is a Windows desktop and command-line tool for cleaning, inspecting, synchronizing, and remuxing Matroska tracks with MKVToolNix. It can analyze audio, video, and subtitle tracks, rename them consistently, detect common subtitle roles, and write organized outputs without touching the original files by default.
 
 It includes an Organizer, reusable profiles, a MakeMKV batch workflow, and an Audio Sync helper for fixed-delay and linear drift corrections.
 
@@ -12,6 +12,7 @@ It includes an Organizer, reusable profiles, a MakeMKV batch workflow, and an Au
 - Optionally merge selected Matroska sources into one output; the first source with video supplies video while audio/subtitles can come from every source.
 - Keep originals safe by writing remuxed files to `_sorted` by default.
 - Preview changes before writing output files.
+- Queue multiple Organizer jobs so prepared remuxes can run one after another.
 - Rename audio tracks by format, language plus format, or keep existing names.
 - Choose default or regional language ordering for audio/subtitle tracks, with optional region priority presets.
 - Apply manual audio/subtitle delay or delay-plus-stretch sync by track ID when a source needs correction.
@@ -104,6 +105,8 @@ python .\mkv_track_organizer_gui.py
 ```
 
 Use **Check tools** to validate paths and external tools before a run. Use **Preview** to analyze files without writing outputs. Use **Run** to apply the selected settings.
+
+Use the Organizer **Queue** to freeze the current inputs, profile/settings, manual track selection, and manual track order as a queued job. **Run queue** processes queued jobs one at a time, so you can keep preparing later Organizer jobs while the current remux runs without starting multiple heavy muxes in parallel.
 
 The lower panel separates the readable **Summary** from the full **Raw log**, so normal runs are easier to scan while still keeping the diagnostic output available.
 
