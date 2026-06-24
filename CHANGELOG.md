@@ -2,6 +2,12 @@
 
 All notable user-facing changes are recorded here.
 
+## 1.0.21 - 2026-06-24
+
+- Added an Audio Sync queue for freezing reference/source sync setups as sequential analyses.
+- Let queued Audio Sync entries restore their saved streams, selected export tracks, result summary, and status from the queue table.
+- Reused the existing Audio Sync worker path so manual analysis and queued analysis share the same result formatting and progress behavior.
+
 ## 1.0.20 - 2026-06-24
 
 - Added an Organizer queue for freezing the current inputs/settings as sequential remux jobs.

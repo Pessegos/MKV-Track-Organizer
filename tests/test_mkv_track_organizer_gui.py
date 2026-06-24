@@ -853,6 +853,133 @@ def test_organizer_queue_starts_next_item_after_completion(qapp, monkeypatch):
         window.close()
 
 
+def test_audio_sync_queue_adds_current_settings(qapp, tmp_path):
+    window = gui.MainWindow()
+    try:
+        reference_path = tmp_path / "reference.mkv"
+        source_path = tmp_path / "aladdin.mkv"
+        reference_path.write_bytes(b"")
+        source_path.write_bytes(b"")
+        reference_streams = [
+            gui.audio_sync.MediaStream(1, 0, "audio", "truehd", "eng", "English", 8),
+        ]
+        source_streams = [
+            gui.audio_sync.MediaStream(2, 0, "audio", "eac3", "eng", "English", 6),
+            gui.audio_sync.MediaStream(3, 1, "audio", "eac3", "por", "Portuguese", 6),
+            gui.audio_sync.MediaStream(4, 0, "subtitle", "subrip", "eng", "English"),
+        ]
+        window.audio_sync_reference_edit.setText(str(reference_path))
+        window.audio_sync_source_edit.setText(str(source_path))
+        window.audio_sync_output_edit.setText(str(tmp_path / "synced"))
+        window._apply_audio_sync_streams(
+            reference_path.resolve(),
+            source_path.resolve(),
+            reference_streams,
+            source_streams,
+            5400.0,
+            5300.0,
+        )
+        window.audio_sync_tracks_table.item(1, 0).setCheckState(Qt.Unchecked)
+
+        window.add_current_audio_sync_to_queue()
+
+        assert len(window.audio_sync_queue) == 1
+        item = window.audio_sync_queue[0]
+        assert item.status == "Queued"
+        assert item.name == "aladdin"
+        assert item.settings.reference_path == reference_path.resolve()
+        assert item.settings.source_path == source_path.resolve()
+        assert item.reference_streams == reference_streams
+        assert item.source_streams == source_streams
+        assert item.selected_audio_indices == [0]
+        assert item.output_dir_text == str(tmp_path / "synced")
+        assert window.audio_sync_queue_table.item(0, window.AUDIO_SYNC_QUEUE_PROJECT_COLUMN).text() == "aladdin"
+        assert window.audio_sync_queue_table.item(0, window.AUDIO_SYNC_QUEUE_MESSAGE_COLUMN).text() == "Waiting"
+        assert window.audio_sync_queue_run_button.isEnabled()
+
+        window.audio_sync_queue_table.selectRow(0)
+        window.remove_selected_audio_sync_queue_items()
+
+        assert window.audio_sync_queue == []
+    finally:
+        window.close()
+
+
+def test_audio_sync_queue_starts_next_item_after_completion(qapp, monkeypatch):
+    window = gui.MainWindow()
+    started: list[int] = []
+    try:
+        reference_streams = [gui.audio_sync.MediaStream(1, 0, "audio", "truehd", "eng")]
+        source_streams = [gui.audio_sync.MediaStream(2, 0, "audio", "eac3", "eng")]
+        first = gui.AudioSyncQueueItem(
+            item_id=1,
+            name="first",
+            settings=gui.audio_sync.AudioSyncSettings(
+                reference_path=Path("C:/Movies/first-ref.mkv"),
+                source_path=Path("C:/Movies/first.mkv"),
+                checkpoints=1,
+            ),
+            reference_streams=reference_streams,
+            source_streams=source_streams,
+            reference_duration_seconds=3600.0,
+            source_duration_seconds=3600.0,
+            output_dir_text="",
+            selected_audio_indices=[0],
+        )
+        second = gui.AudioSyncQueueItem(
+            item_id=2,
+            name="second",
+            settings=gui.audio_sync.AudioSyncSettings(
+                reference_path=Path("C:/Movies/second-ref.mkv"),
+                source_path=Path("C:/Movies/second.mkv"),
+                checkpoints=1,
+            ),
+            reference_streams=reference_streams,
+            source_streams=source_streams,
+            reference_duration_seconds=3600.0,
+            source_duration_seconds=3600.0,
+            output_dir_text="",
+            selected_audio_indices=[0],
+        )
+        window.audio_sync_queue = [first, second]
+        window._refresh_audio_sync_queue_table()
+
+        def fake_start_worker(_settings):
+            assert window.current_audio_sync_queue_item is not None
+            started.append(window.current_audio_sync_queue_item.item_id)
+
+        monkeypatch.setattr(window, "_start_audio_sync_worker", fake_start_worker)
+
+        assert window._start_next_audio_sync_queue_item()
+        assert started == [1]
+        assert first.status == "Running"
+
+        result = gui.audio_sync.AudioSyncResult(
+            estimates=[gui.audio_sync.OffsetEstimate(600.0, -1.0, -1.0, 1.0)],
+            median_offset_seconds=-1.0,
+            spread_seconds=0.0,
+            average_confidence=1.0,
+            consistency="excellent",
+            verdict="reliable fixed delay: strong checkpoint consensus",
+            used_checkpoints=1,
+            attempted_checkpoints=1,
+            delay_reliability="high",
+        )
+        window.handle_audio_sync_completed(result)
+
+        assert first.status == "Done"
+        assert first.result is result
+        assert "Delay source by 1000.00 ms" in first.message
+        assert window.start_next_audio_sync_queue_after_thread
+
+        window._audio_sync_thread_finished()
+
+        assert started == [1, 2]
+        assert second.status == "Running"
+    finally:
+        window.close()
+
+
 def test_imported_profiles_can_keep_or_replace_conflicts(qapp):
     window = gui.MainWindow()
     try:
