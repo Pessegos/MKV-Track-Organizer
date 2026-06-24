@@ -683,6 +683,73 @@ def test_config_save_updates_the_global_baseline(qapp):
         window.close()
 
 
+def test_dependency_manager_specs_cover_external_tools(qapp):
+    window = gui.MainWindow()
+    try:
+        keys = {check.key for check in window._dependency_checks()}
+
+        assert window.dependency_manager_button.text() == "Dependency manager"
+        assert {
+            "mkvmerge",
+            "mkvextract",
+            "mkvpropedit",
+            "ffmpeg",
+            "ffprobe",
+            "makemkv",
+            "seconv",
+            "tesseract",
+            "subtitle_edit",
+        } <= keys
+        assert all(check.download_url.startswith("https://") for check in window._dependency_checks())
+    finally:
+        window.close()
+
+
+def test_dependency_status_rows_distinguish_optional_missing(qapp, monkeypatch):
+    window = gui.MainWindow()
+    try:
+        monkeypatch.setattr(
+            window,
+            "_resolve_dependency_path",
+            lambda check, _args: (None, "searched nowhere") if check.key in {"mkvmerge", "mkvpropedit"} else (None, ""),
+        )
+
+        rows = window._dependency_status_rows()
+        by_tool = {row["tool"]: row for row in rows}
+
+        assert by_tool["mkvmerge"]["status"] == "Missing"
+        assert by_tool["mkvpropedit"]["status"] == "Optional missing"
+        assert "searched nowhere" in by_tool["mkvmerge"]["details"]
+    finally:
+        window.close()
+
+
+def test_dependency_version_uses_first_output_line(qapp, monkeypatch, tmp_path):
+    window = gui.MainWindow()
+    captured: dict[str, object] = {}
+
+    class Completed:
+        stdout = "tool version 1.2.3\nextra details\n"
+        stderr = ""
+        returncode = 0
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return Completed()
+
+    try:
+        tool_path = tmp_path / "tool.exe"
+        tool_path.write_text("", encoding="utf-8")
+        monkeypatch.setattr(gui.subprocess, "run", fake_run)
+
+        assert window._dependency_version(tool_path, ("--version",)) == "tool version 1.2.3"
+        assert captured["command"] == [str(tool_path), "--version"]
+        assert captured["kwargs"]["timeout"] == 5
+    finally:
+        window.close()
+
+
 def test_imported_profiles_can_keep_or_replace_conflicts(qapp):
     window = gui.MainWindow()
     try:

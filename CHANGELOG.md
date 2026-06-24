@@ -2,6 +2,12 @@
 
 All notable user-facing changes are recorded here.
 
+## 1.0.17 - 2026-06-24
+
+- Added a Config tab Dependency Manager for MKVToolNix, FFmpeg/FFprobe, MakeMKV, Tesseract, `seconv`, and Subtitle Edit discovery.
+- Show external tool status, requirement level, detected version, resolved path, and details in one central dialog.
+- Added official download-page shortcuts for missing or outdated tools without attempting automatic installs yet.
+
 ## 1.0.16 - 2026-06-24
 
 - Added Organizer support for `.mks` Matroska subtitle-only inputs alongside `.mkv` and `.mka`.

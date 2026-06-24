@@ -5,20 +5,23 @@ import ctypes
 import io
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
 import traceback
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 
 try:
-    from PySide6.QtCore import QEvent, QItemSelection, QItemSelectionModel, QObject, QThread, QTimer, Qt, Signal, Slot
+    from PySide6.QtCore import QEvent, QItemSelection, QItemSelectionModel, QObject, QThread, QTimer, Qt, QUrl, Signal, Slot
     from PySide6.QtGui import (
         QAction,
         QBrush,
         QColor,
         QCloseEvent,
+        QDesktopServices,
         QDrag,
         QDragEnterEvent,
         QDropEvent,
@@ -89,6 +92,94 @@ def set_windows_app_user_model_id() -> None:
         setter("Pessegos.MKVTrackOrganizer")
     except (OSError, AttributeError):
         pass
+
+
+@dataclass(frozen=True)
+class DependencyCheck:
+    key: str
+    name: str
+    used_by: str
+    importance: str
+    download_url: str
+    version_args: tuple[str, ...] = ("--version",)
+    notes: str = ""
+
+
+DEPENDENCY_CHECKS: tuple[DependencyCheck, ...] = (
+    DependencyCheck(
+        "mkvmerge",
+        "mkvmerge",
+        "Organizer",
+        "Required",
+        "https://mkvtoolnix.download/downloads.html#windows",
+        notes="Installed with MKVToolNix.",
+    ),
+    DependencyCheck(
+        "mkvextract",
+        "mkvextract",
+        "Organizer analysis, OCR prep",
+        "Recommended",
+        "https://mkvtoolnix.download/downloads.html#windows",
+        notes="Installed with MKVToolNix.",
+    ),
+    DependencyCheck(
+        "mkvpropedit",
+        "mkvpropedit",
+        "Metadata-only Organizer mode",
+        "Optional",
+        "https://mkvtoolnix.download/downloads.html#windows",
+        notes="Installed with MKVToolNix.",
+    ),
+    DependencyCheck(
+        "ffmpeg",
+        "FFmpeg",
+        "Audio Sync analysis/export",
+        "Recommended",
+        "https://ffmpeg.org/download.html#build-windows",
+        version_args=("-version",),
+    ),
+    DependencyCheck(
+        "ffprobe",
+        "FFprobe",
+        "Audio Sync stream loading",
+        "Recommended",
+        "https://ffmpeg.org/download.html#build-windows",
+        version_args=("-version",),
+    ),
+    DependencyCheck(
+        "makemkv",
+        "makemkvcon",
+        "MakeMKV Batch",
+        "Optional",
+        "https://www.makemkv.com/download/",
+        version_args=("--version",),
+    ),
+    DependencyCheck(
+        "seconv",
+        "seconv",
+        "Automatic PGS OCR",
+        "Recommended",
+        "https://github.com/SubtitleEdit/subtitleedit/releases",
+        notes="Subtitle Edit command-line conversion component used for PGS OCR.",
+    ),
+    DependencyCheck(
+        "tesseract",
+        "Tesseract",
+        "Automatic PGS OCR",
+        "Recommended",
+        "https://tesseract-ocr.github.io/tessdoc/Downloads.html",
+        notes="OCR engine. Windows installers are maintained by third parties.",
+    ),
+    DependencyCheck(
+        "subtitle_edit",
+        "Subtitle Edit",
+        "Legacy OCR fallback",
+        "Optional",
+        "https://github.com/SubtitleEdit/subtitleedit/releases",
+        version_args=(),
+        notes="Only used when legacy Subtitle Edit OCR fallback is enabled.",
+    ),
+)
 
 
 class WindowsTaskbarProgress:
@@ -879,6 +970,7 @@ class MainWindow(QMainWindow):
         self.config_save_button = QPushButton("Save config")
         self.config_apply_button = QPushButton("Use in Organizer")
         self.config_reset_button = QPushButton("Reset defaults")
+        self.dependency_manager_button = QPushButton("Dependency manager")
         self.profile_store_path_label = QLabel(str(self.profile_store_path))
         self.profile_library_status_label = QLabel("")
         self.profile_import_button = QPushButton("Import")
@@ -887,9 +979,11 @@ class MainWindow(QMainWindow):
         self.config_save_button.setObjectName("primaryButton")
         self.config_apply_button.setObjectName("secondaryButton")
         self.config_reset_button.setObjectName("secondaryButton")
+        self.dependency_manager_button.setObjectName("secondaryButton")
         self.profile_import_button.setObjectName("secondaryButton")
         self.profile_export_button.setObjectName("secondaryButton")
         self.config_reset_button.setToolTip("Restore the built-in values in this Config panel")
+        self.dependency_manager_button.setToolTip("Check external tools and open official download pages")
         self.profile_store_path_label.setToolTip("Per-user file containing saved Organizer profiles")
         self.profile_import_button.setToolTip("Import profiles from a profile library JSON file")
         self.profile_export_button.setToolTip("Export all saved profiles to a JSON file")
@@ -1426,6 +1520,7 @@ class MainWindow(QMainWindow):
         self.config_save_button.clicked.connect(self.save_config_tab)
         self.config_apply_button.clicked.connect(self.apply_custom_config_to_organizer)
         self.config_reset_button.clicked.connect(self.reset_config_defaults)
+        self.dependency_manager_button.clicked.connect(self.show_dependency_manager)
         self.profile_import_button.clicked.connect(self.import_profile_library)
         self.profile_export_button.clicked.connect(self.export_profile_library)
 
@@ -1443,6 +1538,226 @@ class MainWindow(QMainWindow):
                 f'<a href="{ISSUES_URL}">Report an issue</a></p>'
             ),
         )
+
+    def _dependency_checks(self) -> tuple[DependencyCheck, ...]:
+        return DEPENDENCY_CHECKS
+
+    def _resolve_mkvtoolnix_dependency(self, args, executable_name: str, attr_name: str, env_var: str) -> Path | None:
+        explicit_path = getattr(args, attr_name, None)
+        fallbacks: list[Path] = []
+        if executable_name != "mkvmerge.exe":
+            mkvmerge = organizer.resolve_tool_path(
+                getattr(args, "mkvmerge", None),
+                "mkvmerge",
+                "MKVMERGE",
+                organizer.common_mkvtoolnix_paths("mkvmerge.exe"),
+            )
+            if mkvmerge:
+                fallbacks.append(mkvmerge.with_name(executable_name))
+        fallbacks.extend(organizer.common_mkvtoolnix_paths(executable_name))
+        return organizer.resolve_tool_path(
+            explicit_path,
+            Path(executable_name).stem,
+            env_var,
+            fallbacks,
+        )
+
+    def _resolve_dependency_path(self, check: DependencyCheck, args) -> tuple[Path | None, str]:
+        try:
+            if check.key == "mkvmerge":
+                return (
+                    self._resolve_mkvtoolnix_dependency(args, "mkvmerge.exe", "mkvmerge", "MKVMERGE"),
+                    "",
+                )
+            if check.key == "mkvextract":
+                return (
+                    self._resolve_mkvtoolnix_dependency(args, "mkvextract.exe", "mkvextract", "MKVEXTRACT"),
+                    "",
+                )
+            if check.key == "mkvpropedit":
+                return (
+                    self._resolve_mkvtoolnix_dependency(args, "mkvpropedit.exe", "mkvpropedit", "MKVPROPEDIT"),
+                    "",
+                )
+            if check.key == "ffmpeg":
+                return audio_sync.resolve_binary("ffmpeg"), ""
+            if check.key == "ffprobe":
+                return audio_sync.resolve_binary("ffprobe"), ""
+            if check.key == "makemkv":
+                explicit_text = self.makemkv_path_edit.text().strip()
+                explicit_path = Path(explicit_text) if explicit_text else None
+                return makemkv.find_makemkv(explicit_path), ""
+            if check.key == "seconv":
+                return organizer.resolve_seconv_path(getattr(args, "seconv", None)), ""
+            if check.key == "tesseract":
+                return (
+                    organizer.resolve_tool_path(
+                        getattr(args, "tesseract", None),
+                        "tesseract",
+                        "TESSERACT",
+                        organizer.common_tesseract_paths(),
+                    ),
+                    "",
+                )
+            if check.key == "subtitle_edit":
+                return (
+                    organizer.resolve_tool_path(
+                        getattr(args, "subtitle_edit", None),
+                        "SubtitleEdit",
+                        "SUBTITLE_EDIT",
+                        organizer.common_subtitle_edit_paths(),
+                    ),
+                    "",
+                )
+        except Exception as error:
+            return None, str(error)
+        return None, ""
+
+    def _dependency_version(self, path: Path, version_args: tuple[str, ...]) -> str:
+        if not version_args:
+            return "Detected"
+        try:
+            creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+            result = subprocess.run(
+                [str(path), *version_args],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=5,
+                creationflags=creationflags,
+            )
+        except subprocess.TimeoutExpired:
+            return "Detected; version check timed out"
+        except (OSError, subprocess.SubprocessError) as error:
+            return f"Detected; version unavailable ({error})"
+
+        output = "\n".join(part for part in [result.stdout, result.stderr] if part)
+        first_line = next((line.strip() for line in output.splitlines() if line.strip()), "")
+        return first_line or "Detected"
+
+    def _dependency_status_rows(self) -> list[dict[str, str]]:
+        args, _config_path = self._load_default_args()
+        rows: list[dict[str, str]] = []
+        for check in self._dependency_checks():
+            path, resolve_message = self._resolve_dependency_path(check, args)
+            if path:
+                status = "Ready"
+                version = self._dependency_version(path, check.version_args)
+                details = check.notes
+            else:
+                status = "Optional missing" if check.importance == "Optional" else "Missing"
+                version = ""
+                details = check.notes
+                if resolve_message:
+                    details = f"{details} {resolve_message}".strip()
+            rows.append(
+                {
+                    "status": status,
+                    "tool": check.name,
+                    "used_by": check.used_by,
+                    "importance": check.importance,
+                    "version": version,
+                    "path": str(path) if path else "",
+                    "details": details,
+                    "download_url": check.download_url,
+                }
+            )
+        return rows
+
+    def _style_dependency_item(self, item: QTableWidgetItem, status: str) -> None:
+        item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+        status_key = status.casefold()
+        if status_key == "ready":
+            item.setForeground(QBrush(QColor("#84e1a8")))
+        elif status_key == "optional missing":
+            item.setForeground(QBrush(QColor("#f5c16c")))
+        elif status_key == "missing":
+            item.setForeground(QBrush(QColor("#ff8d8d")))
+
+    def _populate_dependency_table(self, table: QTableWidget) -> None:
+        rows = self._dependency_status_rows()
+        headers = ["Status", "Tool", "Used by", "Need", "Version", "Path", "Details"]
+        table.setColumnCount(len(headers))
+        table.setHorizontalHeaderLabels(headers)
+        table.setRowCount(len(rows))
+        for row_index, row in enumerate(rows):
+            values = [
+                row["status"],
+                row["tool"],
+                row["used_by"],
+                row["importance"],
+                row["version"],
+                row["path"],
+                row["details"],
+            ]
+            for column_index, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                item.setToolTip(value)
+                item.setData(Qt.UserRole, row["download_url"])
+                self._style_dependency_item(item, row["status"])
+                table.setItem(row_index, column_index, item)
+        table.resizeRowsToContents()
+
+    @Slot()
+    def show_dependency_manager(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Dependency Manager")
+        dialog.resize(1120, 520)
+
+        layout = QVBoxLayout(dialog)
+        table = QTableWidget(0, 7)
+        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.setAlternatingRowColors(True)
+        table.setWordWrap(False)
+        table.verticalHeader().setVisible(False)
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
+
+        button_row = QHBoxLayout()
+        refresh_button = QPushButton("Refresh")
+        refresh_button.setObjectName("secondaryButton")
+        open_button = QPushButton("Open download page")
+        open_button.setObjectName("primaryButton")
+        close_button = QPushButton("Close")
+        close_button.setObjectName("secondaryButton")
+        button_row.addWidget(refresh_button)
+        button_row.addStretch(1)
+        button_row.addWidget(open_button)
+        button_row.addWidget(close_button)
+
+        layout.addWidget(table)
+        layout.addLayout(button_row)
+
+        def selected_download_url() -> str:
+            row = table.currentRow()
+            if row < 0:
+                return ""
+            item = table.item(row, 0)
+            return str(item.data(Qt.UserRole) or "") if item else ""
+
+        def open_selected_download() -> None:
+            url = selected_download_url()
+            if url:
+                QDesktopServices.openUrl(QUrl(url))
+
+        refresh_button.clicked.connect(lambda: self._populate_dependency_table(table))
+        open_button.clicked.connect(open_selected_download)
+        close_button.clicked.connect(dialog.accept)
+        table.itemDoubleClicked.connect(lambda _item: open_selected_download())
+
+        self._populate_dependency_table(table)
+        if table.rowCount():
+            table.selectRow(0)
+        dialog.exec()
 
     def _build_makemkv_tab(self) -> QWidget:
         style = self.style()
@@ -1590,6 +1905,13 @@ class MainWindow(QMainWindow):
         profiles_layout.addLayout(library_actions, 1, 1, 1, 3)
         profiles_layout.addWidget(self.profile_library_status_label, 2, 1, 1, 3)
         root.addWidget(profiles_group)
+
+        tools_group = QGroupBox("External tools")
+        tools_layout = QHBoxLayout(tools_group)
+        tools_layout.addWidget(self.dependency_manager_button)
+        tools_layout.addStretch(1)
+        root.addWidget(tools_group)
+
         root.addStretch(1)
         return tab
 
