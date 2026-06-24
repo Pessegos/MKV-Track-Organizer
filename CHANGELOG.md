@@ -2,6 +2,12 @@
 
 All notable user-facing changes are recorded here.
 
+## 1.0.16 - 2026-06-24
+
+- Added Organizer support for `.mks` Matroska subtitle-only inputs alongside `.mkv` and `.mka`.
+- Updated file discovery, CLI help, desktop file picker filters, and README references to include `.mks`.
+- Preserved `.mks` output extensions for subtitle-only inputs and kept merged outputs sensible when mixing video, audio, and subtitle-only Matroska files.
+
 ## 1.0.15 - 2026-06-23
 
 - Added Audio Sync detection for linear timing drift, such as 24.000 fps audio against a 23.976 fps Blu-ray timeline.

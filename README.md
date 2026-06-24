@@ -1,6 +1,6 @@
 # MKV Track Organizer
 
-MKV Track Organizer 1.0.15 is a Windows desktop and command-line tool for cleaning, inspecting, synchronizing, and remuxing Matroska tracks with MKVToolNix. It can analyze audio, video, and subtitle tracks, rename them consistently, detect common subtitle roles, and write organized outputs without touching the original files by default.
+MKV Track Organizer 1.0.16 is a Windows desktop and command-line tool for cleaning, inspecting, synchronizing, and remuxing Matroska tracks with MKVToolNix. It can analyze audio, video, and subtitle tracks, rename them consistently, detect common subtitle roles, and write organized outputs without touching the original files by default.
 
 It includes an Organizer, reusable profiles, a MakeMKV batch workflow, and an Audio Sync helper for fixed-delay and linear drift corrections.
 
@@ -8,7 +8,7 @@ It includes an Organizer, reusable profiles, a MakeMKV batch workflow, and an Au
 
 ## Features
 
-- Batch process one `.mkv`/`.mka` file, a folder, or recursive folders.
+- Batch process one `.mkv`/`.mka`/`.mks` file, a folder, or recursive folders.
 - Optionally merge selected Matroska sources into one output; the first source with video supplies video while audio/subtitles can come from every source.
 - Keep originals safe by writing remuxed files to `_sorted` by default.
 - Preview changes before writing output files.
@@ -56,7 +56,7 @@ python -m pip install pytest
 
 1. Install [MKVToolNix](https://mkvtoolnix.download/) and download the latest stable ZIP from the Releases page.
 2. Extract the complete ZIP and launch `MKV Track Organizer.exe`. Do not move only the EXE out of its folder.
-3. Use **Check tools**, add one or more `.mkv`/`.mka` sources, and run **Preview** before **Run**.
+3. Use **Check tools**, add one or more `.mkv`/`.mka`/`.mks` sources, and run **Preview** before **Run**.
 4. Review duplicate warnings and manual selections. Originals remain untouched unless you explicitly choose an existing-output overwrite mode.
 
 The executable is not code-signed, so Windows may show a SmartScreen warning. Verify that the ZIP came from this repository's Releases page before running it.

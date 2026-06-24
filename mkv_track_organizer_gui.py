@@ -1114,7 +1114,7 @@ class MainWindow(QMainWindow):
         output_row.addWidget(self.output_edit, 1)
         output_row.addWidget(browse_output)
 
-        self.recursive_check.setToolTip("When the input is a folder, include .mkv and .mka files inside subfolders")
+        self.recursive_check.setToolTip("When the input is a folder, include .mkv, .mka, and .mks files inside subfolders")
         source_grid.addWidget(input_label, 0, 0)
         source_grid.addLayout(input_row, 0, 1)
         source_grid.addWidget(QLabel("Output"), 1, 0)
@@ -3302,7 +3302,7 @@ class MainWindow(QMainWindow):
             self,
             "Choose Matroska files",
             "",
-            "Matroska files (*.mkv *.mka);;Matroska video (*.mkv);;Matroska audio (*.mka)",
+            "Matroska files (*.mkv *.mka *.mks);;Matroska video (*.mkv);;Matroska audio (*.mka);;Matroska subtitles (*.mks)",
         )
         self.add_input_paths(Path(path) for path in paths)
 

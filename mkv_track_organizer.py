@@ -81,7 +81,8 @@ METADATA_EDIT_MODES = {"off", "auto", "only"}
 AUDIO_NAME_STYLES = {"auto", "format", "language-format", "keep"}
 LANGUAGE_ORDER_STYLES = {"custom", "default", "regional"}
 CHINESE_TRADITIONAL_REGIONAL_VARIANTS = {"zh-TW", "zh-HK"}
-MATROSKA_INPUT_SUFFIXES = {".mkv", ".mka"}
+MATROSKA_INPUT_SUFFIXES = {".mkv", ".mka", ".mks"}
+MATROSKA_INPUT_SUFFIX_LABEL = ".mkv/.mka/.mks"
 
 
 class OrganizerError(Exception):
@@ -6977,8 +6978,10 @@ def matroska_input_glob_patterns(recursive: bool) -> list[str]:
 def merge_output_extension_for(input_files: list[Path]) -> str:
     if any(path.suffix.lower() == ".mkv" for path in input_files):
         return ".mkv"
-    if input_files and input_files[0].suffix.lower() in MATROSKA_INPUT_SUFFIXES:
-        return input_files[0].suffix.lower()
+    if any(path.suffix.lower() == ".mka" for path in input_files):
+        return ".mka"
+    if any(path.suffix.lower() == ".mks" for path in input_files):
+        return ".mks"
     return ".mkv"
 
 
@@ -7007,7 +7010,10 @@ def merge_output_path_for(
 ) -> Path:
     if not input_files:
         raise OrganizerError("No input files to merge.")
-    primary = next((path for path in input_files if path.suffix.lower() == ".mkv"), input_files[0])
+    primary = next(
+        (path for path in input_files if path.suffix.lower() == ".mkv"),
+        next((path for path in input_files if path.suffix.lower() == ".mka"), input_files[0]),
+    )
     suffix = output_suffix_text(output_suffix) or ".merged"
     output_name = f"{primary.stem}{suffix}{merge_output_extension_for(input_files)}"
     base_dir = output_dir or (primary.parent / SORTED_DIR_NAME)
@@ -7026,7 +7032,7 @@ def should_skip_generated_mkv_path(source_root: Path, candidate: Path) -> bool:
 def collect_mkv_files(input_path: Path, recursive: bool) -> tuple[list[Path], Path | None]:
     if input_path.is_file():
         if not is_matroska_input_file(input_path):
-            raise OrganizerError(f"File is not a supported Matroska input (.mkv/.mka): {input_path}")
+            raise OrganizerError(f"File is not a supported Matroska input ({MATROSKA_INPUT_SUFFIX_LABEL}): {input_path}")
         return [input_path], None
 
     if not input_path.is_dir():
@@ -7048,14 +7054,14 @@ def collect_mkv_files(input_path: Path, recursive: bool) -> tuple[list[Path], Pa
     files.sort()
 
     if not files:
-        raise OrganizerError(f"No supported Matroska files (.mkv/.mka) found in: {input_path}")
+        raise OrganizerError(f"No supported Matroska files ({MATROSKA_INPUT_SUFFIX_LABEL}) found in: {input_path}")
 
     return files, input_path
 
 
 def collect_mkv_files_from_paths(input_paths: list[Path], recursive: bool) -> tuple[list[Path], Path | None]:
     if not input_paths:
-        raise OrganizerError("Provide at least one Matroska file (.mkv/.mka) or folder.")
+        raise OrganizerError(f"Provide at least one Matroska file ({MATROSKA_INPUT_SUFFIX_LABEL}) or folder.")
 
     if len(input_paths) == 1:
         return collect_mkv_files(input_paths[0], recursive)
@@ -7073,7 +7079,7 @@ def collect_mkv_files_from_paths(input_paths: list[Path], recursive: bool) -> tu
             files.append(file_path)
 
     if not files:
-        raise OrganizerError("No supported Matroska files (.mkv/.mka) found in the selected inputs.")
+        raise OrganizerError(f"No supported Matroska files ({MATROSKA_INPUT_SUFFIX_LABEL}) found in the selected inputs.")
 
     return files, None
 
@@ -8153,7 +8159,7 @@ def build_parser(config_defaults: dict[str, Any] | None = None) -> argparse.Argu
         track_selection_overrides={},
         track_order_overrides=[],
     )
-    parser.add_argument("path", nargs="?", type=Path, default=default("path"), help="Matroska file (.mkv/.mka) or folder.")
+    parser.add_argument("path", nargs="?", type=Path, default=default("path"), help="Matroska file (.mkv/.mka/.mks) or folder.")
     parser.add_argument("--config", type=Path, default=None, help="JSON config with personal defaults.")
     parser.add_argument("--no-config", action="store_true", help="Ignore mkv_track_organizer.config.json.")
     parser.add_argument("--recursive", action="store_true", help="Search for Matroska files inside subfolders.")

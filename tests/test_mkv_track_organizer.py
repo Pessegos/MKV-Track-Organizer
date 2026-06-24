@@ -907,6 +907,13 @@ def test_output_suffix_preserves_mka_extension(tmp_path: Path) -> None:
     assert m.output_path_for(input_path, None, output_dir=output_dir, output_suffix="fixed") == output_dir / "Audio.fixed.mka"
 
 
+def test_output_suffix_preserves_mks_extension(tmp_path: Path) -> None:
+    input_path = tmp_path / "Subtitles.mks"
+    output_dir = tmp_path / "out"
+
+    assert m.output_path_for(input_path, None, output_dir=output_dir, output_suffix="fixed") == output_dir / "Subtitles.fixed.mks"
+
+
 def test_collect_mkv_files_allows_explicit_sorted_root(tmp_path: Path) -> None:
     sorted_dir = tmp_path / "_sorted"
     season_dir = sorted_dir / "Season 1"
@@ -941,16 +948,19 @@ def test_collect_mkv_files_accepts_mka_inputs(tmp_path: Path) -> None:
     source.mkdir()
     video = source / "Movie.mkv"
     audio = source / "Synced audio.mka"
+    subtitles = source / "Subtitles.mks"
     ignored = source / "notes.txt"
     video.write_bytes(b"")
     audio.write_bytes(b"")
+    subtitles.write_bytes(b"")
     ignored.write_text("hello", encoding="utf-8")
 
     files, root = m.collect_mkv_files(source, recursive=False)
 
-    assert files == [video, audio]
+    assert files == sorted([video, audio, subtitles])
     assert root == source
     assert m.collect_mkv_files(audio, recursive=False) == ([audio], None)
+    assert m.collect_mkv_files(subtitles, recursive=False) == ([subtitles], None)
 
 
 def test_collect_mkv_files_from_paths_single_folder_keeps_source_root(tmp_path: Path) -> None:
@@ -1351,9 +1361,12 @@ def test_merge_output_path_handles_mka_sources(tmp_path: Path) -> None:
     synced_audio = tmp_path / "synced.mka"
     movie = tmp_path / "movie.mkv"
     commentary = tmp_path / "commentary.mka"
+    subtitles = tmp_path / "subtitles.mks"
 
     assert m.merge_output_path_for([synced_audio, movie]) == tmp_path / "_sorted" / "movie.merged.mkv"
     assert m.merge_output_path_for([synced_audio, commentary]) == tmp_path / "_sorted" / "synced.merged.mka"
+    assert m.merge_output_path_for([subtitles]) == tmp_path / "_sorted" / "subtitles.merged.mks"
+    assert m.merge_output_path_for([subtitles, synced_audio]) == tmp_path / "_sorted" / "synced.merged.mka"
 
 
 def test_mkvmerge_command_can_merge_multiple_sources(tmp_path: Path) -> None:
