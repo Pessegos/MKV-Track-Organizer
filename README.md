@@ -1,6 +1,6 @@
 # MKV Track Organizer
 
-MKV Track Organizer 1.0.21 is a Windows desktop and command-line tool for cleaning, inspecting, synchronizing, and remuxing Matroska tracks with MKVToolNix. It can analyze audio, video, and subtitle tracks, rename them consistently, detect common subtitle roles, and write organized outputs without touching the original files by default.
+MKV Track Organizer 1.0.22 is a Windows desktop and command-line tool for cleaning, inspecting, synchronizing, and remuxing Matroska tracks with MKVToolNix. It can analyze audio, video, and subtitle tracks, rename them consistently, detect common subtitle roles, and write organized outputs without touching the original files by default.
 
 It includes an Organizer, reusable profiles, a MakeMKV batch workflow, and an Audio Sync helper for fixed-delay and linear drift corrections.
 
@@ -12,7 +12,7 @@ It includes an Organizer, reusable profiles, a MakeMKV batch workflow, and an Au
 - Optionally merge selected Matroska sources into one output; the first source with video supplies video while audio/subtitles can come from every source.
 - Keep originals safe by writing remuxed files to `_sorted` by default.
 - Preview changes before writing output files.
-- Queue multiple Organizer and Audio Sync jobs so prepared work can run one after another.
+- Queue multiple Organizer and Audio Sync jobs so prepared work can run one after another, including automatic Audio Sync results into the Organizer queue.
 - Rename audio tracks by format, language plus format, or keep existing names.
 - Choose default or regional language ordering for audio/subtitle tracks, with optional region priority presets.
 - Apply manual audio/subtitle delay or delay-plus-stretch sync by track ID when a source needs correction.

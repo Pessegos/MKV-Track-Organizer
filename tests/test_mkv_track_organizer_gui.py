@@ -980,6 +980,117 @@ def test_audio_sync_queue_starts_next_item_after_completion(qapp, monkeypatch):
         window.close()
 
 
+def test_audio_sync_result_can_queue_organizer_job(qapp, tmp_path, monkeypatch):
+    window = gui.MainWindow()
+    try:
+        reference_path = tmp_path / "reference.mkv"
+        source_path = tmp_path / "source.mkv"
+        reference_path.write_bytes(b"")
+        source_path.write_bytes(b"")
+        reference_streams = [gui.audio_sync.MediaStream(1, 0, "audio", "truehd", "eng")]
+        source_streams = [
+            gui.audio_sync.MediaStream(2, 0, "audio", "eac3", "eng"),
+            gui.audio_sync.MediaStream(3, 1, "audio", "eac3", "por"),
+            gui.audio_sync.MediaStream(4, 0, "subtitle", "subrip", "eng"),
+        ]
+        window.audio_sync_reference_edit.setText(str(reference_path))
+        window.audio_sync_source_edit.setText(str(source_path))
+        window._apply_audio_sync_streams(
+            reference_path.resolve(),
+            source_path.resolve(),
+            reference_streams,
+            source_streams,
+            3600.0,
+            3600.0,
+        )
+        window.audio_sync_tracks_table.item(1, 0).setCheckState(Qt.Unchecked)
+        window.audio_sync_result = gui.audio_sync.AudioSyncResult(
+            estimates=[gui.audio_sync.OffsetEstimate(600.0, -1.0, -1.0, 1.0)],
+            median_offset_seconds=-1.0,
+            spread_seconds=0.0,
+            average_confidence=1.0,
+            consistency="excellent",
+            verdict="reliable fixed delay: strong checkpoint consensus",
+            used_checkpoints=1,
+            attempted_checkpoints=1,
+            delay_reliability="high",
+        )
+        monkeypatch.setattr(window, "_validate_organizer_settings", lambda _args, _config_path: None)
+        monkeypatch.setattr(window, "_matroska_track_ids_by_type", lambda _path, _track_type: [4])
+
+        window.add_audio_sync_result_to_organizer_queue()
+
+        assert len(window.organizer_queue) == 1
+        item = window.organizer_queue[0]
+        assert item.name == "source"
+        assert item.message == "From Audio Sync: +1000"
+        assert item.args.input_paths == [source_path.resolve()]
+        assert item.args.path == source_path.resolve()
+        assert item.args.audio_delays == "2:+1000"
+        assert item.args.subtitle_delays == "4:+1000"
+        assert item.args.track_selection_overrides == {}
+        assert item.args.track_order_overrides == []
+        assert window.queue_table.item(0, window.QUEUE_MESSAGE_COLUMN).text() == "From Audio Sync: +1000"
+    finally:
+        window.close()
+
+
+def test_audio_sync_queue_completion_can_add_organizer_queue_job(qapp, tmp_path, monkeypatch):
+    window = gui.MainWindow()
+    try:
+        reference_path = tmp_path / "reference.mkv"
+        source_path = tmp_path / "queued-source.mkv"
+        reference_path.write_bytes(b"")
+        source_path.write_bytes(b"")
+        item = gui.AudioSyncQueueItem(
+            item_id=1,
+            name="queued-source",
+            settings=gui.audio_sync.AudioSyncSettings(
+                reference_path=reference_path.resolve(),
+                source_path=source_path.resolve(),
+                checkpoints=1,
+            ),
+            reference_streams=[gui.audio_sync.MediaStream(1, 0, "audio", "truehd", "eng")],
+            source_streams=[
+                gui.audio_sync.MediaStream(2, 0, "audio", "eac3", "eng"),
+                gui.audio_sync.MediaStream(4, 0, "subtitle", "subrip", "eng"),
+            ],
+            reference_duration_seconds=3600.0,
+            source_duration_seconds=3600.0,
+            output_dir_text="",
+            selected_audio_indices=[0],
+        )
+        window.audio_sync_queue = [item]
+        window.current_audio_sync_queue_item = item
+        window.audio_sync_auto_queue_organizer_check.setChecked(True)
+        monkeypatch.setattr(window, "_validate_organizer_settings", lambda _args, _config_path: None)
+        monkeypatch.setattr(window, "_matroska_track_ids_by_type", lambda _path, _track_type: [4])
+        result = gui.audio_sync.AudioSyncResult(
+            estimates=[gui.audio_sync.OffsetEstimate(600.0, -0.5, -0.5, 1.0)],
+            median_offset_seconds=-0.5,
+            spread_seconds=0.0,
+            average_confidence=1.0,
+            consistency="excellent",
+            verdict="reliable fixed delay: strong checkpoint consensus",
+            used_checkpoints=1,
+            attempted_checkpoints=1,
+            delay_reliability="high",
+        )
+
+        window.handle_audio_sync_completed(result)
+
+        assert item.status == "Done"
+        assert item.result is result
+        assert "Organizer queued" in item.message
+        assert len(window.organizer_queue) == 1
+        organizer_item = window.organizer_queue[0]
+        assert organizer_item.name == "queued-source"
+        assert organizer_item.args.audio_delays == "2:+500"
+        assert organizer_item.args.subtitle_delays == "4:+500"
+    finally:
+        window.close()
+
+
 def test_imported_profiles_can_keep_or_replace_conflicts(qapp):
     window = gui.MainWindow()
     try:

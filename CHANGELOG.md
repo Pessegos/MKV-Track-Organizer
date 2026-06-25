@@ -2,6 +2,12 @@
 
 All notable user-facing changes are recorded here.
 
+## 1.0.22 - 2026-06-25
+
+- Added a manual Audio Sync action to add the current completed result directly to the Organizer queue.
+- Added an Audio Sync queue option to automatically add completed analyses to the Organizer queue.
+- Kept queued Organizer jobs as snapshots with the synchronized source path, selected audio delays, subtitle delays, and current Organizer profile/settings.
+
 ## 1.0.21 - 2026-06-24
 
 - Added an Audio Sync queue for freezing reference/source sync setups as sequential analyses.

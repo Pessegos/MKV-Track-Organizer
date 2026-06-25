@@ -1390,11 +1390,14 @@ class MainWindow(QMainWindow):
         self.audio_sync_check_button = QPushButton("Check tools")
         self.audio_sync_analyze_button = QPushButton("Analyze")
         self.audio_sync_apply_organizer_button = QPushButton("Apply correction in Organizer")
+        self.audio_sync_queue_organizer_button = QPushButton("Add result to Organizer queue")
         self.audio_sync_export_button = QPushButton("Export shifted .mka")
         self.audio_sync_queue_add_button = QPushButton("Add current")
         self.audio_sync_queue_run_button = QPushButton("Run queue")
         self.audio_sync_queue_remove_button = QPushButton("Remove selected")
         self.audio_sync_queue_clear_button = QPushButton("Clear finished")
+        self.audio_sync_auto_queue_organizer_check = QCheckBox("Add completed analyses to Organizer queue")
+        self.audio_sync_auto_queue_organizer_check.setChecked(True)
         self.audio_sync_select_all_button = QPushButton("Select all")
         self.audio_sync_clear_selection_button = QPushButton("Clear selection")
         self.audio_sync_clear_button: QToolButton | None = None
@@ -1403,15 +1406,22 @@ class MainWindow(QMainWindow):
         self.audio_sync_check_button.setObjectName("secondaryButton")
         self.audio_sync_analyze_button.setObjectName("primaryButton")
         self.audio_sync_apply_organizer_button.setObjectName("secondaryButton")
+        self.audio_sync_queue_organizer_button.setObjectName("secondaryButton")
         self.audio_sync_export_button.setObjectName("secondaryButton")
         self.audio_sync_queue_add_button.setObjectName("secondaryButton")
         self.audio_sync_queue_run_button.setObjectName("primaryButton")
         self.audio_sync_queue_remove_button.setObjectName("secondaryButton")
         self.audio_sync_queue_clear_button.setObjectName("secondaryButton")
+        self.audio_sync_queue_organizer_button.setToolTip(
+            "Create an Organizer queue job from the current Audio Sync result and selected source tracks"
+        )
         self.audio_sync_queue_add_button.setToolTip("Freeze the current Audio Sync setup and add it to the queue")
         self.audio_sync_queue_run_button.setToolTip("Run queued Audio Sync analyses one at a time")
         self.audio_sync_queue_remove_button.setToolTip("Remove queued analyses that have not started yet")
         self.audio_sync_queue_clear_button.setToolTip("Clear completed, failed, and cancelled Audio Sync queue entries")
+        self.audio_sync_auto_queue_organizer_check.setToolTip(
+            "When an Audio Sync queue item finishes, add the corrected source to the Organizer queue automatically"
+        )
         self.audio_sync_select_all_button.setObjectName("secondaryButton")
         self.audio_sync_clear_selection_button.setObjectName("secondaryButton")
         self.audio_sync_cancel_button.setObjectName("dangerButton")
@@ -2445,6 +2455,8 @@ class MainWindow(QMainWindow):
             "Fill the Organizer input, audio sync, and subtitle sync fields; Organizer remux applies them with mkvmerge --sync."
         )
         self.audio_sync_apply_organizer_button.setEnabled(False)
+        self.audio_sync_queue_organizer_button.setIcon(style.standardIcon(QStyle.SP_DialogApplyButton))
+        self.audio_sync_queue_organizer_button.setEnabled(False)
         self.audio_sync_export_button.setIcon(style.standardIcon(QStyle.SP_DialogSaveButton))
         self.audio_sync_export_button.setToolTip(
             "Create a separate .mka whose selected audio tracks are shifted by the measured delay."
@@ -2467,6 +2479,7 @@ class MainWindow(QMainWindow):
         top_bar.addWidget(self.audio_sync_check_button)
         top_bar.addWidget(self.audio_sync_analyze_button)
         top_bar.addWidget(self.audio_sync_apply_organizer_button)
+        top_bar.addWidget(self.audio_sync_queue_organizer_button)
         top_bar.addWidget(self.audio_sync_export_button)
         top_bar.addWidget(self.audio_sync_cancel_button)
         root.addLayout(top_bar)
@@ -2478,6 +2491,7 @@ class MainWindow(QMainWindow):
         queue_actions = QHBoxLayout()
         queue_actions.addWidget(self.audio_sync_queue_add_button)
         queue_actions.addWidget(self.audio_sync_queue_run_button)
+        queue_actions.addWidget(self.audio_sync_auto_queue_organizer_check)
         queue_actions.addStretch(1)
         queue_actions.addWidget(self.audio_sync_queue_remove_button)
         queue_actions.addWidget(self.audio_sync_queue_clear_button)
@@ -2568,6 +2582,7 @@ class MainWindow(QMainWindow):
         self.audio_sync_check_button.clicked.connect(self.check_audio_sync_tools)
         self.audio_sync_analyze_button.clicked.connect(self.start_audio_sync_analysis)
         self.audio_sync_apply_organizer_button.clicked.connect(self.apply_audio_sync_delay_to_organizer)
+        self.audio_sync_queue_organizer_button.clicked.connect(self.add_audio_sync_result_to_organizer_queue)
         self.audio_sync_export_button.clicked.connect(self.start_audio_sync_export)
         self.audio_sync_queue_add_button.clicked.connect(self.add_current_audio_sync_to_queue)
         self.audio_sync_queue_run_button.clicked.connect(self.run_audio_sync_queue)
@@ -4177,6 +4192,7 @@ class MainWindow(QMainWindow):
         self.audio_sync_source_combo.clear()
         self.audio_sync_tracks_table.setRowCount(0)
         self.audio_sync_apply_organizer_button.setEnabled(False)
+        self.audio_sync_queue_organizer_button.setEnabled(False)
         self.audio_sync_export_button.setEnabled(False)
         self._set_audio_sync_selection_controls_enabled(False)
         self._refresh_audio_sync_analysis_plan()
@@ -4374,14 +4390,152 @@ class MainWindow(QMainWindow):
     def _audio_sync_organizer_sync_value(self) -> str:
         if not self.audio_sync_result:
             return "+0"
-        if self.audio_sync_result.has_linear_drift_correction:
+        return self._audio_sync_organizer_sync_value_for_result(self.audio_sync_result)
+
+    def _audio_sync_organizer_sync_value_for_result(self, result: audio_sync.AudioSyncResult) -> str:
+        if result.has_linear_drift_correction:
             correction = organizer.TrackSyncCorrection(
-                int(round(self.audio_sync_result.drift_correction_delay_seconds * 1000)),
-                self.audio_sync_result.drift_correction_stretch_factor,
+                int(round(result.drift_correction_delay_seconds * 1000)),
+                result.drift_correction_stretch_factor,
             )
             return organizer.format_track_sync_correction(correction)
-        delay_ms = int(round(self.audio_sync_result.timeline_shift_seconds * 1000))
+        delay_ms = int(round(result.timeline_shift_seconds * 1000))
         return f"{delay_ms:+d}"
+
+    def _audio_sync_selected_streams_from_indices(
+        self,
+        source_streams: list[audio_sync.MediaStream],
+        selected_audio_indices: list[int],
+    ) -> list[audio_sync.MediaStream]:
+        selected_indices = set(selected_audio_indices)
+        return [
+            stream
+            for stream in source_streams
+            if stream.type == "audio" and stream.relative_index in selected_indices
+        ]
+
+    def _audio_sync_organizer_delay_texts(
+        self,
+        result: audio_sync.AudioSyncResult,
+        source_path: Path,
+        source_streams: list[audio_sync.MediaStream],
+        selected_audio_indices: list[int],
+    ) -> tuple[str, str, str]:
+        if not organizer.is_matroska_input_file(source_path):
+            raise ValueError("The Organizer workflow needs a .mkv, .mka, or .mks source file.")
+        selected_streams = self._audio_sync_selected_streams_from_indices(source_streams, selected_audio_indices)
+        if not selected_streams:
+            raise ValueError("Select at least one source audio track.")
+
+        sync_value = self._audio_sync_organizer_sync_value_for_result(result)
+        audio_delay_text = ", ".join(f"{stream.index}:{sync_value}" for stream in selected_streams)
+        subtitle_track_ids = self._matroska_track_ids_by_type(source_path, "subtitles")
+        if not subtitle_track_ids:
+            subtitle_track_ids = [stream.index for stream in source_streams if stream.type == "subtitle"]
+        subtitle_delay_text = ", ".join(f"{track_id}:{sync_value}" for track_id in subtitle_track_ids)
+        return sync_value, audio_delay_text, subtitle_delay_text
+
+    def _make_organizer_queue_item_from_audio_sync(
+        self,
+        item_name: str,
+        result: audio_sync.AudioSyncResult,
+        settings: audio_sync.AudioSyncSettings,
+        source_streams: list[audio_sync.MediaStream],
+        selected_audio_indices: list[int],
+    ) -> OrganizerQueueItem:
+        source_path = settings.source_path
+        sync_value, audio_delay_text, subtitle_delay_text = self._audio_sync_organizer_delay_texts(
+            result,
+            source_path,
+            source_streams,
+            selected_audio_indices,
+        )
+        args, config_path = self._build_args(dry_run=False)
+        args.input_paths = [source_path]
+        args.path = source_path
+        args.audio_delays = audio_delay_text
+        args.subtitle_delays = subtitle_delay_text
+        args.track_selection_overrides = {}
+        args.track_order_overrides = []
+        self._validate_organizer_settings(args, config_path)
+        self.organizer_queue_counter += 1
+        queue_item = OrganizerQueueItem(
+            item_id=self.organizer_queue_counter,
+            name=item_name or self._organizer_queue_project_name(args),
+            args=args,
+            config_path=config_path,
+            input_summary=self._organizer_queue_input_summary(args),
+            output_summary=self._organizer_queue_output_summary(args),
+        )
+        queue_item.message = f"From Audio Sync: {sync_value}"
+        return queue_item
+
+    def _append_audio_sync_organizer_delay_summary(
+        self,
+        result: audio_sync.AudioSyncResult,
+        audio_delay_text: str,
+        subtitle_delay_text: str,
+    ) -> None:
+        self.append_audio_sync_summary_line(f"Organizer will apply audio delays: {audio_delay_text}")
+        if subtitle_delay_text:
+            self.append_audio_sync_summary_line(f"Organizer will apply subtitle delays: {subtitle_delay_text}")
+        else:
+            self.append_audio_sync_summary_line("Organizer found no source subtitles to delay.")
+        if result.has_linear_drift_correction:
+            self.append_audio_sync_summary_line(
+                "Linear drift correction will be applied with mkvmerge --sync delay,stretch."
+            )
+        else:
+            self.append_audio_sync_summary_line(
+                f"Timeline shift: {audio_sync.format_delay_ms(result.timeline_shift_seconds)}"
+            )
+
+    def _queue_organizer_job_from_audio_sync_item(self, item: AudioSyncQueueItem) -> OrganizerQueueItem:
+        if not item.result:
+            raise ValueError("This Audio Sync queue item has no completed result yet.")
+        queue_item = self._make_organizer_queue_item_from_audio_sync(
+            item.name,
+            item.result,
+            item.settings,
+            list(item.source_streams),
+            list(item.selected_audio_indices),
+        )
+        self.organizer_queue.append(queue_item)
+        self._refresh_queue_table()
+        return queue_item
+
+    @Slot()
+    def add_audio_sync_result_to_organizer_queue(self) -> None:
+        if not self.audio_sync_result:
+            QMessageBox.information(self, "Audio Sync", "Run an analysis first.")
+            return
+        if not self._confirm_audio_sync_warnings():
+            return
+        try:
+            _reference_path, source_path = self._audio_sync_paths()
+            selected_indices = [stream.relative_index for stream in self._selected_audio_sync_streams()]
+            settings = self._build_audio_sync_settings()
+            queue_item = self._make_organizer_queue_item_from_audio_sync(
+                Path(source_path).stem,
+                self.audio_sync_result,
+                settings,
+                list(self.audio_sync_source_streams),
+                selected_indices,
+            )
+        except Exception as error:
+            QMessageBox.critical(self, "Cannot queue Organizer job", str(error))
+            return
+
+        self.organizer_queue.append(queue_item)
+        self._refresh_queue_table()
+        self._append_audio_sync_organizer_delay_summary(
+            self.audio_sync_result,
+            queue_item.args.audio_delays,
+            queue_item.args.subtitle_delays,
+        )
+        self.append_audio_sync_summary_line(f"Organizer queued: {queue_item.name}")
+        sync_value = queue_item.message.removeprefix("From Audio Sync: ")
+        self.statusBar().showMessage(f"Organizer queued from Audio Sync: {queue_item.name} ({sync_value})")
 
     @Slot()
     def apply_audio_sync_delay_to_organizer(self) -> None:
@@ -4401,34 +4555,23 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Invalid Audio Sync settings", str(error))
             return
 
-        if not organizer.is_matroska_input_file(source_path):
-            QMessageBox.information(self, "Audio Sync", "The Organizer workflow needs a .mkv or .mka source file.")
+        try:
+            _sync_value, delay_text, subtitle_delay_text = self._audio_sync_organizer_delay_texts(
+                self.audio_sync_result,
+                source_path,
+                list(self.audio_sync_source_streams),
+                [stream.relative_index for stream in selected_streams],
+            )
+        except Exception as error:
+            QMessageBox.information(self, "Audio Sync", str(error))
             return
 
-        sync_value = self._audio_sync_organizer_sync_value()
-        delay_text = ", ".join(f"{stream.index}:{sync_value}" for stream in selected_streams)
-        subtitle_track_ids = self._matroska_track_ids_by_type(source_path, "subtitles")
-        if not subtitle_track_ids:
-            subtitle_track_ids = [stream.index for stream in self.audio_sync_source_streams if stream.type == "subtitle"]
-        subtitle_delay_text = ", ".join(f"{track_id}:{sync_value}" for track_id in subtitle_track_ids)
         self.input_paths = []
         self.add_input_paths([source_path])
         self.audio_delays_edit.setText(delay_text)
         self.subtitle_delays_edit.setText(subtitle_delay_text)
         self.tabs.setCurrentIndex(0)
-        self.append_audio_sync_summary_line(f"Organizer will apply audio delays: {delay_text}")
-        if subtitle_delay_text:
-            self.append_audio_sync_summary_line(f"Organizer will apply subtitle delays: {subtitle_delay_text}")
-        else:
-            self.append_audio_sync_summary_line("Organizer found no source subtitles to delay.")
-        if self.audio_sync_result.has_linear_drift_correction:
-            self.append_audio_sync_summary_line(
-                "Linear drift correction will be applied with mkvmerge --sync delay,stretch."
-            )
-        else:
-            self.append_audio_sync_summary_line(
-                f"Timeline shift: {audio_sync.format_delay_ms(self.audio_sync_result.timeline_shift_seconds)}"
-            )
+        self._append_audio_sync_organizer_delay_summary(self.audio_sync_result, delay_text, subtitle_delay_text)
         self.append_audio_sync_summary_line("Run Preview or Run in Organizer to remux with those synchronized tracks.")
         self.statusBar().showMessage("Audio Sync correction prepared in Organizer")
 
@@ -4930,6 +5073,7 @@ class MainWindow(QMainWindow):
         self.audio_sync_result = None
         self._refresh_audio_sync_analysis_plan()
         self.audio_sync_apply_organizer_button.setEnabled(False)
+        self.audio_sync_queue_organizer_button.setEnabled(False)
         self.audio_sync_export_button.setEnabled(False)
         self._set_audio_sync_selection_controls_enabled(self.audio_sync_tracks_table.rowCount() > 0)
         self.audio_sync_summary_edit.clear()
@@ -5132,6 +5276,7 @@ class MainWindow(QMainWindow):
             self.append_audio_sync_summary_line(f"Queued result: {item.name}")
             self._append_audio_sync_result_summary(item.result)
             self.audio_sync_apply_organizer_button.setEnabled(self.audio_sync_tracks_table.rowCount() > 0)
+            self.audio_sync_queue_organizer_button.setEnabled(self.audio_sync_tracks_table.rowCount() > 0)
             self.audio_sync_export_button.setEnabled(self.audio_sync_tracks_table.rowCount() > 0)
 
     @Slot()
@@ -5168,6 +5313,7 @@ class MainWindow(QMainWindow):
     def _prepare_audio_sync_queue_run_ui(self, item: AudioSyncQueueItem) -> None:
         self.audio_sync_result = None
         self.audio_sync_apply_organizer_button.setEnabled(False)
+        self.audio_sync_queue_organizer_button.setEnabled(False)
         self.audio_sync_export_button.setEnabled(False)
         self.audio_sync_summary_edit.clear()
         self.audio_sync_log_edit.clear()
@@ -5286,6 +5432,7 @@ class MainWindow(QMainWindow):
 
         self.audio_sync_result = None
         self.audio_sync_apply_organizer_button.setEnabled(False)
+        self.audio_sync_queue_organizer_button.setEnabled(False)
         self.audio_sync_export_button.setEnabled(False)
         self.audio_sync_summary_edit.clear()
         self.audio_sync_log_edit.clear()
@@ -6359,6 +6506,7 @@ class MainWindow(QMainWindow):
         self._append_audio_sync_result_summary(result)
         self.append_audio_sync_summary_line()
         self.audio_sync_apply_organizer_button.setEnabled(self.audio_sync_tracks_table.rowCount() > 0)
+        self.audio_sync_queue_organizer_button.setEnabled(self.audio_sync_tracks_table.rowCount() > 0)
         self.audio_sync_export_button.setEnabled(self.audio_sync_tracks_table.rowCount() > 0)
         self._set_audio_sync_selection_controls_enabled(self.audio_sync_tracks_table.rowCount() > 0)
         self.statusBar().showMessage("Audio Sync analysis completed")
@@ -6381,7 +6529,17 @@ class MainWindow(QMainWindow):
             f"{self._audio_sync_result_reliability_text(result)} reliability"
         )
         self._set_audio_sync_queue_item_status(item, "Done", message)
+        if self.audio_sync_auto_queue_organizer_check.isChecked():
+            try:
+                organizer_queue_item = self._queue_organizer_job_from_audio_sync_item(item)
+            except Exception as error:
+                self.append_audio_sync_summary_line(f"Organizer queue failed: {error}")
+                self._set_audio_sync_queue_item_status(item, "Done", f"{message}; Organizer queue failed")
+            else:
+                self.append_audio_sync_summary_line(f"Organizer queued: {organizer_queue_item.name}")
+                self._set_audio_sync_queue_item_status(item, "Done", f"{message}; Organizer queued")
         self.audio_sync_apply_organizer_button.setEnabled(self.audio_sync_tracks_table.rowCount() > 0)
+        self.audio_sync_queue_organizer_button.setEnabled(self.audio_sync_tracks_table.rowCount() > 0)
         self.audio_sync_export_button.setEnabled(self.audio_sync_tracks_table.rowCount() > 0)
         self._set_audio_sync_selection_controls_enabled(self.audio_sync_tracks_table.rowCount() > 0)
         self.statusBar().showMessage(f"Audio Sync queue item completed: {item.name}")
@@ -7523,6 +7681,7 @@ class MainWindow(QMainWindow):
         self.audio_sync_check_button.setEnabled(not running)
         self.audio_sync_analyze_button.setEnabled(not running)
         self.audio_sync_apply_organizer_button.setEnabled(bool(self.audio_sync_result) and not running)
+        self.audio_sync_queue_organizer_button.setEnabled(bool(self.audio_sync_result) and not running)
         self.audio_sync_export_button.setEnabled(bool(self.audio_sync_result) and not running)
         if self.audio_sync_clear_button:
             self.audio_sync_clear_button.setEnabled(not running)
@@ -7543,6 +7702,7 @@ class MainWindow(QMainWindow):
         self.audio_sync_check_button.setEnabled(not running)
         self.audio_sync_analyze_button.setEnabled(not running)
         self.audio_sync_apply_organizer_button.setEnabled(bool(self.audio_sync_result) and not running)
+        self.audio_sync_queue_organizer_button.setEnabled(bool(self.audio_sync_result) and not running)
         self.audio_sync_export_button.setEnabled(bool(self.audio_sync_result) and not running)
         self._set_audio_sync_selection_controls_enabled(self.audio_sync_tracks_table.rowCount() > 0 and not running)
         self.queue_add_button.setEnabled(True)
@@ -7573,6 +7733,7 @@ class MainWindow(QMainWindow):
         if self.audio_sync_reset_button:
             self.audio_sync_reset_button.setEnabled(not running)
         self.audio_sync_apply_organizer_button.setEnabled(bool(self.audio_sync_result) and not running)
+        self.audio_sync_queue_organizer_button.setEnabled(bool(self.audio_sync_result) and not running)
         self.audio_sync_export_button.setEnabled(bool(self.audio_sync_result) and not running)
         self._set_audio_sync_selection_controls_enabled(self.audio_sync_tracks_table.rowCount() > 0 and not running)
         self.tracks_table.setEnabled(not running)
@@ -7605,6 +7766,7 @@ class MainWindow(QMainWindow):
         if self.audio_sync_reset_button:
             self.audio_sync_reset_button.setEnabled(not running)
         self.audio_sync_apply_organizer_button.setEnabled(bool(self.audio_sync_result) and not running)
+        self.audio_sync_queue_organizer_button.setEnabled(bool(self.audio_sync_result) and not running)
         self.audio_sync_export_button.setEnabled(bool(self.audio_sync_result) and not running)
         self._set_audio_sync_selection_controls_enabled(self.audio_sync_tracks_table.rowCount() > 0 and not running)
         self._set_track_selection_controls_enabled(self.tracks_table.rowCount() > 0 and not running)
@@ -7625,6 +7787,7 @@ class MainWindow(QMainWindow):
         if self.audio_sync_reset_button:
             self.audio_sync_reset_button.setEnabled(not running)
         self.audio_sync_apply_organizer_button.setEnabled(bool(self.audio_sync_result) and not running)
+        self.audio_sync_queue_organizer_button.setEnabled(bool(self.audio_sync_result) and not running)
         self.audio_sync_export_button.setEnabled(bool(self.audio_sync_result) and not running)
         self._set_audio_sync_selection_controls_enabled(self.audio_sync_tracks_table.rowCount() > 0 and not running)
         self.audio_sync_cancel_button.setEnabled(running)
