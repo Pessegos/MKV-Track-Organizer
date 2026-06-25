@@ -1257,7 +1257,8 @@ class MainWindow(QMainWindow):
         self.preview_button = QPushButton("Preview")
         self.run_button = QPushButton("Run")
         self.cancel_button = QPushButton("Cancel")
-        self.queue_add_button = QPushButton("Add preview")
+        self.queue_add_button = QPushButton("Add current")
+        self.queue_add_preview_button = QPushButton("Add preview")
         self.queue_run_button = QPushButton("Run queue")
         self.queue_remove_button = QPushButton("Remove selected")
         self.queue_clear_button = QPushButton("Clear finished")
@@ -1282,10 +1283,12 @@ class MainWindow(QMainWindow):
         self.run_button.setObjectName("primaryButton")
         self.cancel_button.setObjectName("dangerButton")
         self.queue_add_button.setObjectName("secondaryButton")
+        self.queue_add_preview_button.setObjectName("secondaryButton")
         self.queue_run_button.setObjectName("primaryButton")
         self.queue_remove_button.setObjectName("secondaryButton")
         self.queue_clear_button.setObjectName("secondaryButton")
-        self.queue_add_button.setToolTip("Add the current preview plan, including track selection and order edits, to the queue")
+        self.queue_add_button.setToolTip("Add the current Organizer settings to the queue without running Preview first")
+        self.queue_add_preview_button.setToolTip("Add the current preview plan, including track selection and order edits, to the queue")
         self.queue_run_button.setToolTip("Run queued Organizer jobs one at a time")
         self.queue_remove_button.setToolTip("Remove queued jobs that have not started yet")
         self.queue_clear_button.setToolTip("Clear completed, failed, and cancelled queue entries")
@@ -1328,7 +1331,7 @@ class MainWindow(QMainWindow):
         self.track_reset_order_button.setEnabled(False)
         self.track_reset_button.setEnabled(False)
         self.queue_run_button.setEnabled(False)
-        self.queue_add_button.setEnabled(False)
+        self.queue_add_preview_button.setEnabled(False)
         self.queue_remove_button.setEnabled(False)
         self.queue_clear_button.setEnabled(False)
         self.files_table = QTableWidget(0, len(self.FILE_COLUMNS))
@@ -1549,6 +1552,7 @@ class MainWindow(QMainWindow):
         queue_layout.setContentsMargins(10, 8, 10, 10)
         queue_actions = QHBoxLayout()
         queue_actions.addWidget(self.queue_add_button)
+        queue_actions.addWidget(self.queue_add_preview_button)
         queue_actions.addWidget(self.queue_run_button)
         queue_actions.addStretch(1)
         queue_actions.addWidget(self.queue_remove_button)
@@ -1854,6 +1858,7 @@ class MainWindow(QMainWindow):
         browse_output.clicked.connect(self.choose_output_folder)
         self.advanced_button.toggled.connect(self.toggle_advanced)
         self.queue_add_button.clicked.connect(self.add_current_organizer_to_queue)
+        self.queue_add_preview_button.clicked.connect(self.add_preview_organizer_to_queue)
         self.queue_run_button.clicked.connect(self.run_organizer_queue)
         self.queue_remove_button.clicked.connect(self.remove_selected_queue_items)
         self.queue_clear_button.clicked.connect(self.clear_finished_queue_items)
@@ -4162,8 +4167,11 @@ class MainWindow(QMainWindow):
         return bool(self.last_preview_args and self.current_reports and self.tracks_table.rowCount() > 0)
 
     def _update_organizer_queue_add_button(self) -> None:
-        enabled = self._has_queueable_organizer_preview() and not self._workflow_is_running()
-        self.queue_add_button.setEnabled(enabled)
+        running = self._workflow_is_running()
+        if hasattr(self, "queue_add_button"):
+            self.queue_add_button.setEnabled(not running)
+        if hasattr(self, "queue_add_preview_button"):
+            self.queue_add_preview_button.setEnabled(self._has_queueable_organizer_preview() and not running)
 
     def _invalidate_organizer_preview_plan(self) -> None:
         self.last_preview_args = None
@@ -5755,6 +5763,21 @@ class MainWindow(QMainWindow):
         return "; ".join(details)
 
     def _make_current_organizer_queue_item(self) -> OrganizerQueueItem:
+        args, config_path = self._build_args(dry_run=False)
+        self._validate_organizer_settings(args, config_path)
+        self.organizer_queue_counter += 1
+        item = OrganizerQueueItem(
+            item_id=self.organizer_queue_counter,
+            name=self._organizer_queue_project_name(args),
+            args=args,
+            config_path=config_path,
+            input_summary=self._organizer_queue_input_summary(args),
+            output_summary=self._organizer_queue_output_summary(args),
+        )
+        item.message = "Current settings"
+        return item
+
+    def _make_preview_organizer_queue_item(self) -> OrganizerQueueItem:
         if not self._has_queueable_organizer_preview():
             raise ValueError("Run Preview first, then adjust the tracks and add that preview plan to the queue.")
         if self.tracks_table.rowCount() and self.manual_track_order_active:
@@ -5783,6 +5806,18 @@ class MainWindow(QMainWindow):
             item = self._make_current_organizer_queue_item()
         except Exception as error:
             QMessageBox.critical(self, "Cannot add to queue", str(error))
+            return
+        self.organizer_queue.append(item)
+        self._refresh_queue_table()
+        self.append_summary_line(f"Queued current settings: {item.name}")
+        self.statusBar().showMessage(f"Queued current settings: {item.name}")
+
+    @Slot()
+    def add_preview_organizer_to_queue(self) -> None:
+        try:
+            item = self._make_preview_organizer_queue_item()
+        except Exception as error:
+            QMessageBox.critical(self, "Cannot add preview to queue", str(error))
             return
         self.organizer_queue.append(item)
         self._refresh_queue_table()

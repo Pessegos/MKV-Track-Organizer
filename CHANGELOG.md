@@ -2,6 +2,12 @@
 
 All notable user-facing changes are recorded here.
 
+## 1.0.26 - 2026-06-25
+
+- Restored the fast Organizer queue path with an "Add current" button for queueing current settings without running Preview first.
+- Kept "Add preview" as a separate button for queueing a finalized preview plan with manual track edits and drag order.
+- Clarified Organizer queue behavior so auto-drop settings can be queued directly, while preview-based cleanup remains available when needed.
+
 ## 1.0.25 - 2026-06-25
 
 - Changed the Organizer queue action to add the current preview plan, including manual include/exclude edits and manual track order, instead of queuing loose current settings.
