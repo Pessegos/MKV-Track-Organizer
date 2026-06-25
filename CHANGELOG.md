@@ -2,6 +2,12 @@
 
 All notable user-facing changes are recorded here.
 
+## 1.0.24 - 2026-06-25
+
+- Added Audio Sync queue summary ratings with high/medium/low/unknown delay reliability counts and a short "Needs review" list.
+- Added spacing between queued Audio Sync jobs in the running summary so job boundaries are easier to scan.
+- Changed Organizer queue progress to track the whole queue with current/total job context instead of restarting the progress session for every job.
+
 ## 1.0.23 - 2026-06-25
 
 - Enlarged the Audio Sync queue panel so several queued jobs are visible at once.

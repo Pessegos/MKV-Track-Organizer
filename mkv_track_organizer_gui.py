@@ -1079,6 +1079,10 @@ class MainWindow(QMainWindow):
         self.current_queue_item: OrganizerQueueItem | None = None
         self.organizer_queue_counter = 0
         self.start_next_queue_after_thread = False
+        self.organizer_queue_run_active = False
+        self.organizer_queue_run_item_ids: list[int] = []
+        self.organizer_queue_run_total_jobs = 0
+        self.organizer_queue_run_completed_jobs = 0
         self.audio_sync_queue: list[AudioSyncQueueItem] = []
         self.current_audio_sync_queue_item: AudioSyncQueueItem | None = None
         self.audio_sync_queue_counter = 0
@@ -5211,6 +5215,38 @@ class MainWindow(QMainWindow):
             return 0
         return min(self.audio_sync_queue_run_completed_jobs + 1, self.audio_sync_queue_run_total_jobs)
 
+    def _audio_sync_result_reliability_key(self, result: audio_sync.AudioSyncResult | None) -> str:
+        if result is None:
+            return "unknown"
+        if result.has_linear_drift_correction:
+            value = result.drift_reliability or result.delay_reliability
+        else:
+            value = result.delay_reliability or result.drift_reliability
+        value = (value or "unknown").strip().casefold()
+        return value if value in {"high", "medium", "low"} else "unknown"
+
+    def _audio_sync_queue_review_notes(self, item: AudioSyncQueueItem) -> list[str]:
+        notes: list[str] = []
+        result = item.result
+        if item.status in {"Error", "Cancelled"}:
+            detail = item.message or item.status
+            return [f"{item.name}: {detail}"]
+        if result is None:
+            return [f"{item.name}: no completed analysis result"]
+
+        reliability = self._audio_sync_result_reliability_key(result)
+        verdict = (result.verdict or "").strip()
+        verdict_key = verdict.casefold()
+        if reliability in {"low", "unknown"}:
+            notes.append(f"{item.name}: {reliability} reliability ({verdict or 'no verdict'})")
+        elif verdict_key.startswith(("uncertain", "single checkpoint")):
+            notes.append(f"{item.name}: {verdict}")
+        for warning in result.warnings:
+            notes.append(f"{item.name}: warning - {warning}")
+        if "Organizer queue failed" in item.message:
+            notes.append(f"{item.name}: could not add Organizer job")
+        return notes
+
     def _append_audio_sync_queue_final_summary(self) -> None:
         run_items = self._audio_sync_queue_run_items()
         done = sum(1 for item in run_items if item.status == "Done")
@@ -5218,14 +5254,34 @@ class MainWindow(QMainWindow):
         cancelled = sum(1 for item in run_items if item.status == "Cancelled")
         organizer_queued = sum(1 for item in run_items if "Organizer queued" in item.message)
         organizer_queue_failed = sum(1 for item in run_items if "Organizer queue failed" in item.message)
+        reliability_counts = {"high": 0, "medium": 0, "low": 0, "unknown": 0}
+        review_notes: list[str] = []
+        for item in run_items:
+            reliability_counts[self._audio_sync_result_reliability_key(item.result)] += 1
+            review_notes.extend(self._audio_sync_queue_review_notes(item))
         self.append_audio_sync_summary_line()
         self.append_audio_sync_summary_line("Queue summary")
         self.append_audio_sync_summary_line(
             f"Jobs: {done} done, {errors} error(s), {cancelled} cancelled"
         )
+        self.append_audio_sync_summary_line(
+            "Delay reliability: "
+            f"{reliability_counts['high']} high, "
+            f"{reliability_counts['medium']} medium, "
+            f"{reliability_counts['low']} low, "
+            f"{reliability_counts['unknown']} unknown"
+        )
         self.append_audio_sync_summary_line(f"Organizer jobs added: {organizer_queued}")
         if organizer_queue_failed:
             self.append_audio_sync_summary_line(f"Organizer queue failures: {organizer_queue_failed}")
+        if review_notes:
+            self.append_audio_sync_summary_line("Needs review:")
+            for note in review_notes[:20]:
+                self.append_audio_sync_summary_line(f"- {note}")
+            if len(review_notes) > 20:
+                self.append_audio_sync_summary_line(f"- ... {len(review_notes) - 20} more")
+        else:
+            self.append_audio_sync_summary_line("Needs review: none")
         self.append_audio_sync_summary_line()
 
     @Slot()
@@ -5397,6 +5453,8 @@ class MainWindow(QMainWindow):
         self.audio_sync_queue_organizer_button.setEnabled(False)
         self.audio_sync_export_button.setEnabled(False)
         job_number = self._audio_sync_queue_current_job_number()
+        if job_number > 1:
+            self.append_audio_sync_summary_line()
         self.append_audio_sync_summary_line(
             f"Queue item {job_number}/{self.audio_sync_queue_run_total_jobs}: {item.name}"
         )
@@ -5665,7 +5723,47 @@ class MainWindow(QMainWindow):
         )
         if answer != QMessageBox.Yes:
             return
+        self._begin_organizer_queue_run(queued)
         self._start_next_organizer_queue_item()
+
+    def _begin_organizer_queue_run(self, queued: list[OrganizerQueueItem]) -> None:
+        self.organizer_queue_run_active = True
+        self.organizer_queue_run_item_ids = [item.item_id for item in queued]
+        self.organizer_queue_run_total_jobs = len(queued)
+        self.organizer_queue_run_completed_jobs = 0
+        self.summary_edit.clear()
+        self.log_edit.clear()
+        self._log_line_starts[id(self.log_edit)] = True
+        self.append_summary_line("Organizer queue started.")
+        self.append_summary_line(f"Jobs: {self.organizer_queue_run_total_jobs}")
+        self.append_summary_line()
+        self._start_progress_session("Organizer queue", "Starting")
+        self._set_progress_context(0, self.organizer_queue_run_total_jobs)
+        self._set_organizer_queue_progress(0, "Starting")
+
+    def _ensure_organizer_queue_run_started(self) -> None:
+        if self.organizer_queue_run_active:
+            return
+        queued = [item for item in self.organizer_queue if item.status == "Queued"]
+        if queued:
+            self._begin_organizer_queue_run(queued)
+
+    def _organizer_queue_current_job_number(self) -> int:
+        if not self.organizer_queue_run_total_jobs:
+            return 0
+        return min(self.organizer_queue_run_completed_jobs + 1, self.organizer_queue_run_total_jobs)
+
+    def _set_organizer_queue_progress(self, item_progress: int = 0, label: str = "") -> None:
+        total_units = max(1, self.organizer_queue_run_total_jobs * 100)
+        item_progress = max(0, min(100, int(item_progress or 0)))
+        value = self.organizer_queue_run_completed_jobs * 100 + item_progress
+        self._set_progress_context(
+            self._organizer_queue_current_job_number(),
+            self.organizer_queue_run_total_jobs,
+        )
+        self._set_progress_value(total_units, min(value, total_units))
+        if label:
+            self._set_progress_label(label)
 
     @Slot()
     def remove_selected_queue_items(self) -> None:
@@ -5734,9 +5832,15 @@ class MainWindow(QMainWindow):
     def _start_next_organizer_queue_item(self) -> bool:
         if self.worker_thread and self.worker_thread.isRunning():
             return False
+        self._ensure_organizer_queue_run_started()
         next_item = next((item for item in self.organizer_queue if item.status == "Queued"), None)
         if next_item is None:
             self.current_queue_item = None
+            if self.organizer_queue_run_active:
+                self.organizer_queue_run_completed_jobs = self.organizer_queue_run_total_jobs
+                self._set_organizer_queue_progress(100, "Queue completed")
+                self._finish_progress_session("Queue completed")
+            self.organizer_queue_run_active = False
             self._set_queue_running(False)
             self.statusBar().showMessage("Organizer queue finished")
             return False
@@ -5748,12 +5852,13 @@ class MainWindow(QMainWindow):
         return True
 
     def _prepare_organizer_queue_run_ui(self, item: OrganizerQueueItem) -> None:
-        self.summary_edit.clear()
-        self.log_edit.clear()
-        self._log_line_starts[id(self.log_edit)] = True
-        self._start_progress_session("Organizer queue", item.name)
-        self._set_progress_indeterminate()
-        self.append_summary_line(f"Queue item started: {item.name}")
+        job_number = self._organizer_queue_current_job_number()
+        if job_number > 1:
+            self.append_summary_line()
+        self.append_summary_line(
+            f"Queue item {job_number}/{self.organizer_queue_run_total_jobs}: {item.name}"
+        )
+        self._set_organizer_queue_progress(0, f"{item.name}: starting")
         self.statusBar().showMessage(f"Queue item started: {item.name}")
         self._set_queue_running(True)
 
@@ -6342,25 +6447,40 @@ class MainWindow(QMainWindow):
 
     @Slot(str, str, str, int, int, int, int)
     def handle_event(self, kind: str, message: str, file_path: str, index: int, total: int, step: int, steps: int) -> None:
-        if index or total:
-            self._set_progress_context(index, total)
-        if kind in {"batch-progress", "file-progress"} and steps <= 0 and step <= 0:
-            self._set_progress_indeterminate()
-        elif total:
-            steps = steps or 100
-            total_units = self._progress_total_units(total, steps)
-            if kind == "file-started":
-                value = max(0, index - 1) * steps
+        if self.current_queue_item and self.organizer_queue_run_active:
+            item_progress = None
+            if kind in {"batch-started", "file-started"}:
+                item_progress = 0 if not total else int((max(0, index - 1) / max(1, total)) * 100)
             elif kind == "file-progress":
-                value = max(0, index - 1) * steps + max(0, min(step, steps))
+                steps = steps or 100
+                file_fraction = max(0, min(step, steps)) / max(1, steps)
+                item_progress = int(((max(0, index - 1) + file_fraction) / max(1, total or 1)) * 100)
             elif kind in {"file-finished", "file-error", "file-cancelled"}:
-                value = index * steps
-            else:
-                value = self.progress.value()
-            self._set_progress_value(
-                total_units,
-                min(value, total_units - self.FINALIZATION_PROGRESS_UNITS),
-            )
+                item_progress = int((max(0, index) / max(1, total or index or 1)) * 100)
+            elif kind in {"batch-finished", "batch-cancelled"}:
+                item_progress = 100
+            if item_progress is not None:
+                self._set_organizer_queue_progress(item_progress, message)
+        else:
+            if index or total:
+                self._set_progress_context(index, total)
+            if kind in {"batch-progress", "file-progress"} and steps <= 0 and step <= 0:
+                self._set_progress_indeterminate()
+            elif total:
+                steps = steps or 100
+                total_units = self._progress_total_units(total, steps)
+                if kind == "file-started":
+                    value = max(0, index - 1) * steps
+                elif kind == "file-progress":
+                    value = max(0, index - 1) * steps + max(0, min(step, steps))
+                elif kind in {"file-finished", "file-error", "file-cancelled"}:
+                    value = index * steps
+                else:
+                    value = self.progress.value()
+                self._set_progress_value(
+                    total_units,
+                    min(value, total_units - self.FINALIZATION_PROGRESS_UNITS),
+                )
         if file_path:
             status = {
                 "file-started": "Running",
@@ -6460,23 +6580,36 @@ class MainWindow(QMainWindow):
         if item is None:
             return
 
-        total_units = self._progress_total_units(len(result.input_files), 100)
-        self._set_progress_value(total_units, total_units)
+        if self.organizer_queue_run_active:
+            self._set_organizer_queue_progress(100, f"{item.name}: completed")
+            self.organizer_queue_run_completed_jobs += 1
+        else:
+            total_units = self._progress_total_units(len(result.input_files), 100)
+            self._set_progress_value(total_units, total_units)
         item.reports = result.reports
         item.failures = result.failures
         self._append_organizer_result_summary(result)
         if result.cancelled:
             self._set_queue_item_status(item, "Cancelled", "Cancelled")
             self.statusBar().showMessage(f"Queue item cancelled: {item.name}")
-            self._finish_progress_session("Cancelled")
+            if self.organizer_queue_run_active:
+                self._set_progress_label(f"{item.name}: cancelled")
+            else:
+                self._finish_progress_session("Cancelled")
         elif result.failures:
             self._set_queue_item_status(item, "Error", f"Completed with {result.failures} error(s)")
             self.statusBar().showMessage(f"Queue item completed with {result.failures} error(s): {item.name}")
-            self._finish_progress_session(f"Completed with {result.failures} error(s)")
+            if self.organizer_queue_run_active:
+                self._set_progress_label(f"{item.name}: completed with {result.failures} error(s)")
+            else:
+                self._finish_progress_session(f"Completed with {result.failures} error(s)")
         else:
             self._set_queue_item_status(item, "Done", "Completed")
             self.statusBar().showMessage(f"Queue item completed: {item.name}")
-            self._finish_progress_session("Completed")
+            if self.organizer_queue_run_active:
+                self._set_progress_label(f"{item.name}: completed")
+            else:
+                self._finish_progress_session("Completed")
 
         self.current_queue_item = None
         self._set_queue_running(False)
@@ -6502,13 +6635,19 @@ class MainWindow(QMainWindow):
         item = self.current_queue_item
         if item is None:
             return
+        if self.organizer_queue_run_active:
+            self._set_organizer_queue_progress(100, f"{item.name}: failed")
+            self.organizer_queue_run_completed_jobs += 1
         self.append_log(details)
         first_line = details.strip().splitlines()[-1] if details.strip() else "Unknown error"
         self.append_summary_line(f"Queue item failed: {first_line}")
         self.append_summary_line("See Raw log for the full traceback.")
         self._set_queue_item_status(item, "Error", first_line)
         self.statusBar().showMessage(f"Queue item failed: {item.name}")
-        self._finish_progress_session("Failed")
+        if self.organizer_queue_run_active:
+            self._set_progress_label(f"{item.name}: failed")
+        else:
+            self._finish_progress_session("Failed")
         self.current_queue_item = None
         self._set_queue_running(False)
         self.start_next_queue_after_thread = True
