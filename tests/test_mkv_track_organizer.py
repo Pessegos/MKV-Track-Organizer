@@ -1927,6 +1927,39 @@ def test_subtitle_language_duplicate_detection_flags_regional_probables() -> Non
     assert bokmal.probable_duplicate_group == generic_norwegian.probable_duplicate_group
 
 
+def test_duplicate_drop_policy_drops_marked_members_only() -> None:
+    first = audio_track(1, "eng")
+    second = audio_track(2, "eng")
+
+    m.detect_duplicate_tracks(Path("source-a.mkv"), [first, second], [])
+    m.apply_duplicate_drop_policy([first, second], [], drop_duplicates=True)
+
+    assert not first.drop
+    assert second.drop
+
+
+def test_probable_duplicate_drop_policy_drops_probable_members_only() -> None:
+    generic_dutch = pgs_subtitle_track(10, "dut")
+    flemish = subtitle_track(36, "nl-BE")
+    flemish.role = "sdh"
+
+    m.detect_duplicate_tracks(
+        Path("mulan.mkv"),
+        [],
+        [generic_dutch, flemish],
+        detect_exact_duplicates=False,
+        detect_subtitle_language_duplicates=True,
+    )
+    m.apply_duplicate_drop_policy(
+        [],
+        [generic_dutch, flemish],
+        drop_probable_duplicates=True,
+    )
+
+    assert not generic_dutch.drop
+    assert flemish.drop
+
+
 def test_plan_summary_includes_regional_duplicate_warnings() -> None:
     generic_dutch = subtitle_track(10, "dut")
     flemish = subtitle_track(36, "nl-BE")

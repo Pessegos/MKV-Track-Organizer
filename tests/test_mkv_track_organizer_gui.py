@@ -201,6 +201,56 @@ def test_run_keeps_existing_preview_tracks_visible(qapp):
         window.close()
 
 
+def test_add_preview_to_queue_uses_preview_overrides(qapp, monkeypatch):
+    audio = report_track(1, "audio", name="English - DTS-HD MA 5.1")
+    duplicate = report_track(
+        2,
+        "subtitles",
+        duplicate_group="source.mkv:subtitles:1",
+        duplicate_of_id=1,
+        duplicate_reason="Possible duplicate of source.mkv track 1",
+    )
+    report = {
+        "status": "dry-run",
+        "input": str(Path("C:/tmp/source.mkv")),
+        "output": str(Path("C:/tmp/out.mkv")),
+        "message": "",
+        "command": [],
+        "tracks": {"video": [], "audio": [audio], "subtitles": [duplicate]},
+        "plan_summary": {"counts": {"duplicate": 1}, "items": []},
+    }
+
+    window = gui.MainWindow()
+    try:
+        monkeypatch.setattr(window, "_validate_organizer_settings", lambda args, config_path: None)
+        assert window.queue_add_button.text() == "Add preview"
+        assert not window.queue_add_button.isEnabled()
+
+        window._populate_results([report])
+        preview_args, preview_config_path = window._build_args(dry_run=True)
+        window.last_preview_args = preview_args
+        window.last_preview_config_path = preview_config_path
+        window._update_organizer_queue_add_button()
+
+        assert window.queue_add_button.isEnabled()
+
+        window.tracks_table.selectRow(1)
+        window.deselect_duplicate_subtitle_tracks()
+        window._track_rows_reordered([1], 0)
+        duplicate_key = organizer.track_selection_key(0, "subtitles", 2)
+
+        window.add_current_organizer_to_queue()
+
+        assert len(window.organizer_queue) == 1
+        item = window.organizer_queue[0]
+        assert item.args.dry_run is False
+        assert item.args.track_selection_overrides[duplicate_key] is False
+        assert item.args.track_order_overrides[0] == duplicate_key
+        assert "Preview plan" in item.message
+    finally:
+        window.close()
+
+
 def test_single_track_check_updates_only_its_row(qapp, monkeypatch):
     tracks = [report_track(track_id, "audio", name=f"Audio {track_id}") for track_id in range(120)]
     report = {
@@ -777,7 +827,7 @@ def test_dependency_version_uses_first_output_line(qapp, monkeypatch, tmp_path):
         window.close()
 
 
-def test_organizer_queue_adds_current_settings(qapp, monkeypatch):
+def test_organizer_queue_adds_current_preview_plan(qapp, monkeypatch):
     window = gui.MainWindow()
     try:
         args = SimpleNamespace(
@@ -785,17 +835,33 @@ def test_organizer_queue_adds_current_settings(qapp, monkeypatch):
             path=Path("C:/Movies/aladdin.mkv"),
             output_dir=Path("D:/sorted"),
             output_suffix="-queued",
+            dry_run=True,
+            track_selection_overrides={},
+            track_order_overrides=[],
         )
-        monkeypatch.setattr(window, "_build_args", lambda dry_run: (args, Path("config.json")))
         monkeypatch.setattr(window, "_validate_organizer_settings", lambda _args, _config_path: None)
+        report = {
+            "status": "dry-run",
+            "input": str(Path("C:/Movies/aladdin.mkv")),
+            "output": str(Path("D:/sorted/aladdin-queued.mkv")),
+            "message": "",
+            "command": [],
+            "tracks": {"video": [], "audio": [report_track(1, "audio")], "subtitles": []},
+            "plan_summary": {"counts": {}, "items": []},
+        }
+        window._populate_results([report])
+        window.last_preview_args = args
+        window.last_preview_config_path = Path("config.json")
+        window._update_organizer_queue_add_button()
 
         window.add_current_organizer_to_queue()
 
         assert len(window.organizer_queue) == 1
-        assert window.organizer_queue[0].args is args
+        assert window.organizer_queue[0].args is not args
+        assert window.organizer_queue[0].args.dry_run is False
         assert window.organizer_queue[0].status == "Queued"
         assert window.queue_table.item(0, window.QUEUE_PROJECT_COLUMN).text() == "aladdin"
-        assert window.queue_table.item(0, window.QUEUE_MESSAGE_COLUMN).text() == "Waiting"
+        assert "Preview plan" in window.queue_table.item(0, window.QUEUE_MESSAGE_COLUMN).text()
         assert window.queue_run_button.isEnabled()
 
         window.queue_table.selectRow(0)

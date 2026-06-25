@@ -324,6 +324,8 @@ CONFIG_BOOL_KEYS = {
     "drop_empty_subs",
     "detect_duplicate_tracks",
     "detect_subtitle_language_duplicates",
+    "auto_drop_duplicate_tracks",
+    "auto_drop_probable_duplicate_tracks",
     "disable_track_statistics_tags",
     "merge_inputs",
     "detect_language_variants",
@@ -5472,6 +5474,21 @@ def detect_duplicate_tracks(
             )
 
 
+def apply_duplicate_drop_policy(
+    audio_tracks: list[TrackInfo],
+    subtitles: list[TrackInfo],
+    drop_duplicates: bool = False,
+    drop_probable_duplicates: bool = False,
+) -> None:
+    if not drop_duplicates and not drop_probable_duplicates:
+        return
+    for track in [*audio_tracks, *subtitles]:
+        if drop_duplicates and track.duplicate_of_id is not None:
+            track.drop = True
+        if drop_probable_duplicates and track.probable_duplicate_of_id is not None:
+            track.drop = True
+
+
 def apply_default_flags(
     videos: list[TrackInfo],
     audio_tracks: list[TrackInfo],
@@ -7481,6 +7498,12 @@ def process_file(
     detect_subtitle_language_duplicates_enabled = bool(
         getattr(args, "detect_subtitle_language_duplicates", False)
     )
+    auto_drop_duplicate_tracks = bool(getattr(args, "auto_drop_duplicate_tracks", False))
+    auto_drop_probable_duplicate_tracks = bool(getattr(args, "auto_drop_probable_duplicate_tracks", False))
+    detect_duplicate_tracks_enabled = detect_duplicate_tracks_enabled or auto_drop_duplicate_tracks
+    detect_subtitle_language_duplicates_enabled = (
+        detect_subtitle_language_duplicates_enabled or auto_drop_probable_duplicate_tracks
+    )
     preserve_commentary_names = bool(getattr(args, "preserve_commentary_names", False))
     apply_audio_names(audio_tracks, audio_name_style)
 
@@ -7489,7 +7512,8 @@ def process_file(
         args.analyze_sub_sizes
         or args.smart_sub_detection
         or args.drop_empty_subs
-        or getattr(args, "detect_duplicate_tracks", True)
+        or detect_duplicate_tracks_enabled
+        or detect_subtitle_language_duplicates_enabled
         or args.detect_language_variants
         or args.auto_commentary_ocr
     )
@@ -7561,6 +7585,12 @@ def process_file(
             detect_exact_duplicates=detect_duplicate_tracks_enabled,
             detect_subtitle_language_duplicates=detect_subtitle_language_duplicates_enabled,
         )
+    apply_duplicate_drop_policy(
+        audio_tracks,
+        subtitles,
+        drop_duplicates=auto_drop_duplicate_tracks,
+        drop_probable_duplicates=auto_drop_probable_duplicate_tracks,
+    )
     apply_track_selection_overrides(
         videos,
         audio_tracks,
@@ -7866,6 +7896,12 @@ def process_merged_inputs(
     detect_subtitle_language_duplicates_enabled = bool(
         getattr(args, "detect_subtitle_language_duplicates", False)
     )
+    auto_drop_duplicate_tracks = bool(getattr(args, "auto_drop_duplicate_tracks", False))
+    auto_drop_probable_duplicate_tracks = bool(getattr(args, "auto_drop_probable_duplicate_tracks", False))
+    detect_duplicate_tracks_enabled = detect_duplicate_tracks_enabled or auto_drop_duplicate_tracks
+    detect_subtitle_language_duplicates_enabled = (
+        detect_subtitle_language_duplicates_enabled or auto_drop_probable_duplicate_tracks
+    )
     preserve_commentary_names = bool(getattr(args, "preserve_commentary_names", False))
     apply_audio_names(audio_tracks, audio_name_style)
 
@@ -7874,7 +7910,8 @@ def process_merged_inputs(
         args.analyze_sub_sizes
         or args.smart_sub_detection
         or args.drop_empty_subs
-        or getattr(args, "detect_duplicate_tracks", True)
+        or detect_duplicate_tracks_enabled
+        or detect_subtitle_language_duplicates_enabled
         or args.detect_language_variants
         or args.auto_commentary_ocr
     )
@@ -7959,6 +7996,12 @@ def process_merged_inputs(
             detect_exact_duplicates=detect_duplicate_tracks_enabled,
             detect_subtitle_language_duplicates=detect_subtitle_language_duplicates_enabled,
         )
+    apply_duplicate_drop_policy(
+        audio_tracks,
+        subtitles,
+        drop_duplicates=auto_drop_duplicate_tracks,
+        drop_probable_duplicates=auto_drop_probable_duplicate_tracks,
+    )
     apply_track_selection_overrides(
         videos,
         audio_tracks,
@@ -8134,6 +8177,8 @@ def build_parser(config_defaults: dict[str, Any] | None = None) -> argparse.Argu
         smart_sub_detection=default("smart_sub_detection", True),
         detect_duplicate_tracks=default("detect_duplicate_tracks", True),
         detect_subtitle_language_duplicates=default("detect_subtitle_language_duplicates", False),
+        auto_drop_duplicate_tracks=default("auto_drop_duplicate_tracks", False),
+        auto_drop_probable_duplicate_tracks=default("auto_drop_probable_duplicate_tracks", False),
         merge_inputs=default("merge_inputs", False),
         detect_language_variants=default("detect_language_variants", True),
         auto_pgs_ocr=default("auto_pgs_ocr", True),
@@ -8470,6 +8515,30 @@ def build_parser(config_defaults: dict[str, Any] | None = None) -> argparse.Argu
         dest="detect_subtitle_language_duplicates",
         action="store_false",
         help="Disable same-language subtitle duplicate detection.",
+    )
+    parser.add_argument(
+        "--auto-drop-duplicates",
+        dest="auto_drop_duplicate_tracks",
+        action="store_true",
+        help="Drop duplicate group members automatically after duplicate detection. Leaders are kept.",
+    )
+    parser.add_argument(
+        "--no-auto-drop-duplicates",
+        dest="auto_drop_duplicate_tracks",
+        action="store_false",
+        help="Do not drop duplicate group members automatically.",
+    )
+    parser.add_argument(
+        "--auto-drop-probable-duplicates",
+        dest="auto_drop_probable_duplicate_tracks",
+        action="store_true",
+        help="Drop probable regional duplicate members automatically after subtitle language duplicate detection.",
+    )
+    parser.add_argument(
+        "--no-auto-drop-probable-duplicates",
+        dest="auto_drop_probable_duplicate_tracks",
+        action="store_false",
+        help="Do not drop probable regional duplicate members automatically.",
     )
     parser.add_argument(
         "--detect-pt-variant",

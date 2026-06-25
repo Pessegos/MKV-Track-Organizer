@@ -2,6 +2,12 @@
 
 All notable user-facing changes are recorded here.
 
+## 1.0.25 - 2026-06-25
+
+- Changed the Organizer queue action to add the current preview plan, including manual include/exclude edits and manual track order, instead of queuing loose current settings.
+- Kept the Organizer queue add button disabled until a successful preview exists, making the expected workflow clearer.
+- Added optional automatic duplicate and probable-duplicate dropping for Preview/Run, with matching profile, config, and CLI options.
+
 ## 1.0.24 - 2026-06-25
 
 - Added Audio Sync queue summary ratings with high/medium/low/unknown delay reliability counts and a short "Needs review" list.

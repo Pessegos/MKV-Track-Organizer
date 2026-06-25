@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import copy
 import ctypes
 import io
 import json
@@ -907,6 +908,8 @@ class MainWindow(QMainWindow):
         "drop_empty_subs",
         "detect_duplicate_tracks",
         "detect_subtitle_language_duplicates",
+        "auto_drop_duplicate_tracks",
+        "auto_drop_probable_duplicate_tracks",
         "disable_track_statistics_tags",
         "detect_language_variants",
         "auto_pgs_ocr",
@@ -925,6 +928,8 @@ class MainWindow(QMainWindow):
         "drop_empty_subs",
         "detect_duplicate_tracks",
         "detect_subtitle_language_duplicates",
+        "auto_drop_duplicate_tracks",
+        "auto_drop_probable_duplicate_tracks",
         "disable_track_statistics_tags",
         "detect_language_variants",
         "auto_pgs_ocr",
@@ -1124,6 +1129,11 @@ class MainWindow(QMainWindow):
         self._config_baseline: dict[str, object] = {}
         self.input_paths: list[Path] = []
         self.current_reports: list[dict] = []
+        self.last_preview_args = None
+        self.last_preview_config_path: Path | None = None
+        self.pending_preview_args = None
+        self.pending_preview_config_path: Path | None = None
+        self.organizer_worker_dry_run = False
         self.makemkv_reports: list[dict] = []
         self.audio_sync_reference_streams: list[audio_sync.MediaStream] = []
         self.audio_sync_source_streams: list[audio_sync.MediaStream] = []
@@ -1157,6 +1167,8 @@ class MainWindow(QMainWindow):
         self.drop_empty_check = QCheckBox("Drop empty subtitles")
         self.duplicate_check = QCheckBox("Detect duplicates")
         self.subtitle_language_duplicates_check = QCheckBox("Subtitle lang duplicates")
+        self.auto_drop_duplicates_check = QCheckBox("Auto drop duplicates")
+        self.auto_drop_probable_duplicates_check = QCheckBox("Auto drop probable")
         self.disable_track_statistics_tags_check = QCheckBox("Skip track tags")
         self.variant_check = QCheckBox("Detect language variants")
         self.auto_pgs_ocr_check = QCheckBox("Auto PGS OCR")
@@ -1245,7 +1257,7 @@ class MainWindow(QMainWindow):
         self.preview_button = QPushButton("Preview")
         self.run_button = QPushButton("Run")
         self.cancel_button = QPushButton("Cancel")
-        self.queue_add_button = QPushButton("Add current")
+        self.queue_add_button = QPushButton("Add preview")
         self.queue_run_button = QPushButton("Run queue")
         self.queue_remove_button = QPushButton("Remove selected")
         self.queue_clear_button = QPushButton("Clear finished")
@@ -1273,7 +1285,7 @@ class MainWindow(QMainWindow):
         self.queue_run_button.setObjectName("primaryButton")
         self.queue_remove_button.setObjectName("secondaryButton")
         self.queue_clear_button.setObjectName("secondaryButton")
-        self.queue_add_button.setToolTip("Freeze the current Organizer settings and add them to the queue")
+        self.queue_add_button.setToolTip("Add the current preview plan, including track selection and order edits, to the queue")
         self.queue_run_button.setToolTip("Run queued Organizer jobs one at a time")
         self.queue_remove_button.setToolTip("Remove queued jobs that have not started yet")
         self.queue_clear_button.setToolTip("Clear completed, failed, and cancelled queue entries")
@@ -1316,6 +1328,7 @@ class MainWindow(QMainWindow):
         self.track_reset_order_button.setEnabled(False)
         self.track_reset_button.setEnabled(False)
         self.queue_run_button.setEnabled(False)
+        self.queue_add_button.setEnabled(False)
         self.queue_remove_button.setEnabled(False)
         self.queue_clear_button.setEnabled(False)
         self.files_table = QTableWidget(0, len(self.FILE_COLUMNS))
@@ -1597,6 +1610,12 @@ class MainWindow(QMainWindow):
         self.subtitle_language_duplicates_check.setToolTip(
             "Also mark subtitle tracks with the same language/role across formats; keeps ASS before PGS before SRT"
         )
+        self.auto_drop_duplicates_check.setToolTip(
+            "Automatically exclude duplicate group members in Preview/Run; group leaders stay included"
+        )
+        self.auto_drop_probable_duplicates_check.setToolTip(
+            "Automatically exclude probable regional duplicate members; use when you trust the regional duplicate warnings"
+        )
         self.disable_track_statistics_tags_check.setToolTip(
             "Do not copy per-track tags from inputs and do not write mkvmerge statistics tags. "
             "This does not affect audio or subtitle delays."
@@ -1692,6 +1711,8 @@ class MainWindow(QMainWindow):
             self.drop_empty_check,
             self.duplicate_check,
             self.subtitle_language_duplicates_check,
+            self.auto_drop_duplicates_check,
+            self.auto_drop_probable_duplicates_check,
             self.disable_track_statistics_tags_check,
             self.variant_check,
             self.auto_pgs_ocr_check,
@@ -2613,6 +2634,15 @@ class MainWindow(QMainWindow):
         self.audio_sync_auto_load_timer.timeout.connect(self.start_audio_sync_stream_auto_load)
         self.audio_sync_analysis_combo.activated.connect(self._audio_sync_analysis_preset_activated)
         self.input_edit.textEdited.connect(self._manual_input_changed)
+        for widget in [
+            self.output_edit,
+            self.forced_ids_edit,
+            self.subtitle_language_edit,
+            self.audio_delays_edit,
+            self.subtitle_delays_edit,
+        ]:
+            widget.textEdited.connect(lambda _text: self._invalidate_organizer_preview_plan())
+        self.recursive_check.toggled.connect(lambda _checked: self._invalidate_organizer_preview_plan())
         self.files_table.itemSelectionChanged.connect(self._populate_tracks_for_selection)
         self.profile_combo.currentIndexChanged.connect(self._profile_combo_changed)
         self.update_profile_button.clicked.connect(self.update_current_profile)
@@ -2642,6 +2672,8 @@ class MainWindow(QMainWindow):
             self.drop_empty_check,
             self.duplicate_check,
             self.subtitle_language_duplicates_check,
+            self.auto_drop_duplicates_check,
+            self.auto_drop_probable_duplicates_check,
             self.disable_track_statistics_tags_check,
             self.variant_check,
             self.auto_pgs_ocr_check,
@@ -3776,6 +3808,8 @@ class MainWindow(QMainWindow):
             "drop_empty_subs": self.drop_empty_check.isChecked(),
             "detect_duplicate_tracks": self.duplicate_check.isChecked(),
             "detect_subtitle_language_duplicates": self.subtitle_language_duplicates_check.isChecked(),
+            "auto_drop_duplicate_tracks": self.auto_drop_duplicates_check.isChecked(),
+            "auto_drop_probable_duplicate_tracks": self.auto_drop_probable_duplicates_check.isChecked(),
             "disable_track_statistics_tags": self.disable_track_statistics_tags_check.isChecked(),
             "detect_language_variants": self.variant_check.isChecked(),
             "auto_pgs_ocr": self.auto_pgs_ocr_check.isChecked(),
@@ -3839,6 +3873,17 @@ class MainWindow(QMainWindow):
                 )
             )
         )
+        self.auto_drop_duplicates_check.setChecked(
+            bool(payload.get("auto_drop_duplicate_tracks", self.auto_drop_duplicates_check.isChecked()))
+        )
+        self.auto_drop_probable_duplicates_check.setChecked(
+            bool(
+                payload.get(
+                    "auto_drop_probable_duplicate_tracks",
+                    self.auto_drop_probable_duplicates_check.isChecked(),
+                )
+            )
+        )
         self.disable_track_statistics_tags_check.setChecked(
             bool(
                 payload.get(
@@ -3893,6 +3938,7 @@ class MainWindow(QMainWindow):
     def _profile_ui_changed(self) -> None:
         if self._applying_profile:
             return
+        self._invalidate_organizer_preview_plan()
         self._update_profile_state()
 
     @Slot()
@@ -4060,6 +4106,10 @@ class MainWindow(QMainWindow):
         self.subtitle_language_duplicates_check.setChecked(
             bool(getattr(args, "detect_subtitle_language_duplicates", False))
         )
+        self.auto_drop_duplicates_check.setChecked(bool(getattr(args, "auto_drop_duplicate_tracks", False)))
+        self.auto_drop_probable_duplicates_check.setChecked(
+            bool(getattr(args, "auto_drop_probable_duplicate_tracks", False))
+        )
         self.disable_track_statistics_tags_check.setChecked(
             bool(getattr(args, "disable_track_statistics_tags", True))
         )
@@ -4108,10 +4158,27 @@ class MainWindow(QMainWindow):
         self.manual_track_order = []
         self.manual_track_order_active = False
 
+    def _has_queueable_organizer_preview(self) -> bool:
+        return bool(self.last_preview_args and self.current_reports and self.tracks_table.rowCount() > 0)
+
+    def _update_organizer_queue_add_button(self) -> None:
+        enabled = self._has_queueable_organizer_preview() and not self._workflow_is_running()
+        self.queue_add_button.setEnabled(enabled)
+
+    def _invalidate_organizer_preview_plan(self) -> None:
+        self.last_preview_args = None
+        self.last_preview_config_path = None
+        self.pending_preview_args = None
+        self.pending_preview_config_path = None
+        if hasattr(self, "queue_add_button"):
+            self._update_organizer_queue_add_button()
+
     @Slot(str)
     def _manual_input_changed(self, _text: str) -> None:
         if self._syncing_input_edit:
             return
+        if self.last_preview_args or self.current_reports:
+            self._invalidate_organizer_preview_plan()
         if self.input_paths:
             self.input_paths = []
             self.current_reports = []
@@ -4737,6 +4804,7 @@ class MainWindow(QMainWindow):
     def clear_inputs(self) -> None:
         if self._reset_or_clear_blocked("Clear Organizer inputs"):
             return
+        self._invalidate_organizer_preview_plan()
         self.input_paths = []
         self.current_reports = []
         self.manual_track_includes = {}
@@ -4833,6 +4901,7 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentIndex(0)
 
     def _reset_organizer_tab(self) -> None:
+        self._invalidate_organizer_preview_plan()
         self.input_paths = []
         self.current_reports = []
         self.manual_track_includes = {}
@@ -4926,6 +4995,7 @@ class MainWindow(QMainWindow):
             added = True
 
         if added:
+            self._invalidate_organizer_preview_plan()
             self.current_reports = []
             self.manual_track_includes = {}
             self._clear_manual_track_order()
@@ -5675,11 +5745,28 @@ class MainWindow(QMainWindow):
         suffix = getattr(args, "output_suffix", "") or ""
         return f"Default _sorted{f' ({suffix})' if suffix else ''}"
 
+    def _organizer_preview_queue_message(self) -> str:
+        manual_count = len(self.manual_track_includes)
+        details = [f"Preview plan ({len(self.current_reports)} file(s))"]
+        if manual_count:
+            details.append(f"{manual_count} selection edit(s)")
+        if self.manual_track_order_active:
+            details.append("manual order")
+        return "; ".join(details)
+
     def _make_current_organizer_queue_item(self) -> OrganizerQueueItem:
-        args, config_path = self._build_args(dry_run=False)
+        if not self._has_queueable_organizer_preview():
+            raise ValueError("Run Preview first, then adjust the tracks and add that preview plan to the queue.")
+        if self.tracks_table.rowCount() and self.manual_track_order_active:
+            self._sync_track_order_from_table()
+        args = copy.deepcopy(self.last_preview_args)
+        config_path = self.last_preview_config_path
+        args.dry_run = False
+        args.track_selection_overrides = dict(self.manual_track_includes)
+        args.track_order_overrides = list(self.manual_track_order) if self.manual_track_order_active else []
         self._validate_organizer_settings(args, config_path)
         self.organizer_queue_counter += 1
-        return OrganizerQueueItem(
+        item = OrganizerQueueItem(
             item_id=self.organizer_queue_counter,
             name=self._organizer_queue_project_name(args),
             args=args,
@@ -5687,6 +5774,8 @@ class MainWindow(QMainWindow):
             input_summary=self._organizer_queue_input_summary(args),
             output_summary=self._organizer_queue_output_summary(args),
         )
+        item.message = self._organizer_preview_queue_message()
+        return item
 
     @Slot()
     def add_current_organizer_to_queue(self) -> None:
@@ -5697,8 +5786,8 @@ class MainWindow(QMainWindow):
             return
         self.organizer_queue.append(item)
         self._refresh_queue_table()
-        self.append_summary_line(f"Queued: {item.name}")
-        self.statusBar().showMessage(f"Queued: {item.name}")
+        self.append_summary_line(f"Queued preview: {item.name}")
+        self.statusBar().showMessage(f"Queued preview: {item.name}")
 
     @Slot()
     def run_organizer_queue(self) -> None:
@@ -5943,11 +6032,18 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Invalid settings", str(error))
             return
 
+        if dry_run:
+            self.pending_preview_args = copy.deepcopy(args)
+            self.pending_preview_config_path = config_path
+        else:
+            self.pending_preview_args = None
+            self.pending_preview_config_path = None
         self._prepare_organizer_run_ui(dry_run)
 
         self._start_organizer_worker(args, config_path, dry_run)
 
     def _start_organizer_worker(self, args, config_path: Path | None, dry_run: bool) -> None:
+        self.organizer_worker_dry_run = dry_run
         self.worker_thread = QThread(self)
         self.worker = OrganizerWorker(args, config_path)
         self.worker.moveToThread(self.worker_thread)
@@ -5965,6 +6061,10 @@ class MainWindow(QMainWindow):
         self.summary_edit.clear()
         self.log_edit.clear()
         self._log_line_starts[id(self.log_edit)] = True
+        if dry_run:
+            self.last_preview_args = None
+            self.last_preview_config_path = None
+            self._update_organizer_queue_add_button()
         preserve_preview = not dry_run and bool(self.current_reports) and self.tracks_table.rowCount() > 0
         if not preserve_preview:
             self.current_reports = []
@@ -6060,8 +6160,13 @@ class MainWindow(QMainWindow):
         args.track_order_overrides = list(self.manual_track_order) if self.manual_track_order_active else []
         args.smart_sub_detection = self.smart_subs_check.isChecked()
         args.drop_empty_subs = self.drop_empty_check.isChecked()
-        args.detect_duplicate_tracks = self.duplicate_check.isChecked()
-        args.detect_subtitle_language_duplicates = self.subtitle_language_duplicates_check.isChecked()
+        args.auto_drop_duplicate_tracks = self.auto_drop_duplicates_check.isChecked()
+        args.auto_drop_probable_duplicate_tracks = self.auto_drop_probable_duplicates_check.isChecked()
+        args.detect_duplicate_tracks = self.duplicate_check.isChecked() or args.auto_drop_duplicate_tracks
+        args.detect_subtitle_language_duplicates = (
+            self.subtitle_language_duplicates_check.isChecked()
+            or args.auto_drop_probable_duplicate_tracks
+        )
         args.disable_track_statistics_tags = self.disable_track_statistics_tags_check.isChecked()
         args.detect_language_variants = self.variant_check.isChecked()
         args.auto_pgs_ocr = self.auto_pgs_ocr_check.isChecked()
@@ -6562,6 +6667,14 @@ class MainWindow(QMainWindow):
         total_units = self._progress_total_units(len(result.input_files), 100)
         self._set_progress_value(total_units, total_units)
         self._populate_results(result.reports)
+        if self.organizer_worker_dry_run and not result.cancelled and result.failures == 0:
+            self.last_preview_args = self.pending_preview_args
+            self.last_preview_config_path = self.pending_preview_config_path
+        elif self.organizer_worker_dry_run:
+            self.last_preview_args = None
+            self.last_preview_config_path = None
+        self.pending_preview_args = None
+        self.pending_preview_config_path = None
         if result.cancelled:
             self.statusBar().showMessage("Cancelled")
             self._finish_progress_session("Cancelled")
@@ -6574,6 +6687,7 @@ class MainWindow(QMainWindow):
             )
         self._append_organizer_result_summary(result)
         self._set_running(False)
+        self._update_organizer_queue_add_button()
 
     def _handle_queue_item_completed(self, result: organizer.BatchRunResult) -> None:
         item = self.current_queue_item
@@ -6622,6 +6736,8 @@ class MainWindow(QMainWindow):
             return
 
         self.append_log(details)
+        if self.organizer_worker_dry_run:
+            self._invalidate_organizer_preview_plan()
         self.statusBar().showMessage("Failed")
         self._finish_progress_session("Failed")
         first_line = details.strip().splitlines()[-1] if details.strip() else "Unknown error"
@@ -6880,6 +6996,7 @@ class MainWindow(QMainWindow):
             self.worker_thread.deleteLater()
         self.worker = None
         self.worker_thread = None
+        self._update_organizer_queue_add_button()
         if self.start_next_queue_after_thread:
             self.start_next_queue_after_thread = False
             self._start_next_organizer_queue_item()
@@ -7973,7 +8090,7 @@ class MainWindow(QMainWindow):
         self.audio_sync_queue_organizer_button.setEnabled(bool(self.audio_sync_result) and not running)
         self.audio_sync_export_button.setEnabled(bool(self.audio_sync_result) and not running)
         self._set_audio_sync_selection_controls_enabled(self.audio_sync_tracks_table.rowCount() > 0 and not running)
-        self.queue_add_button.setEnabled(True)
+        self._update_organizer_queue_add_button()
         self._update_queue_controls()
         self.audio_sync_queue_add_button.setEnabled(not running)
         self._update_audio_sync_queue_controls()
@@ -8006,7 +8123,7 @@ class MainWindow(QMainWindow):
         self._set_audio_sync_selection_controls_enabled(self.audio_sync_tracks_table.rowCount() > 0 and not running)
         self.tracks_table.setEnabled(not running)
         self._set_track_selection_controls_enabled(self.tracks_table.rowCount() > 0 and not running)
-        self.queue_add_button.setEnabled(not running)
+        self._update_organizer_queue_add_button()
         self._update_queue_controls()
         self.audio_sync_queue_add_button.setEnabled(not running)
         self._update_audio_sync_queue_controls()
@@ -8038,7 +8155,7 @@ class MainWindow(QMainWindow):
         self.audio_sync_export_button.setEnabled(bool(self.audio_sync_result) and not running)
         self._set_audio_sync_selection_controls_enabled(self.audio_sync_tracks_table.rowCount() > 0 and not running)
         self._set_track_selection_controls_enabled(self.tracks_table.rowCount() > 0 and not running)
-        self.queue_add_button.setEnabled(not running)
+        self._update_organizer_queue_add_button()
         self._update_queue_controls()
         self.audio_sync_queue_add_button.setEnabled(not running)
         self._update_audio_sync_queue_controls()
@@ -8070,7 +8187,7 @@ class MainWindow(QMainWindow):
         if self.makemkv_reset_button:
             self.makemkv_reset_button.setEnabled(not running)
         self._set_track_selection_controls_enabled(self.tracks_table.rowCount() > 0 and not running)
-        self.queue_add_button.setEnabled(not running)
+        self._update_organizer_queue_add_button()
         self._update_queue_controls()
         self.audio_sync_queue_add_button.setEnabled(not running)
         self._update_audio_sync_queue_controls()
