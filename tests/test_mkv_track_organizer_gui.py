@@ -942,6 +942,7 @@ def test_audio_sync_queue_starts_next_item_after_completion(qapp, monkeypatch):
             selected_audio_indices=[0],
         )
         window.audio_sync_queue = [first, second]
+        window.audio_sync_auto_queue_organizer_check.setChecked(False)
         window._refresh_audio_sync_queue_table()
 
         def fake_start_worker(_settings):
@@ -971,11 +972,40 @@ def test_audio_sync_queue_starts_next_item_after_completion(qapp, monkeypatch):
         assert first.result is result
         assert "Delay source by 1000.00 ms" in first.message
         assert window.start_next_audio_sync_queue_after_thread
+        assert window.progress.maximum() == 2
+        assert window.progress.value() == 1
+        assert "Queue item 1/2: first" in window.audio_sync_summary_edit.toPlainText()
+        assert "Recommended correction: Delay source by 1000.00 ms" in window.audio_sync_summary_edit.toPlainText()
 
         window._audio_sync_thread_finished()
 
         assert started == [1, 2]
         assert second.status == "Running"
+
+        second_result = gui.audio_sync.AudioSyncResult(
+            estimates=[gui.audio_sync.OffsetEstimate(600.0, -0.5, -0.5, 1.0)],
+            median_offset_seconds=-0.5,
+            spread_seconds=0.0,
+            average_confidence=1.0,
+            consistency="excellent",
+            verdict="reliable fixed delay: strong checkpoint consensus",
+            used_checkpoints=1,
+            attempted_checkpoints=1,
+            delay_reliability="high",
+        )
+        window.handle_audio_sync_progress(1, 1)
+        window.handle_audio_sync_completed(second_result)
+        window._audio_sync_thread_finished()
+
+        summary = window.audio_sync_summary_edit.toPlainText()
+        assert "Queue item 1/2: first" in summary
+        assert "Queue item 2/2: second" in summary
+        assert "Recommended correction: Delay source by 500.00 ms" in summary
+        assert "Queue summary" in summary
+        assert "Jobs: 2 done, 0 error(s), 0 cancelled" in summary
+        assert window.progress.maximum() == 2
+        assert window.progress.value() == 2
+        assert "2/2" in window.progress_label.text()
     finally:
         window.close()
 
@@ -1370,6 +1400,7 @@ def test_audio_sync_prioritizes_summary_space_and_keeps_probe_progress_idle(qapp
         assert output_height > track_height
         assert not window.audio_sync_splitter.isCollapsible(0)
         assert not window.audio_sync_splitter.isCollapsible(1)
+        assert window.audio_sync_queue_table.minimumHeight() >= 110
 
         window._set_progress_indeterminate()
         window._prepare_audio_sync_stream_probe_ui()

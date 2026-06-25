@@ -1083,6 +1083,12 @@ class MainWindow(QMainWindow):
         self.current_audio_sync_queue_item: AudioSyncQueueItem | None = None
         self.audio_sync_queue_counter = 0
         self.start_next_audio_sync_queue_after_thread = False
+        self.audio_sync_queue_run_active = False
+        self.audio_sync_queue_run_item_ids: list[int] = []
+        self.audio_sync_queue_run_total_jobs = 0
+        self.audio_sync_queue_run_completed_jobs = 0
+        self.audio_sync_queue_run_total_checkpoints = 0
+        self.audio_sync_queue_run_completed_checkpoints = 0
         self.audio_sync_stream_paths: tuple[Path, Path] | None = None
         self.audio_sync_probe_automatic = True
         self.audio_sync_probe_retry_after_finish = False
@@ -1520,7 +1526,8 @@ class MainWindow(QMainWindow):
         root.addLayout(top_bar)
 
         queue_group = QGroupBox("Queue")
-        queue_group.setMaximumHeight(150)
+        queue_group.setMinimumHeight(190)
+        queue_group.setMaximumHeight(240)
         queue_layout = QVBoxLayout(queue_group)
         queue_layout.setContentsMargins(10, 8, 10, 10)
         queue_actions = QHBoxLayout()
@@ -2500,6 +2507,7 @@ class MainWindow(QMainWindow):
         self.audio_sync_queue_table.setSelectionMode(QTableWidget.ExtendedSelection)
         self.audio_sync_queue_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.audio_sync_queue_table.setAlternatingRowColors(True)
+        self.audio_sync_queue_table.setMinimumHeight(110)
         self.audio_sync_queue_table.verticalHeader().setVisible(False)
         self.audio_sync_queue_table.setHorizontalHeaderLabels(self.AUDIO_SYNC_QUEUE_COLUMNS)
         self.audio_sync_queue_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
@@ -5053,6 +5061,7 @@ class MainWindow(QMainWindow):
         source_streams: list[audio_sync.MediaStream],
         reference_duration_seconds: float | None = None,
         source_duration_seconds: float | None = None,
+        write_summary: bool = True,
     ) -> None:
         self.audio_sync_reference_streams = reference_streams
         self.audio_sync_source_streams = source_streams
@@ -5076,6 +5085,8 @@ class MainWindow(QMainWindow):
         self.audio_sync_queue_organizer_button.setEnabled(False)
         self.audio_sync_export_button.setEnabled(False)
         self._set_audio_sync_selection_controls_enabled(self.audio_sync_tracks_table.rowCount() > 0)
+        if not write_summary:
+            return
         self.audio_sync_summary_edit.clear()
         self.append_audio_sync_summary_line("Streams loaded.")
         self.append_audio_sync_summary_line(f"Reference audio streams: {len(reference_audio)}")
@@ -5159,7 +5170,63 @@ class MainWindow(QMainWindow):
         )
         if answer != QMessageBox.Yes:
             return
+        self._begin_audio_sync_queue_run(queued)
         self._start_next_audio_sync_queue_item()
+
+    def _begin_audio_sync_queue_run(self, queued: list[AudioSyncQueueItem]) -> None:
+        self.audio_sync_queue_run_active = True
+        self.audio_sync_queue_run_item_ids = [item.item_id for item in queued]
+        self.audio_sync_queue_run_total_jobs = len(queued)
+        self.audio_sync_queue_run_completed_jobs = 0
+        self.audio_sync_queue_run_total_checkpoints = sum(max(1, item.settings.checkpoints) for item in queued)
+        self.audio_sync_queue_run_completed_checkpoints = 0
+        self.audio_sync_summary_edit.clear()
+        self.audio_sync_log_edit.clear()
+        self._log_line_starts[id(self.audio_sync_log_edit)] = True
+        self.append_audio_sync_summary_line("Audio Sync queue started.")
+        self.append_audio_sync_summary_line(f"Jobs: {self.audio_sync_queue_run_total_jobs}")
+        self.append_audio_sync_summary_line(
+            f"Checkpoints planned: {self.audio_sync_queue_run_total_checkpoints}"
+        )
+        if self.audio_sync_auto_queue_organizer_check.isChecked():
+            self.append_audio_sync_summary_line("Organizer queue: completed analyses will be added automatically.")
+        self.append_audio_sync_summary_line()
+        self._start_progress_session("Audio Sync queue", "Starting")
+        self._set_progress_context(0, self.audio_sync_queue_run_total_jobs)
+        self._set_progress_value(self.audio_sync_queue_run_total_checkpoints, 0)
+
+    def _ensure_audio_sync_queue_run_started(self) -> None:
+        if self.audio_sync_queue_run_active:
+            return
+        queued = [item for item in self.audio_sync_queue if item.status == "Queued"]
+        if queued:
+            self._begin_audio_sync_queue_run(queued)
+
+    def _audio_sync_queue_run_items(self) -> list[AudioSyncQueueItem]:
+        run_ids = set(self.audio_sync_queue_run_item_ids)
+        return [item for item in self.audio_sync_queue if item.item_id in run_ids]
+
+    def _audio_sync_queue_current_job_number(self) -> int:
+        if not self.audio_sync_queue_run_total_jobs:
+            return 0
+        return min(self.audio_sync_queue_run_completed_jobs + 1, self.audio_sync_queue_run_total_jobs)
+
+    def _append_audio_sync_queue_final_summary(self) -> None:
+        run_items = self._audio_sync_queue_run_items()
+        done = sum(1 for item in run_items if item.status == "Done")
+        errors = sum(1 for item in run_items if item.status == "Error")
+        cancelled = sum(1 for item in run_items if item.status == "Cancelled")
+        organizer_queued = sum(1 for item in run_items if "Organizer queued" in item.message)
+        organizer_queue_failed = sum(1 for item in run_items if "Organizer queue failed" in item.message)
+        self.append_audio_sync_summary_line()
+        self.append_audio_sync_summary_line("Queue summary")
+        self.append_audio_sync_summary_line(
+            f"Jobs: {done} done, {errors} error(s), {cancelled} cancelled"
+        )
+        self.append_audio_sync_summary_line(f"Organizer jobs added: {organizer_queued}")
+        if organizer_queue_failed:
+            self.append_audio_sync_summary_line(f"Organizer queue failures: {organizer_queue_failed}")
+        self.append_audio_sync_summary_line()
 
     @Slot()
     def remove_selected_audio_sync_queue_items(self) -> None:
@@ -5266,6 +5333,7 @@ class MainWindow(QMainWindow):
             list(item.source_streams),
             item.reference_duration_seconds,
             item.source_duration_seconds,
+            write_summary=not self.audio_sync_queue_run_active,
         )
         self._set_audio_sync_combo_to_relative_index(self.audio_sync_ref_combo, item.settings.reference_audio_stream)
         self._set_audio_sync_combo_to_relative_index(self.audio_sync_source_combo, item.settings.source_audio_stream)
@@ -5296,9 +5364,22 @@ class MainWindow(QMainWindow):
     def _start_next_audio_sync_queue_item(self) -> bool:
         if self.audio_sync_worker_thread and self.audio_sync_worker_thread.isRunning():
             return False
+        self._ensure_audio_sync_queue_run_started()
         next_item = next((item for item in self.audio_sync_queue if item.status == "Queued"), None)
         if next_item is None:
             self.current_audio_sync_queue_item = None
+            if self.audio_sync_queue_run_active:
+                self._set_progress_context(
+                    self.audio_sync_queue_run_total_jobs,
+                    self.audio_sync_queue_run_total_jobs,
+                )
+                self._set_progress_value(
+                    self.audio_sync_queue_run_total_checkpoints,
+                    self.audio_sync_queue_run_total_checkpoints,
+                )
+                self._append_audio_sync_queue_final_summary()
+                self._finish_progress_session("Queue completed")
+            self.audio_sync_queue_run_active = False
             self._set_audio_sync_queue_running(False)
             self.statusBar().showMessage("Audio Sync queue finished")
             return False
@@ -5315,13 +5396,17 @@ class MainWindow(QMainWindow):
         self.audio_sync_apply_organizer_button.setEnabled(False)
         self.audio_sync_queue_organizer_button.setEnabled(False)
         self.audio_sync_export_button.setEnabled(False)
-        self.audio_sync_summary_edit.clear()
-        self.audio_sync_log_edit.clear()
-        self._log_line_starts[id(self.audio_sync_log_edit)] = True
-        self.append_audio_sync_summary_line(f"Queue analysis started: {item.name}")
+        job_number = self._audio_sync_queue_current_job_number()
+        self.append_audio_sync_summary_line(
+            f"Queue item {job_number}/{self.audio_sync_queue_run_total_jobs}: {item.name}"
+        )
         self._append_audio_sync_settings_summary(item.settings)
-        self._start_progress_session("Audio Sync queue", item.name)
-        self._set_progress_value(item.settings.checkpoints, 0)
+        self._set_progress_context(job_number, self.audio_sync_queue_run_total_jobs)
+        self._set_progress_value(
+            self.audio_sync_queue_run_total_checkpoints,
+            self.audio_sync_queue_run_completed_checkpoints,
+        )
+        self._set_progress_label(f"{item.name}: starting")
         self._set_audio_sync_queue_running(True)
 
     def _audio_sync_result_correction_text(self, result: audio_sync.AudioSyncResult) -> str:
@@ -6483,11 +6568,30 @@ class MainWindow(QMainWindow):
                     message.strip(),
                 )
         if message.startswith("Checkpoint"):
-            self._set_progress_label(message)
+            if self.current_audio_sync_queue_item:
+                self._set_progress_label(f"{self.current_audio_sync_queue_item.name}: {message}")
+            else:
+                self._set_progress_label(message)
         self.statusBar().showMessage(message[:160])
 
     @Slot(int, int)
     def handle_audio_sync_progress(self, index: int, total: int) -> None:
+        if self.current_audio_sync_queue_item:
+            if not self.audio_sync_queue_run_active:
+                self._begin_audio_sync_queue_run([self.current_audio_sync_queue_item])
+            self._set_progress_context(
+                self._audio_sync_queue_current_job_number(),
+                self.audio_sync_queue_run_total_jobs,
+            )
+            self._set_progress_value(
+                self.audio_sync_queue_run_total_checkpoints,
+                self.audio_sync_queue_run_completed_checkpoints + index,
+            )
+            self._set_progress_label(
+                f"{self.current_audio_sync_queue_item.name}: checkpoint {index}/{total} complete"
+            )
+            return
+
         self._set_progress_context(index, total)
         self._set_progress_value(total, index)
         self._set_progress_label(f"Checkpoint {index}/{total} complete")
@@ -6516,9 +6620,21 @@ class MainWindow(QMainWindow):
         item = self.current_audio_sync_queue_item
         if item is None:
             return
+        if not self.audio_sync_queue_run_active:
+            self._begin_audio_sync_queue_run([item])
 
         self.audio_sync_result = result
-        self._set_progress_value(max(1, len(result.estimates)), len(result.estimates))
+        item_checkpoint_count = max(1, item.settings.checkpoints)
+        self.audio_sync_queue_run_completed_checkpoints += item_checkpoint_count
+        self.audio_sync_queue_run_completed_jobs += 1
+        self._set_progress_context(
+            self.audio_sync_queue_run_completed_jobs,
+            self.audio_sync_queue_run_total_jobs,
+        )
+        self._set_progress_value(
+            self.audio_sync_queue_run_total_checkpoints,
+            self.audio_sync_queue_run_completed_checkpoints,
+        )
         item.result = result
         self.append_audio_sync_summary_line()
         self.append_audio_sync_summary_line("Result")
@@ -6543,7 +6659,7 @@ class MainWindow(QMainWindow):
         self.audio_sync_export_button.setEnabled(self.audio_sync_tracks_table.rowCount() > 0)
         self._set_audio_sync_selection_controls_enabled(self.audio_sync_tracks_table.rowCount() > 0)
         self.statusBar().showMessage(f"Audio Sync queue item completed: {item.name}")
-        self._finish_progress_session("Analysis completed")
+        self._set_progress_label(f"{item.name}: completed")
         self.current_audio_sync_queue_item = None
         self._set_audio_sync_queue_running(False)
         self.start_next_audio_sync_queue_after_thread = True
@@ -6586,6 +6702,8 @@ class MainWindow(QMainWindow):
         item = self.current_audio_sync_queue_item
         if item is None:
             return
+        if not self.audio_sync_queue_run_active:
+            self._begin_audio_sync_queue_run([item])
 
         self.append_audio_sync_log(details)
         if details:
@@ -6597,9 +6715,20 @@ class MainWindow(QMainWindow):
         if not cancelled:
             self.append_audio_sync_summary_line("See Raw log for the full traceback.")
             self.audio_sync_output_tabs.setCurrentIndex(1)
+        item_checkpoint_count = max(1, item.settings.checkpoints)
+        self.audio_sync_queue_run_completed_checkpoints += item_checkpoint_count
+        self.audio_sync_queue_run_completed_jobs += 1
+        self._set_progress_context(
+            self.audio_sync_queue_run_completed_jobs,
+            self.audio_sync_queue_run_total_jobs,
+        )
+        self._set_progress_value(
+            self.audio_sync_queue_run_total_checkpoints,
+            self.audio_sync_queue_run_completed_checkpoints,
+        )
         self._set_audio_sync_queue_item_status(item, status, first_line)
         self.statusBar().showMessage(f"Audio Sync queue item {status.casefold()}: {item.name}")
-        self._finish_progress_session("Cancelled" if cancelled else "Failed")
+        self._set_progress_label(f"{item.name}: {'cancelled' if cancelled else 'failed'}")
         self.current_audio_sync_queue_item = None
         self._set_audio_sync_queue_running(False)
         self.start_next_audio_sync_queue_after_thread = True

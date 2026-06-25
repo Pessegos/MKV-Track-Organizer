@@ -2,6 +2,12 @@
 
 All notable user-facing changes are recorded here.
 
+## 1.0.23 - 2026-06-25
+
+- Enlarged the Audio Sync queue panel so several queued jobs are visible at once.
+- Kept the Audio Sync queue Summary and Raw log accumulated across every queued job instead of resetting per item.
+- Changed Audio Sync queue progress to track the whole queue, including current/total job context and total checkpoint progress.
+
 ## 1.0.22 - 2026-06-25
 
 - Added a manual Audio Sync action to add the current completed result directly to the Organizer queue.
