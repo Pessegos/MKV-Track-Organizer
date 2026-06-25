@@ -1,6 +1,6 @@
 # MKV Track Organizer
 
-MKV Track Organizer 1.0.26 is a Windows desktop and command-line tool for cleaning, inspecting, synchronizing, and remuxing Matroska tracks with MKVToolNix. It can analyze audio, video, and subtitle tracks, rename them consistently, detect common subtitle roles, and write organized outputs without touching the original files by default.
+MKV Track Organizer 1.0.27 is a Windows desktop and command-line tool for cleaning, inspecting, synchronizing, and remuxing Matroska tracks with MKVToolNix. It can analyze audio, video, and subtitle tracks, rename them consistently, detect common subtitle roles, and write organized outputs without touching the original files by default.
 
 It includes an Organizer, reusable profiles, a MakeMKV batch workflow, and an Audio Sync helper for fixed-delay and linear drift corrections.
 
@@ -23,6 +23,7 @@ It includes an Organizer, reusable profiles, a MakeMKV batch workflow, and an Au
 - Detect regional language variants such as Portuguese, Spanish, French, and Chinese variants.
 - Use OCR for PGS subtitles when text is needed for language or role detection.
 - Generate TXT/JSON reports for batch runs.
+- Run MakeMKV batches from Blu-ray/DVD backup folders or recursively discovered DVD/Blu-ray `.iso` images.
 - Use `mkvpropedit` for metadata-only updates when enabled.
 - Desktop UI with organizer and MakeMKV batch tabs, dark/light theme selector, clearer status colors, preview, run, cancel, summaries, raw logs, and progress.
 - Saved Organizer option profiles for reusable language/order preferences.
@@ -118,7 +119,7 @@ The **Config** tab controls application-wide defaults, independently from the cu
 
 Use **Dependency manager** in the **Config** tab to inspect MKVToolNix, FFmpeg/FFprobe, MakeMKV, Tesseract, `seconv`, and Subtitle Edit discovery in one place. The dialog separates required, recommended, and optional tools, shows detected versions and paths when available, and opens the official download page for the selected tool. **Install/Update selected** currently supports `seconv` and Subtitle Edit, downloading the matching Windows asset from the official Subtitle Edit GitHub release and installing it into the local `_tools` folder.
 
-The **MakeMKV Batch** tab can convert one disc backup folder or a folder containing multiple disc backup folders. Its selection modes cover English audio, all audio, all tracks, or a custom MakeMKV selection string. Enable **Run Organizer after MakeMKV** to feed the MakeMKV output folder into the Organizer tab settings automatically. MakeMKV runs in robot mode so progress is used when the console output exposes it.
+The **MakeMKV Batch** tab can convert one disc backup folder, a folder containing multiple disc backup folders, or recursively discovered DVD/Blu-ray `.iso` images. Its selection modes cover English audio, all audio, all tracks, or a custom MakeMKV selection string. Enable **Run Organizer after MakeMKV** to feed the MakeMKV output folder into the Organizer tab settings automatically. MakeMKV runs in robot mode so progress is used when the console output exposes it.
 
 The **Audio Sync** tab compares one reference audio stream against one source audio stream using FFmpeg-decoded checkpoints. Positive source offset means the source is late; the displayed timeline shift is the inverse delay to apply to the source tracks. The default **Full timeline** preset detects the shorter media duration and distributes checkpoints from near the beginning to near the end; Balanced, Quick, and Custom modes remain available. After analysis, select source audio tracks and either use **Apply delay in Organizer** to fill the Organizer input and audio delay fields for a remux, or use **Export shifted .mka** to create a separate audio-only file whose selected tracks are already shifted.
 

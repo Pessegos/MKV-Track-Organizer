@@ -1358,7 +1358,7 @@ class MainWindow(QMainWindow):
         except makemkv.MakeMkvError:
             pass
         self.makemkv_source_edit = QLineEdit()
-        self.makemkv_source_edit.setPlaceholderText("Folder with MakeMKV disc backups")
+        self.makemkv_source_edit.setPlaceholderText("Folder with MakeMKV disc backups or DVD/Blu-ray ISO files")
         self.makemkv_output_edit = QLineEdit()
         self.makemkv_output_edit.setPlaceholderText("Folder for MakeMKV MKV outputs")
         self.makemkv_min_length_spin = QSpinBox()
@@ -2325,7 +2325,7 @@ class MainWindow(QMainWindow):
         top_bar.addWidget(self.makemkv_cancel_button)
         root.addLayout(top_bar)
 
-        files_group = QGroupBox("Disc folders")
+        files_group = QGroupBox("Disc sources")
         files_layout = QVBoxLayout(files_group)
         files_layout.setContentsMargins(8, 8, 8, 8)
         self.makemkv_table.setHorizontalHeaderLabels(self.MAKEMKV_COLUMNS)
@@ -5069,7 +5069,8 @@ class MainWindow(QMainWindow):
     def check_makemkv_tools(self) -> None:
         try:
             job = self._build_makemkv_job(dry_run=True)
-            makemkv_path, disc_folders, selection_rule = self._validate_makemkv_settings(job)
+            makemkv_path, disc_sources, selection_rule = self._validate_makemkv_settings(job)
+            runtime_messages = makemkv.check_makemkv_runtime(makemkv_path)
         except Exception as error:
             self.append_makemkv_summary_line(f"Check failed: {error}")
             QMessageBox.critical(self, "MakeMKV check failed", str(error))
@@ -5077,24 +5078,26 @@ class MainWindow(QMainWindow):
 
         reports = [
             {
-                "input": str(disc_folder),
-                "output": str(job.output_root / disc_folder.name),
+                "input": str(disc_source),
+                "output": str(makemkv.output_folder_for_source(job.output_root, disc_source)),
                 "status": "ready",
                 "message": "Ready for preview or run.",
             }
-            for disc_folder in disc_folders
+            for disc_source in disc_sources
         ]
         self._populate_makemkv_results(reports)
         self.append_makemkv_summary_line("MakeMKV check passed.")
         self.append_makemkv_summary_line(f"MakeMKV: {makemkv_path}")
-        self.append_makemkv_summary_line(f"Disc folders found: {len(disc_folders)}")
+        self.append_makemkv_summary_line(f"Disc sources found: {len(disc_sources)}")
         self.append_makemkv_summary_line(f"Selection: {self.makemkv_selection_combo.currentText()}")
         self.append_makemkv_summary_line(f"Selection rule: {selection_rule}")
+        for message in runtime_messages[-2:]:
+            self.append_makemkv_summary_line(f"MakeMKV: {message}")
         if job.run_organizer_after:
             self.append_makemkv_summary_line("Pipeline: Organizer will run after MakeMKV.")
         self.append_makemkv_summary_line()
         self.statusBar().showMessage("MakeMKV check passed")
-        QMessageBox.information(self, "MakeMKV check", f"Ready. Disc folders found: {len(disc_folders)}")
+        QMessageBox.information(self, "MakeMKV check", f"Ready. Disc sources found: {len(disc_sources)}")
 
     @Slot()
     def check_audio_sync_tools(self) -> None:
@@ -6558,7 +6561,7 @@ class MainWindow(QMainWindow):
     def _validate_makemkv_settings(self, job: makemkv.MakeMkvBatchJob) -> tuple[Path, list[Path], str]:
         makemkv_path = makemkv.find_makemkv(job.makemkv_path)
         selection_rule = makemkv.selection_rule_for_mode(job.selection_mode, job.custom_selection_rule)
-        disc_folders = makemkv.discover_disc_folders(job.source_root)
+        disc_sources = makemkv.discover_disc_sources(job.source_root)
         source_root = Path(job.source_root).expanduser().resolve()
         output_root = Path(job.output_root).expanduser().resolve()
 
@@ -6567,7 +6570,7 @@ class MainWindow(QMainWindow):
         if self._path_is_relative_to(output_root, source_root):
             raise ValueError("Choose a MakeMKV output folder outside the input folder.")
 
-        return makemkv_path, disc_folders, selection_rule
+        return makemkv_path, disc_sources, selection_rule
 
     @staticmethod
     def _path_is_relative_to(path: Path, parent: Path) -> bool:
@@ -7134,7 +7137,7 @@ class MainWindow(QMainWindow):
     def _append_makemkv_result_summary(self, result: makemkv.MakeMkvBatchResult) -> None:
         self.append_makemkv_summary_line()
         self.append_makemkv_summary_line("Summary")
-        self.append_makemkv_summary_line(f"Disc folders: {len(result.reports)}")
+        self.append_makemkv_summary_line(f"Disc sources: {len(result.reports)}")
         self.append_makemkv_summary_line(f"Errors: {result.failures}")
         self.append_makemkv_summary_line(f"Cancelled: {'yes' if result.cancelled else 'no'}")
         for status, count in self._status_counts(result.reports).items():
@@ -7302,7 +7305,7 @@ class MainWindow(QMainWindow):
             row = self.makemkv_table.rowCount()
             self.makemkv_table.insertRow(row)
             output_root = self.makemkv_output_edit.text().strip()
-            output = str(Path(output_root) / path.name) if output_root else ""
+            output = str(makemkv.output_folder_for_source(Path(output_root), path)) if output_root else ""
             self._set_makemkv_row(row, ["", str(path), output, ""], path)
 
         self.makemkv_table.item(row, 0).setText(status)

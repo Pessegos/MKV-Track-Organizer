@@ -2,6 +2,13 @@
 
 All notable user-facing changes are recorded here.
 
+## 1.0.27 - 2026-06-25
+
+- Added recursive DVD/Blu-ray `.iso` discovery to MakeMKV Batch, so ISO-only DVD folders are queued directly instead of treating parent folders as disc backups.
+- Changed MakeMKV ISO commands to use MakeMKV's `iso:<path>` source syntax and to write each ISO into an output folder named after the ISO stem.
+- Improved MakeMKV failure summaries by surfacing useful `MSG:` diagnostics, including expired/too-old MakeMKV version messages.
+- Updated MakeMKV Check tools and UI labels to talk about disc sources rather than only disc folders.
+
 ## 1.0.26 - 2026-06-25
 
 - Restored the fast Organizer queue path with an "Add current" button for queueing current settings without running Preview first.
